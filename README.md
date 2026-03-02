@@ -30,12 +30,14 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 接收功能需求，自動盤點 ECC 資源，透過多個 agent 協作建立完整實作計畫。輸出 plan.md 供使用者確認後才進入實作。
 
-**Pipeline:** ECC 資源盤點 → planner → architect → doc-updater → code-reviewer → plan.md
+**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner → architect → plan.md
 
 **Features:**
 - 自動盤點可用的 agents/skills/commands，將合適的資源整合進計畫步驟
-- planner 建立實作計畫，architect 審查架構設計
-- 輸出結構化 plan.md，包含 ECC 資源對照表、實作步驟、風險評估
+- 複雜度評估：簡單需求跳過 architect，走快速路徑
+- planner 建立實作計畫，architect 審查架構設計 + 文件影響評估
+- 計畫品質自審檢查表，確保完整性、可執行性、依賴正確性
+- plan.md 包含實作後的品質保障步驟（code-reviewer、/update、/verify）
 - 不自動執行實作，使用者確認後才能開始
 
 ### `/assist` — 萬用助手
@@ -58,6 +60,102 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - 自動偵測專案類型（Go/Python/Node.js），附加語言專用 reviewer
 - 使用 handoff protocol 在 agents 間傳遞 context
 - 無法判斷時透過互動式選單讓使用者選擇 pipeline
+
+## When to Use What
+
+四個 skill 各有分工，以下是常見情境的選擇指南：
+
+### `/pr` — 工作完成，準備交付
+
+```
+# 寫完功能，要開 PR
+/pr
+
+# PR 已存在，補充新的 commit 後更新 description
+/pr 1234
+
+# 搭配 /update 使用：先沉澱知識，再開 PR
+/update
+/pr
+```
+
+**適合：** 程式碼已經寫好、測試通過、準備交給 reviewer
+
+### `/update` — Session 結束，沉澱知識
+
+```
+# 完成一段工作後，更新文件和提取 patterns
+/update
+
+# 這次 session 只有討論沒有改 code（learn-eval 仍可提取 patterns）
+/update
+
+# 大型重構後，確保文件跟上程式碼變更
+/update
+```
+
+**適合：**
+- 完成功能開發或 bug 修復後，要同步文件
+- Session 中有值得記錄的 patterns、決策、除錯技巧
+- 搭配 `/pr` 使用：`/update` 先沉澱 → `/pr` 再交付
+
+**不適合：** 還在開發中途、程式碼尚未穩定
+
+### `/design` — 動手之前，先想清楚
+
+```
+# 新功能：自動盤點可用工具，建立完整計畫
+/design 實作使用者認證系統，支援 OAuth 和 JWT
+
+# 重構：評估影響範圍，規劃安全的重構步驟
+/design 將 monolith API 拆分為獨立的 auth 和 payment 模組
+
+# 簡單需求：自動偵測為低複雜度，走快速路徑
+/design 在 README 加上 CI badge
+```
+
+**適合：**
+- 不確定怎麼實作，需要先規劃
+- 跨多個檔案的變更，想確認影響範圍
+- 想知道該用哪些 ECC agents/skills 來完成任務
+- 需要架構審查再動手
+
+**不適合：** 已經知道怎麼做的小修改（直接改就好）
+
+### `/assist` — 不確定該用什麼，讓它幫你選
+
+```
+# 不帶參數：自動分析 git 狀態和專案環境，選擇最佳 pipeline
+/assist
+
+# 帶任務描述：根據描述選擇 pipeline
+/assist 登入頁面一直報 500 錯誤
+/assist 這段程式碼需要重構，太多重複邏輯
+/assist 幫我 review 目前的變更
+```
+
+**適合：**
+- 剛進入專案，不確定現在該做什麼
+- 知道目標但不確定該用哪個工具
+- 想要一鍵完成完整的 agent pipeline
+
+**不適合：** 已經知道要用哪個 skill（直接用 `/pr`、`/update`、`/design`）
+
+### 選擇流程圖
+
+```
+你現在要做什麼？
+│
+├─ 程式碼寫完了 ──────→ /pr（commit + push + PR）
+│
+├─ Session 要收尾 ───→ /update（文件 + patterns）
+│
+├─ 準備開始新工作 ───→ /design <需求>（規劃 → plan.md）
+│
+├─ 不確定 ──────────→ /assist（自動分析 + 路由）
+│
+└─ 組合使用 ─────────→ /design → 實作 → /update → /pr
+```
 
 ## Install
 

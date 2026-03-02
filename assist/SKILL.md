@@ -93,6 +93,20 @@ ls -la
 3. **再看對話脈絡**：從對話中推斷使用者的意圖
 4. **無法判斷時詢問**：使用 AskUserQuestion 提供 2-4 個建議選項
 
+### 多情境衝突處理
+
+當同時偵測到多個情境時，依以下優先順序決定先處理哪個：
+
+1. Build 失敗 — 必須先修復，否則其他工作無法驗證
+2. 安全問題 — 不能延後
+3. 使用者明確指令（$ARGUMENTS）— 使用者意圖優先
+4. Bug 修復 — 修復比新功能重要
+5. 新功能開發 — 標準優先級
+6. 重構/清理 — 較低優先級
+7. 文件更新 — 可延後或與其他工作並行
+
+若偵測到的情境與 `$ARGUMENTS` 衝突（例如使用者要 review 但 build 失敗），先說明偵測結果，詢問使用者是否仍要繼續原指令。
+
 ### 不確定時的互動
 
 使用 AskUserQuestion 提供選項：
@@ -116,6 +130,9 @@ ls -la
 
 ```markdown
 ## HANDOFF: [previous-agent] -> [next-agent]
+
+### Status: [COMPLETED | COMPLETED_WITH_ISSUES | FAILED]
+<!-- COMPLETED = 正常繼續 | COMPLETED_WITH_ISSUES = 繼續但標記 | FAILED = 暫停詢問使用者 -->
 
 ### Context
 <!-- 任務背景和目標 -->

@@ -22,7 +22,20 @@ argument-hint: <功能描述或需求>
 
 **輸出：** 一份簡潔的資源清單，標記每個資源與當前需求的關聯程度（高/中/低）。
 
-## Step 2: planner — 建立實作計畫
+## Step 2: 複雜度評估
+
+根據需求規模，選擇執行路徑：
+
+| 複雜度 | 判斷標準 | 執行路徑 |
+|--------|---------|---------|
+| **低** | 單一檔案、不涉及架構變更（例：更新 README、加 badge、改設定） | 跳過 Step 4（architect），直接 Step 3 → Step 5 |
+| **中等以上** | 跨檔案或有架構影響 | 完整流程 Step 3 → Step 4 → Step 5 |
+
+如果需求過於模糊無法判斷複雜度，使用 AskUserQuestion 請使用者補充具體資訊。
+
+> 無論走哪條路徑，都會輸出 plan.md。
+
+## Step 3: planner — 建立實作計畫
 
 使用 **planner** agent 建立詳細的實作計畫。
 
@@ -47,9 +60,9 @@ Agent(subagent_type="everything-claude-code:planner")
 5. **風險評估** — 潛在的技術風險和對策
 6. **驗收標準** — 怎樣算完成
 
-## Step 3: architect — 架構設計審查
+## Step 4: architect — 架構設計審查
 
-使用 **architect** agent 審查 Step 2 的計畫。
+使用 **architect** agent 審查 Step 3 的計畫。
 
 ```
 Agent(subagent_type="everything-claude-code:architect")
@@ -62,37 +75,25 @@ Agent(subagent_type="everything-claude-code:architect")
 - 與現有程式碼的相容性
 - 效能和安全性考量
 - ECC 資源的選用是否恰當
+- 文件影響評估：實作後需要新增或更新哪些文件（README、API docs、CODEMAPS），列入 plan.md 待辦
 
 **如果有重大架構建議：** 回饋給 planner 調整計畫（最多迭代 2 次）。
 
-## Step 4: doc-updater — 預估文件影響
+## Step 5: 輸出 plan.md
 
-使用 **doc-updater** agent 評估實作後需要更新哪些文件。
+將最終計畫寫入檔案前，先對照以下檢查清單確認計畫品質：
 
-```
-Agent(subagent_type="everything-claude-code:doc-updater")
-```
+| 維度 | 通過標準 |
+|------|---------|
+| 完整性 | 每個需求都有對應的實作步驟 |
+| 可執行性 | 每個步驟有明確的檔案路徑和具體動作 |
+| 依賴正確性 | 步驟間依賴無環且順序合理 |
+| 粒度適當 | 每個步驟 1-3 個具體動作 |
+| ECC 資源合理 | 每個 agent/skill 在其設計用途內使用 |
+| 驗收可測 | 每個驗收標準都可客觀驗證 |
+| 實作後工具 | plan.md 的步驟中包含實作後的品質保障（code-reviewer、/update、/verify 等） |
 
-**輸出：** 需要新增或更新的文件清單，加入 plan.md 的待辦事項中。
-
-## Step 5: code-reviewer — 審查計畫品質
-
-使用 **code-reviewer** agent 審查整體計畫的品質。
-
-```
-Agent(subagent_type="everything-claude-code:code-reviewer")
-```
-
-**審查重點：**
-
-- 計畫是否完整（沒有遺漏關鍵步驟）
-- 步驟粒度是否合適（不會太粗也不會太細）
-- ECC 資源的使用是否合理
-- 驗收標準是否明確可測
-
-## Step 6: 輸出 plan.md
-
-將最終計畫寫入檔案，供使用者確認。
+如果發現問題，直接修正計畫內容。
 
 **輸出路徑：** 專案根目錄的 `plan.md`（如果已存在，使用 AskUserQuestion 詢問是否覆蓋）
 
@@ -118,20 +119,23 @@ Agent(subagent_type="everything-claude-code:code-reviewer")
 
 ## Implementation Steps
 
-### Phase 1: [階段名稱]
+### Phase 1: [實作階段]
 - [ ] Step 1: ...
   - Agent: `planner`
   - Input: ...
   - Output: ...
 
-### Phase 2: [階段名稱]
-- [ ] Step 2: ...
+### Phase 2: [品質保障]
+- [ ] 執行 code-reviewer 審查程式碼品質
+- [ ] 執行 security-reviewer 檢查安全性
+- [ ] 執行 /verify 進行全面驗證
+
+### Phase 3: [文件同步]
+- [ ] 執行 /update 更新知識庫（doc-updater + learn-eval）
+- [ ] 或手動執行 /update-docs + /update-codemaps
 
 ## Architecture Notes
-<!-- architect agent 的審查結果和建議 -->
-
-## Documentation Impact
-<!-- doc-updater 評估的文件影響範圍 -->
+<!-- architect 的審查結果（含文件影響評估）-->
 
 ## Risks & Mitigations
 <!-- 風險評估 -->
@@ -141,7 +145,7 @@ Agent(subagent_type="everything-claude-code:code-reviewer")
 - [ ] ...
 
 ## Review Notes
-<!-- code-reviewer 的審查意見 -->
+<!-- 計畫品質自審的結果 -->
 ```
 
 **最後提示使用者：**

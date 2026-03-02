@@ -22,7 +22,12 @@ Agent(subagent_type="everything-claude-code:doc-updater")
 
 1. 執行 `git diff --name-only HEAD` 取得本次變更的檔案清單
 2. 若無未 commit 變更，使用 `git diff --name-only HEAD~3..HEAD` 取得近期 commit 涉及的檔案
-3. 根據變更內容更新：
+3. 若仍無任何變更，使用 AskUserQuestion 詢問：
+   - **指定檔案** — 手動指定要檢查的文件
+   - **全面掃描** — 掃描所有文件是否有過時內容
+   - **只做 learn-eval** — 跳過 Step 1-2，直接進入 Step 3 提取 patterns
+   - **結束** — 結束 /update 流程
+4. 根據變更內容更新：
    - `docs/` 目錄下的相關文件
    - `docs/CODEMAPS/` 目錄下的架構圖
    - `README.md`（如果功能或用法有變動）

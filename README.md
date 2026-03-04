@@ -161,9 +161,22 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 Trigger evaluation using [Anthropic skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator). Tests whether Claude correctly triggers each skill based on user prompts.
 
-**Eval config:** 6 queries per skill (3 should-trigger + 3 should-not-trigger), 1 run per query, model: `haiku`
+### Trigger Eval Results
 
-### Trigger Eval Results (2026-03-04)
+#### Sonnet (2026-03-04)
+
+**Config:** 10 queries per skill (5 should-trigger + 5 should-not-trigger), 1 run per query, model: `sonnet`
+
+| Skill | Pass Rate | Should-Trigger | Should-Not-Trigger | Verdict |
+|-------|-----------|:--------------:|:------------------:|---------|
+| `/assist` | 5/10 (50%) | 0/5 | 5/5 | Undertriggered |
+| `/design` | 5/10 (50%) | 0/5 | 5/5 | Undertriggered |
+| `/pr` | 5/10 (50%) | 0/5 | 5/5 | Undertriggered |
+| `/update` | 5/10 (50%) | 0/5 | 5/5 | Undertriggered |
+
+#### Haiku Baseline (2026-03-04)
+
+**Config:** 6 queries per skill (3 should-trigger + 3 should-not-trigger), 1 run per query, model: `haiku`
 
 | Skill | Pass Rate | Should-Trigger | Should-Not-Trigger | Verdict |
 |-------|-----------|:--------------:|:------------------:|---------|
@@ -181,60 +194,87 @@ Trigger evaluation using [Anthropic skill-creator](https://github.com/anthropics
 | `/pr` | WARN | `argument-hint` not in allowed frontmatter keys |
 | `/update` | PASS | -- |
 
+### Learned Skills Audit
+
+**50 learned skills** (auto-extracted patterns, `user-invocable: false`)
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Critical (missing frontmatter) | 10 | 0 |
+| Warnings only | 3 | 10 (structural) |
+| Clean | 37 | 40 |
+| Avg Score | 6.3 | 7.3 |
+
+Remaining 10 warnings are structural (missing `## Problem` / `## Solution` headings) -- not blocking.
+
 ### Analysis
 
-**Negative discrimination: perfect.** All 4 skills correctly avoid triggering on unrelated prompts (code fixes, simple edits, git commands).
+**Negative discrimination: perfect.** Both Haiku and Sonnet correctly avoid triggering on unrelated prompts (100% across 40 negative queries). Cross-skill discrimination also works -- e.g., `/assist` negative set includes `/pr` and `/design` queries, none triggered.
 
-**Positive triggering: 0%.** This is a known behavior with Haiku -- it tends to handle tasks directly rather than consulting skills. Key factors:
+**Positive triggering: 0%.** Identical across Haiku and Sonnet. This confirms the issue is **not model sensitivity**, but rather:
 
-1. **Model sensitivity**: Haiku is conservative about skill triggering. Sonnet/Opus trigger more readily in practice.
-2. **Query specificity**: Simple, natural-language queries don't always trigger skills. Explicit slash commands (`/pr`, `/update`) bypass triggering entirely.
-3. **Description pushiness**: Per [Anthropic's guidance](https://claude.com/blog/improving-skill-creator-test-measure-and-refine-agent-skills), skill descriptions should be "a little bit pushy" to combat undertriggering.
+1. **`claude -p` eval mode**: Single-prompt mode may behave differently from interactive sessions where skills are consulted more readily.
+2. **Skill count saturation**: 70+ visible skills in the system may cause the model to deprioritize individual skill matching.
+3. **Description pushiness**: Per [Anthropic's guidance](https://claude.com/blog/improving-skill-creator-test-measure-and-refine-agent-skills), descriptions should be "a little bit pushy" to combat undertriggering.
 
 ### Next Steps
 
-- [ ] Re-run with Sonnet/Opus model for realistic trigger rates
+- [x] Re-run with Sonnet model for realistic trigger rates
+- [x] Expand eval set to 10 queries per skill (5 positive + 5 negative)
+- [x] Audit and fix learned skills (50 skills, 0 critical remaining)
 - [ ] Optimize descriptions using `run_loop.py` (description optimization)
-- [ ] Expand eval set to 20 queries per skill (10 positive + 10 negative)
+- [ ] Test with reduced skill count (disable ECC skills during eval)
 - [ ] Add benchmark tracking across iterations
 
 ### Eval Queries
 
 <details>
-<summary>Click to expand test queries</summary>
+<summary>Click to expand Sonnet test queries</summary>
 
 #### `/assist`
 
 | Query | Should Trigger | Triggered | Result |
 |-------|:--------------:|:---------:|:------:|
+| 剛進入這個專案，不太確定現在該做什麼，幫我看一下狀況然後建議下一步 | Yes | No | FAIL |
+| 登入頁面一直報 500 錯誤，牽涉到好幾個檔案，幫我搞定 | Yes | No | FAIL |
+| 這段程式碼需要重構，太多重複邏輯，我不確定該走 TDD 還是直接改還是先 plan | Yes | No | FAIL |
 | 我不確定該用哪個工具來重構這個 module，有很多 agent 可以選，幫我分析一下情境然後決定最好的做法 | Yes | No | FAIL |
-| 這個 bug 很複雜牽涉到 3 個檔案，我不知道從哪開始，幫我搞定 | Yes | No | FAIL |
-| 幫我處理這個任務，我不確定該走 TDD 還是直接寫 code 還是先 plan | Yes | No | FAIL |
+| 幫我處理目前的狀況，我知道目標但不確定該用哪個工具最有效率 | Yes | No | FAIL |
 | git log --oneline -5 給我看最近五筆 commit | No | No | PASS |
 | 把 README.md 裡面的 typo 修一下，第 15 行 'recieve' 改成 'receive' | No | No | PASS |
 | 幫我寫一個 Python function 計算費氏數列第 n 項 | No | No | PASS |
+| 我想加一個 user authentication 功能，先幫我規劃整個實作計畫不要直接寫 code | No | No | PASS |
+| 工作做完了，幫我 commit 然後開 PR 推上去 | No | No | PASS |
 
 #### `/design`
 
 | Query | Should Trigger | Triggered | Result |
 |-------|:--------------:|:---------:|:------:|
-| 我想加一個 user authentication 功能，用 JWT，先幫我規劃整個實作計畫不要直接寫 code | Yes | No | FAIL |
+| 這個功能跨很多檔案，我不確定怎麼實作，先幫我想清楚建立完整計畫 | Yes | No | FAIL |
+| 想把 monolith API 拆分為獨立的 auth 和 payment 模組，幫我評估影響範圍規劃安全的重構步驟 | Yes | No | FAIL |
 | 要新增 notification 系統，支援 email 和 push notification，先出 plan 讓我看看再說 | Yes | No | FAIL |
-| 幫我設計一下 cache layer 的架構，Redis 還是 in-memory 比較適合這個 use case | Yes | No | FAIL |
-| 把這個 div 的 padding 從 16px 改成 24px | No | No | PASS |
+| 幫我設計一下 cache layer 的架構，Redis 還是 in-memory 比較適合這個 use case，需要架構審查再動手 | Yes | No | FAIL |
+| 我想加一個 user authentication 功能，用 JWT 和 OAuth，先幫我規劃整個實作計畫不要直接寫 code | Yes | No | FAIL |
 | 跑一下 test suite 看有沒有 fail 的 | No | No | PASS |
 | 幫我 deploy 到 production，按照之前的流程 | No | No | PASS |
+| 工作都做完了，總結一下然後幫我開 PR 推上去讓 reviewer 看 | No | No | PASS |
+| 把這個 div 的 padding 從 16px 改成 24px | No | No | PASS |
+| 這個 session 做了不少事，幫我更新文件和知識庫把學到的東西沉澱下來 | No | No | PASS |
 
 #### `/pr`
 
 | Query | Should Trigger | Triggered | Result |
 |-------|:--------------:|:---------:|:------:|
-| 幫我開 PR，這個 branch 的工作都做完了，自動寫好 description 讓 reviewer 看得懂 | Yes | No | FAIL |
+| 工作做完了，幫我 commit 然後開 PR 推上去，自動寫好 description 讓 reviewer 看得懂 | Yes | No | FAIL |
 | 我要更新 PR #42 的 description，加上這次新的改動說明 | Yes | No | FAIL |
-| 工作做完了，總結一下然後開 PR 推上去 | Yes | No | FAIL |
-| 幫我 review 一下這段 code 有沒有 security issue | No | No | PASS |
+| 程式碼已經寫好了，準備交給 reviewer，幫我推上去建立 pull request | Yes | No | FAIL |
+| 剛補了幾個 commit，幫我更新現有 PR 的 description 讓它反映最新改動 | Yes | No | FAIL |
+| 這個 branch 的功能都寫好測試也過了，幫我總結一下然後開 PR | Yes | No | FAIL |
 | run pnpm test and show me the coverage report | No | No | PASS |
 | 幫我加一個新的 API endpoint /api/v1/reports/{id} | No | No | PASS |
+| 幫我 review 一下這段 code 有沒有 security issue | No | No | PASS |
+| 幫我更新文件和知識庫，把這次 session 學到的 patterns 沉澱下來 | No | No | PASS |
+| 先幫我規劃怎麼實作這個功能，不要直接寫 code | No | No | PASS |
 
 #### `/update`
 
@@ -242,10 +282,14 @@ Trigger evaluation using [Anthropic skill-creator](https://github.com/anthropics
 |-------|:--------------:|:---------:|:------:|
 | 這個 session 做了不少事，幫我更新文件和知識庫，把學到的東西沉澱下來 | Yes | No | FAIL |
 | 幫我跑一下文件更新流程，包括 code review 和 pattern extraction | Yes | No | FAIL |
-| session 結束前幫我做知識沉澱，doc update + learn-eval 那套流程 | Yes | No | FAIL |
-| 幫我寫 unit test 覆蓋 utils/search.py 的所有 public function | No | No | PASS |
+| session 結束前幫我做知識沉澱，doc update 加上 learn-eval 那套流程 | Yes | No | FAIL |
+| 大型重構剛做完，確保文件跟上程式碼變更，順便提取可復用的 patterns | Yes | No | FAIL |
+| 這次討論有不少值得記錄的決策和除錯技巧，幫我沉澱到知識庫 | Yes | No | FAIL |
 | 把 Docker compose 的 port mapping 改一下，8001 改成 8002 | No | No | PASS |
+| 工作做完了，幫我 commit 然後開 PR 推上去 | No | No | PASS |
+| 幫我寫 unit test 覆蓋 utils/search.py 的所有 public function | No | No | PASS |
 | explain how the RAG pipeline works in this project | No | No | PASS |
+| 我想加一個新功能，先幫我規劃實作計畫 | No | No | PASS |
 
 </details>
 

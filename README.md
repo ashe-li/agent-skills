@@ -157,6 +157,64 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 └─ 組合使用 ─────────→ /design → 實作 → /update → /pr
 ```
 
+## Benchmark
+
+Output quality evaluation using [Anthropic skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator). Tests whether each command produces structured, high-quality outputs compared to a baseline (no skill).
+
+### `/design` — Output Quality Eval (2026-03-04)
+
+**Method:** 2 test cases (with-skill vs without-skill baseline), model: `opus`, graded against assertions
+
+| | With Skill | Baseline | Delta |
+|---|:---:|:---:|:---:|
+| **Pass Rate** | **100%** | 32.5% | **+67.5%** |
+| **Avg Time** | 167s | 138s | +29s |
+| **Avg Tokens** | 61,294 | 68,903 | -7,609 |
+
+<details>
+<summary>Eval details</summary>
+
+#### Eval 1: Webhook Notification System (medium-high complexity)
+
+| Assertion | With Skill | Baseline |
+|-----------|:---:|:---:|
+| plan.md 被建立 | PASS | PASS |
+| 包含 `## Overview` | PASS | FAIL |
+| 包含 `## ECC Resources` 表格 | PASS | FAIL |
+| 包含 `## Implementation Steps` (分 Phase) | PASS | FAIL |
+| 包含 `## Risks & Mitigations` | PASS | FAIL |
+| 包含 `## Acceptance Criteria` | PASS | PASS |
+| 包含品質保障步驟 (code-reviewer/security-reviewer) | PASS | FAIL |
+| 狀態標記 PENDING APPROVAL | PASS | FAIL |
+
+#### Eval 2: CI Badge (low complexity)
+
+| Assertion | With Skill | Baseline |
+|-----------|:---:|:---:|
+| plan.md 被建立 | PASS | PASS |
+| 包含 `## Overview` | PASS | FAIL |
+| 包含 `## Implementation Steps` | PASS | FAIL |
+| 正確跳過 architect (低複雜度快速路徑) | PASS | PASS |
+| 狀態標記 PENDING APPROVAL | PASS | FAIL |
+
+#### Key Findings
+
+- **結構化格式** -- Skill 嚴格遵循 plan.md 模板，baseline 使用自由格式（section 名稱不統一）
+- **ECC 資源整合** -- Skill 盤點 agents 並分配到具體步驟，baseline 不知道有哪些 agent 可用
+- **複雜度路由** -- Skill 正確識別低複雜度需求並跳過 architect，baseline 無此判斷
+- **產出精簡** -- Skill 產出更短（256 vs 451 行）但涵蓋所有必要區塊
+- **安全閘門** -- Skill 強制 PENDING APPROVAL 防止未經確認就執行，baseline 無此控制
+
+</details>
+
+### Other Commands
+
+| Command | Eval Status | Note |
+|---------|:-----------:|------|
+| `/pr` | Pending | 涉及 git push + GitHub API，需 mock 環境 |
+| `/update` | Pending | 涉及 nested agents (doc-updater, code-reviewer, learn-eval) |
+| `/assist` | Pending | 情境分析可測，但 pipeline 執行會修改專案 |
+
 ## Install
 
 ```bash

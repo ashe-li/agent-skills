@@ -157,6 +157,98 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 └─ 組合使用 ─────────→ /design → 實作 → /update → /pr
 ```
 
+## Benchmark
+
+Trigger evaluation using [Anthropic skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator). Tests whether Claude correctly triggers each skill based on user prompts.
+
+**Eval config:** 6 queries per skill (3 should-trigger + 3 should-not-trigger), 1 run per query, model: `haiku`
+
+### Trigger Eval Results (2026-03-04)
+
+| Skill | Pass Rate | Should-Trigger | Should-Not-Trigger | Verdict |
+|-------|-----------|:--------------:|:------------------:|---------|
+| `/assist` | 3/6 (50%) | 0/3 | 3/3 | Undertriggered |
+| `/design` | 3/6 (50%) | 0/3 | 3/3 | Undertriggered |
+| `/pr` | 3/6 (50%) | 0/3 | 3/3 | Undertriggered |
+| `/update` | 3/6 (50%) | 0/3 | 3/3 | Undertriggered |
+
+### Structure Validation
+
+| Skill | Valid | Issue |
+|-------|:-----:|-------|
+| `/assist` | WARN | `argument-hint` not in allowed frontmatter keys |
+| `/design` | WARN | `argument-hint` not in allowed frontmatter keys |
+| `/pr` | WARN | `argument-hint` not in allowed frontmatter keys |
+| `/update` | PASS | -- |
+
+### Analysis
+
+**Negative discrimination: perfect.** All 4 skills correctly avoid triggering on unrelated prompts (code fixes, simple edits, git commands).
+
+**Positive triggering: 0%.** This is a known behavior with Haiku -- it tends to handle tasks directly rather than consulting skills. Key factors:
+
+1. **Model sensitivity**: Haiku is conservative about skill triggering. Sonnet/Opus trigger more readily in practice.
+2. **Query specificity**: Simple, natural-language queries don't always trigger skills. Explicit slash commands (`/pr`, `/update`) bypass triggering entirely.
+3. **Description pushiness**: Per [Anthropic's guidance](https://claude.com/blog/improving-skill-creator-test-measure-and-refine-agent-skills), skill descriptions should be "a little bit pushy" to combat undertriggering.
+
+### Next Steps
+
+- [ ] Re-run with Sonnet/Opus model for realistic trigger rates
+- [ ] Optimize descriptions using `run_loop.py` (description optimization)
+- [ ] Expand eval set to 20 queries per skill (10 positive + 10 negative)
+- [ ] Add benchmark tracking across iterations
+
+### Eval Queries
+
+<details>
+<summary>Click to expand test queries</summary>
+
+#### `/assist`
+
+| Query | Should Trigger | Triggered | Result |
+|-------|:--------------:|:---------:|:------:|
+| 我不確定該用哪個工具來重構這個 module，有很多 agent 可以選，幫我分析一下情境然後決定最好的做法 | Yes | No | FAIL |
+| 這個 bug 很複雜牽涉到 3 個檔案，我不知道從哪開始，幫我搞定 | Yes | No | FAIL |
+| 幫我處理這個任務，我不確定該走 TDD 還是直接寫 code 還是先 plan | Yes | No | FAIL |
+| git log --oneline -5 給我看最近五筆 commit | No | No | PASS |
+| 把 README.md 裡面的 typo 修一下，第 15 行 'recieve' 改成 'receive' | No | No | PASS |
+| 幫我寫一個 Python function 計算費氏數列第 n 項 | No | No | PASS |
+
+#### `/design`
+
+| Query | Should Trigger | Triggered | Result |
+|-------|:--------------:|:---------:|:------:|
+| 我想加一個 user authentication 功能，用 JWT，先幫我規劃整個實作計畫不要直接寫 code | Yes | No | FAIL |
+| 要新增 notification 系統，支援 email 和 push notification，先出 plan 讓我看看再說 | Yes | No | FAIL |
+| 幫我設計一下 cache layer 的架構，Redis 還是 in-memory 比較適合這個 use case | Yes | No | FAIL |
+| 把這個 div 的 padding 從 16px 改成 24px | No | No | PASS |
+| 跑一下 test suite 看有沒有 fail 的 | No | No | PASS |
+| 幫我 deploy 到 production，按照之前的流程 | No | No | PASS |
+
+#### `/pr`
+
+| Query | Should Trigger | Triggered | Result |
+|-------|:--------------:|:---------:|:------:|
+| 幫我開 PR，這個 branch 的工作都做完了，自動寫好 description 讓 reviewer 看得懂 | Yes | No | FAIL |
+| 我要更新 PR #42 的 description，加上這次新的改動說明 | Yes | No | FAIL |
+| 工作做完了，總結一下然後開 PR 推上去 | Yes | No | FAIL |
+| 幫我 review 一下這段 code 有沒有 security issue | No | No | PASS |
+| run pnpm test and show me the coverage report | No | No | PASS |
+| 幫我加一個新的 API endpoint /api/v1/reports/{id} | No | No | PASS |
+
+#### `/update`
+
+| Query | Should Trigger | Triggered | Result |
+|-------|:--------------:|:---------:|:------:|
+| 這個 session 做了不少事，幫我更新文件和知識庫，把學到的東西沉澱下來 | Yes | No | FAIL |
+| 幫我跑一下文件更新流程，包括 code review 和 pattern extraction | Yes | No | FAIL |
+| session 結束前幫我做知識沉澱，doc update + learn-eval 那套流程 | Yes | No | FAIL |
+| 幫我寫 unit test 覆蓋 utils/search.py 的所有 public function | No | No | PASS |
+| 把 Docker compose 的 port mapping 改一下，8001 改成 8002 | No | No | PASS |
+| explain how the RAG pipeline works in this project | No | No | PASS |
+
+</details>
+
 ## Install
 
 ```bash

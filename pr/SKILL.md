@@ -82,12 +82,34 @@ Review 完成後，使用 AskUserQuestion 詢問使用者：
 
 ## Step 5: 建立或更新 PR
 
+### Base Branch 防護（強制執行）
+
+**PR 的 base branch 禁止直接指向主要的 production branch（如 `master`、`main`）。**
+
+執行以下檢查：
+
+1. 讀取專案的 branch 策略（如果有 `skills/git-workflow/SKILL.md` 或類似文件）
+2. 如果專案有定義預設的 base branch（如 `hotfix`、`develop`），自動使用該 branch
+3. 如果使用者明確要求指向 `master` 或 `main` → **必須中斷並警告**：
+   - 使用 AskUserQuestion 提醒：「依照專案規範，PR 不建議直接指向 master/main。確定要繼續嗎？」
+   - 提供選項：「改為 [專案預設 base branch]（推薦）」/「我確定要指向 master/main」
+   - 只有使用者明確確認後才能繼續
+4. 如果專案沒有特別的 branch 策略，使用 repo 的 default branch
+
+```bash
+# 範例：專案規範 base branch 為 hotfix
+gh pr create --base hotfix ...
+
+# 禁止（除非使用者明確確認）
+gh pr create --base master ...
+```
+
 ### 判斷邏輯
 
 - 如果提供了 PR 號碼（`$ARGUMENTS`），更新該 PR
 - 如果沒有提供號碼，檢查當前 branch 是否已有 open PR
   - 有 → 更新該 PR description
-  - 沒有 → 建立新 PR
+  - 沒有 → 建立新 PR（使用專案規範的 base branch）
 
 ### PR Description 格式
 

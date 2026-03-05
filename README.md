@@ -237,12 +237,17 @@ npx skills add ashe-li/agent-skills --global
 
 ## Update
 
-已安裝後，檢查並更新到最新版本：
+已安裝後，更新現有 skills 到最新版本：
 
 ```bash
-npx skills check   # 查看有無新版本
-npx skills update  # 更新所有 skills 到最新版本
+npx skills update
 ```
+
+> **注意：** `skills update` 只更新**已安裝**的 skills。若有新增 skill（如 `/plan-archive`），需重新執行 `add` 才能安裝：
+>
+> ```bash
+> npx skills add ashe-li/agent-skills --global
+> ```
 
 ## Usage
 

@@ -61,6 +61,18 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - 使用 handoff protocol 在 agents 間傳遞 context
 - 無法判斷時透過互動式選單讓使用者選擇 pipeline
 
+### `/plan-archive` — 歸檔已完成的 Plan
+
+實作完成後，將 `plans/active/` 中的 plan 移至 `plans/completed/`，補上驗證結果與完成時間。
+
+**Features:**
+- 自動偵測 `plans/active/` 中待歸檔的 plan（或手動指定檔名）
+- 補充「狀態：✅ 完成」標記與驗證結果段落
+- 內建 Hook 設定說明：`ExitPlanMode` PostToolUse hook 自動將 plan 存至 `plans/active/`
+- 內建 Rule 範本：加入 CLAUDE.md 確保 Claude 主動執行歸檔
+
+**目錄規範：** `plans/active/` → 進行中；`plans/completed/` → 已完成；`plans/archived/` → 長期封存
+
 ## When to Use What
 
 四個 skill 各有分工，以下是常見情境的選擇指南：
@@ -154,7 +166,9 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 │
 ├─ 不確定 ──────────→ /assist（自動分析 + 路由）
 │
-└─ 組合使用 ─────────→ /design → 實作 → /update → /pr
+├─ 組合使用 ─────────→ /design → 實作 → /update → /pr
+│
+└─ Plan 寫完要收尾 ─→ /plan-archive（歸檔至 completed/）
 ```
 
 ## Benchmark
@@ -233,10 +247,12 @@ npx skills update  # 更新所有 skills 到最新版本
 ## Usage
 
 ```
-/pr              # 自動偵測是否有 open PR，沒有就建新的
-/pr 1234         # 更新指定 PR 的 description
-/update          # 更新知識庫（docs + patterns）
-/design <需求>   # 建立實作計畫
-/assist          # 自動偵測情境並執行最佳 pipeline
-/assist <任務>   # 指定任務描述
+/pr                        # 自動偵測是否有 open PR，沒有就建新的
+/pr 1234                   # 更新指定 PR 的 description
+/update                    # 更新知識庫（docs + patterns）
+/design <需求>              # 建立實作計畫
+/assist                    # 自動偵測情境並執行最佳 pipeline
+/assist <任務>              # 指定任務描述
+/plan-archive              # 歸檔已完成的 plan（自動偵測）
+/plan-archive my-plan.md   # 指定檔名歸檔
 ```

@@ -105,7 +105,40 @@ Skill(skill="everything-claude-code:learn-eval")
 
 **品質評估：** learn-eval 會自動進行 5 維度評分（specificity、actionability、scope fit、non-redundancy、coverage），至少達 3 分才會保存。
 
-## Step 4: 總結報告
+## Step 4: 知識庫交叉比對（HITL 確認）
+
+learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正確更新。
+
+**盤點本次 session 涉及的知識庫位置：**
+
+| 知識庫 | 路徑 | 說明 |
+|--------|------|------|
+| Claude 記憶庫 | `~/.claude/projects/<project-hash>/memory/MEMORY.md` | 專案級記憶 |
+| 全域技能庫 | `~/.claude/skills/learned/` | 全域可復用 patterns |
+| 全域記憶 | `~/.claude/MEMORY.md` | 跨專案記憶（如有） |
+| 專案文件 | `docs/`、`research/`、`README.md` | 專案說明文件 |
+
+**交叉比對步驟：**
+
+1. 讀取上述各知識庫的實際內容
+2. 對照本次 session 的工作內容，逐一確認：
+   - 有做但未記錄的決策或模式
+   - 記錄的內容是否與實際一致（無錯誤描述）
+   - 是否有跨知識庫的不一致（例如 MEMORY.md 與 learned skill 矛盾）
+3. 若發現問題，列出具體差異
+
+**HITL 確認：** 比對完成後，用 AskUserQuestion 呈現結果，請使用者確認後才結束：
+
+```
+知識庫交叉比對結果：
+✅ MEMORY.md — 已正確記錄 xxx
+✅ learned/yyy.md — 內容與實作一致
+⚠️ MEMORY.md 第 12 行描述與實際行為不符，建議修正：...
+
+[確認無誤，結束] / [修正後結束]
+```
+
+## Step 5: 總結報告
 
 所有步驟完成後，輸出最終報告：
 
@@ -122,6 +155,10 @@ Skill(skill="everything-claude-code:learn-eval")
 ### 知識提取
 - 列出 learn-eval 提取的 patterns
 - 標示保存位置（全域 / 專案級）
+
+### 知識庫交叉比對
+- 列出比對結果（✅ 正確 / ⚠️ 差異 / ❌ 錯誤）
+- 標示已修正 / 待修正的項目
 
 ### 建議下一步
 - 如果有未修正的問題，建議處理方式

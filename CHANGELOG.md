@@ -2,6 +2,16 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.3.0] - 2026-03-05
+
+### Added
+- `/plan-archive`: 新增 plan 生命週期管理 skill，自動化 active → completed 歸檔流程
+  - 自動偵測 `plans/active/` 中待歸檔的 plan
+  - 補充「狀態：✅ 完成」標記與驗證結果段落
+  - 內建 PostToolUse Hook 設定（ExitPlanMode 自動存 active）
+  - 內建 CLAUDE.md Rule 範本（提醒實作後歸檔）
+  - 目錄規範：`plans/active/` → `plans/completed/` → `plans/archived/`
+
 ## [v1.2.0] - 2026-03-05
 
 ### Changed

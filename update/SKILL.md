@@ -33,11 +33,28 @@ Agent(subagent_type="everything-claude-code:doc-updater")
    - `README.md`（如果功能或用法有變動）
    - 其他受影響的文件檔案
 
+**HITL 確認（必做）：** 更新任何文件前，先列出「計畫更新的檔案清單」並使用 AskUserQuestion 請使用者確認：
+
+```
+即將更新以下文件，請確認是否正確：
+1. path/to/file1.md — 原因：xxx
+2. path/to/file2.md — 原因：xxx
+
+[確認繼續] / [調整清單] / [跳過]
+```
+
+**文件庫 / 知識庫 歧義處理：** 若上下文提到「文件庫」或「知識庫」，必須先釐清指的是哪個目錄，**不得自行假設**：
+
+- 可能是 `docs/`、`research/`、`README.md`（專案文件）
+- 可能是 `~/.claude/projects/.../memory/`（Claude 記憶庫）
+- 可能是 `~/.claude/skills/`（技能庫）
+- 若無法從上下文判斷，使用 AskUserQuestion 確認後再繼續
+
 **交接資訊：** 記錄更新了哪些文件檔案、變更摘要，作為下一步 code-reviewer 的輸入。
 
-## Step 2: code-reviewer — 審查文件品質
+## Step 2: code-reviewer — 交叉比對 + 審查文件品質
 
-使用 **code-reviewer** agent 審查 Step 1 更新的文件。
+使用 **code-reviewer** agent 審查 Step 1 更新的文件，並交叉比對變更是否完整正確。
 
 ```
 Agent(subagent_type="everything-claude-code:code-reviewer")
@@ -49,6 +66,13 @@ Agent(subagent_type="everything-claude-code:code-reviewer")
 - 是否有過時或不一致的描述
 - 格式和結構是否符合專案慣例
 - 是否有遺漏的重要資訊
+
+**交叉比對（Cross-check）：**
+
+1. 對照 `git diff` 的實際變更，逐一確認每份更新的文件是否涵蓋所有重要變更
+2. 確認沒有「應該更新但漏掉的文件」
+3. 確認沒有「不應該更新但錯誤修改的文件」
+4. 若發現遺漏或錯誤，標示在輸出報告中
 
 **輸出格式：**
 

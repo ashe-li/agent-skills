@@ -221,6 +221,15 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 npx skills add ashe-li/agent-skills --global
 ```
 
+## Update
+
+已安裝後，檢查並更新到最新版本：
+
+```bash
+npx skills check   # 查看有無新版本
+npx skills update  # 更新所有 skills 到最新版本
+```
+
 ## Usage
 
 ```

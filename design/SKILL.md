@@ -15,9 +15,9 @@ argument-hint: <功能描述或需求>
 
 **掃描方式：**
 
-1. 列出所有可用的 agent types（從 Agent tool 的 subagent_type 列表）
+1. 列出所有可用的 agent types（從 Agent tool 的 subagent_type 列表），包括 v1.8 新增的 `harness-optimizer`（harness 設定優化）和 `loop-operator`（自主迴圈監控）
 2. 列出所有可用的 skills（從 system-reminder 中的 skill 列表）
-3. 列出所有可用的 commands（從 `~/.claude/commands/` 和 plugin commands）
+3. 列出所有可用的 commands（從 `~/.claude/commands/` 和 plugin commands），包括 v1.8 新增的 `/harness-audit`、`/quality-gate`、`/loop-start`
 4. 根據使用者的需求（`$ARGUMENTS`），篩選出**相關的資源**
 
 **輸出：** 一份簡潔的資源清單，標記每個資源與當前需求的關聯程度（高/中/低）。
@@ -92,6 +92,7 @@ Agent(subagent_type="everything-claude-code:architect")
 | ECC 資源合理 | 每個 agent/skill 在其設計用途內使用 |
 | 驗收可測 | 每個驗收標準都可客觀驗證 |
 | 實作後工具 | plan.md 的步驟中包含實作後的品質保障（code-reviewer、/update、/verify 等） |
+| Eval 基線 | 若涉及行為變更，計畫中包含 eval 基線建立與回歸驗證步驟（參考 `/quality-gate`） |
 
 如果發現問題，直接修正計畫內容。
 

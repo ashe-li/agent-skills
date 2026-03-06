@@ -2,6 +2,14 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.5.0] - 2026-03-07
+
+### Changed
+- `/assist`: 新增 `harness-optimizer`、`loop-operator` 至 agent 表格與路由規則
+- `/design`: ECC 資源盤點納入 v1.8 新增 agents 與 commands；計畫品質檢查表新增 Eval 基線維度
+- `/ecc-skill-defer`: README 更新數字（23 deferred / 65 total），移除過時的 token 數量描述
+- 同步 ECC v1.8.0 的 agent harness 定位與 eval-driven 開發概念
+
 ## [v1.4.2] - 2026-03-07
 
 ### Fixed

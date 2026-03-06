@@ -66,6 +66,8 @@ ls -la
 | go-build-resolver | Go build 錯誤 |
 | python-reviewer | Python 專案專用 |
 | database-reviewer | 資料庫相關 |
+| harness-optimizer | agent harness 設定優化（hooks/evals/routing） |
+| loop-operator | 自主迴圈運行與監控 |
 
 ## Step 3: 智慧路由
 
@@ -84,6 +86,8 @@ ls -la
 | Go 專案 | 在 pipeline 中加入 go-reviewer | 自動附加語言專用 reviewer |
 | Python 專案 | 在 pipeline 中加入 python-reviewer | 自動附加語言專用 reviewer |
 | 涉及資料庫 schema 或 query | 在 pipeline 中加入 database-reviewer | 自動附加資料庫 reviewer |
+| 需要優化 agent harness 設定 | harness-optimizer | hooks/evals/routing 設定調優 |
+| 需要執行自主迴圈任務 | loop-operator | 長時間 autonomous loop 監控 |
 | 不確定 / 多種可能 | 列出建議 pipeline，讓使用者選擇 | 透過 AskUserQuestion 互動 |
 
 ### 路由判斷邏輯

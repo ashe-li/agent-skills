@@ -54,6 +54,8 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 | Build 失敗 | build-error-resolver |
 | 重構 | architect → refactor-cleaner → code-reviewer |
 | 文件更新 | doc-updater → code-reviewer |
+| Harness 設定優化 | harness-optimizer |
+| 自主迴圈任務 | loop-operator |
 | 不確定 | 互動式選擇 |
 
 **Features:**
@@ -71,7 +73,7 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - `restore --all` 全部恢復
 - `status` / `list` 檢視目前狀態
 - 可自訂 `ecc-skill-defer.conf` 控制 defer 清單
-- 預設 defer 29 skills（Django/Spring Boot/Java/C++/business/meta），省 ~1,800 tokens
+- 預設 defer 23 skills（Django/Spring Boot/Java/C++/business/meta），支援 marketplace 與 cache 雙路徑
 
 ### `/plan-archive` — 歸檔已完成的 Plan
 
@@ -275,6 +277,6 @@ npx skills update
 /plan-archive              # 歸檔已完成的 plan（自動偵測）
 /plan-archive my-plan.md   # 指定檔名歸檔
 /ecc-skill-defer           # 查看 ECC skill defer 狀態
-/ecc-skill-defer apply     # Defer 不常用的 skills（省 ~1,800 tokens）
+/ecc-skill-defer apply     # Defer 不常用的 skills
 /ecc-skill-defer restore X # 臨時啟用某個 skill
 ```

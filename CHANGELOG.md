@@ -2,6 +2,16 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.4.0] - 2026-03-07
+
+### Added
+- `/ecc-skill-defer`: ECC Skill 漸進式載入管理，減少 init token 消耗
+  - `apply` 一鍵 defer config 中列出的 skills（SKILL.md → SKILL.deferred.md）
+  - `restore <name>` / `restore --all` 按需啟用
+  - `status` / `list` 檢視目前 active/deferred 狀態
+  - 預設 defer 29 skills（Django/Spring Boot/Java/C++/business/meta），省 ~1,800 init tokens
+  - 附帶 `ecc-skill-defer.conf` 可自訂 defer 清單
+
 ## [v1.3.0] - 2026-03-05
 
 ### Added

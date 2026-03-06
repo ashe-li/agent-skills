@@ -61,6 +61,18 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - 使用 handoff protocol 在 agents 間傳遞 context
 - 無法判斷時透過互動式選單讓使用者選擇 pipeline
 
+### `/ecc-skill-defer` — ECC Skill 漸進式載入
+
+管理 ECC skills 的 defer/restore 狀態，將不常用的 skill 延遲載入以減少 init token 消耗。
+
+**Features:**
+- `apply` 一鍵 defer config 中列出的 skills（rename SKILL.md → SKILL.deferred.md）
+- `restore <name>` 臨時啟用單一 deferred skill
+- `restore --all` 全部恢復
+- `status` / `list` 檢視目前狀態
+- 可自訂 `ecc-skill-defer.conf` 控制 defer 清單
+- 預設 defer 29 skills（Django/Spring Boot/Java/C++/business/meta），省 ~1,800 tokens
+
 ### `/plan-archive` — 歸檔已完成的 Plan
 
 實作完成後，將 `plans/active/` 中的 plan 移至 `plans/completed/`，補上驗證結果與完成時間。
@@ -168,7 +180,9 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 │
 ├─ 組合使用 ─────────→ /design → 實作 → /update → /pr
 │
-└─ Plan 寫完要收尾 ─→ /plan-archive（歸檔至 completed/）
+├─ Plan 寫完要收尾 ─→ /plan-archive（歸檔至 completed/）
+│
+└─ 優化 init tokens ─→ /ecc-skill-defer apply
 ```
 
 ## Benchmark
@@ -260,4 +274,7 @@ npx skills update
 /assist <任務>              # 指定任務描述
 /plan-archive              # 歸檔已完成的 plan（自動偵測）
 /plan-archive my-plan.md   # 指定檔名歸檔
+/ecc-skill-defer           # 查看 ECC skill defer 狀態
+/ecc-skill-defer apply     # Defer 不常用的 skills（省 ~1,800 tokens）
+/ecc-skill-defer restore X # 臨時啟用某個 skill
 ```

@@ -2,18 +2,20 @@
 set -e
 
 INPUT=$(cat)
-echo "$INPUT"
+printf '%s\n' "$INPUT"
 
-echo "$INPUT" | python3 -c '
-import json, sys, os
+printf '%s\n' "$INPUT" | python3 -c '
+import json, sys, os, re
 
 try:
     data = json.load(sys.stdin)
     fp = data.get("tool_input", {}).get("file_path", "")
     content = data.get("tool_input", {}).get("content", "")
 
-    # Only process plan files
-    if "/.claude/plans/" not in fp or not fp.endswith(".md"):
+    # Only process plan files (resolve traversal before checking)
+    plans_dir = os.path.realpath(os.path.expanduser("~/.claude/plans"))
+    fp_resolved = os.path.realpath(os.path.expanduser(fp)) if fp else ""
+    if not fp_resolved.startswith(plans_dir + os.sep) or not fp_resolved.endswith(".md"):
         sys.exit(0)
 
     # Extract H1 title
@@ -36,9 +38,9 @@ try:
     if len(title) > 80:
         title = title[:77] + "..."
 
-    # Get sessionId from hook stdin
+    # Get sessionId from hook stdin (validate format)
     session_id = data.get("sessionId", "")
-    if not session_id:
+    if not session_id or not re.fullmatch(r"[a-zA-Z0-9_-]{8,128}", session_id):
         sys.exit(0)
 
     cwd = os.getcwd()
@@ -60,6 +62,9 @@ try:
         f.write(entry + "\n")
 
     print(f"[plan-rename] Session renamed to: {title}", file=sys.stderr)
-except Exception:
+except (KeyError, ValueError, json.JSONDecodeError):
+    sys.exit(0)
+except Exception as e:
+    print(f"[plan-rename] Unexpected error: {e}", file=sys.stderr)
     sys.exit(0)
 ' >&2 || true

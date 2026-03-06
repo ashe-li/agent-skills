@@ -8,6 +8,8 @@ allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion
 
 將本次 session 的工作沉澱為文件與可復用知識。依序執行文件更新、品質審查、模式提取三個階段。
 
+> **ECC 資源前置確認：** 確認 doc-updater agent 和 learn-eval skill 的可用狀態。若已被 defer，提示使用者先 restore 或調整流程。
+
 > 與 `/pr` 的分工：`/update` 負責知識沉澱，`/pr` 負責 git 輸出。需要時可組合使用：先 `/update` 再 `/pr`。
 
 ## Step 1: doc-updater — 更新文件
@@ -102,6 +104,8 @@ Skill(skill="everything-claude-code:learn-eval")
 - 架構決策（architectural decisions）
 - 專案特定模式（project-specific patterns）
 - 工具使用技巧（tool usage patterns）
+- 業界標準應用（industry standard adoptions）
+- 標準化方案選型（standardized solution selections）
 
 **品質評估：** learn-eval 會自動進行 5 維度評分（specificity、actionability、scope fit、non-redundancy、coverage），至少達 3 分才會保存。
 
@@ -124,6 +128,7 @@ learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正
 2. 對照本次 session 的工作內容，逐一確認：
    - 有做但未記錄的決策或模式
    - 記錄的內容是否與實際一致（無錯誤描述）
+   - 本次引用的業界標準或學術依據是否已記錄到適當的知識庫
    - 是否有跨知識庫的不一致（例如 MEMORY.md 與 learned skill 矛盾）
 3. 若發現問題，列出具體差異
 

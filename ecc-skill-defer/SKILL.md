@@ -33,3 +33,8 @@ The defer list is at `ecc-skill-defer.conf` (same directory as the script). To a
 ### After restoring a skill
 
 Tell the user: "Skill restored. It will be available in the **next session** (or after context reload)."
+
+### Notes
+
+- **規劃相關 skill 保護提醒：** design、assist 為核心規劃 skill，defer 這些 skill 會影響業界/學術參照與 ECC 資源分配的品質。defer 前應確認使用者了解此影響。
+- **ECC 資源一致性：** apply 後應提示使用者當前可用資源清單，確保後續 skill 執行時能正確判斷可用的 agent/skill。

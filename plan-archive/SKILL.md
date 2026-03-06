@@ -9,6 +9,8 @@ argument-hint: [plan 檔名或留空自動偵測]
 
 將 `plans/active/` 中已完成的 plan 移至 `plans/completed/`，並補上驗證結果。
 
+> **ECC 資源感知：** 若有可用的 code-reviewer agent，可輔助驗證 plan 中的實作結果。
+
 ---
 
 ## Step 1：找出要歸檔的 Plan
@@ -31,6 +33,7 @@ ls plans/active/*.md 2>/dev/null
 讀取目標 plan 檔案，確認：
 - 是否有 `## Phase` 或 `## Step` 段落（實作步驟）
 - 是否有 `## 驗證` 或 `## Verification` 段落
+- 是否有 `## Industry & Standards Reference` 段落
 
 ---
 
@@ -46,6 +49,7 @@ ls plans/active/*.md 2>/dev/null
 再追加或更新 `## 驗證結果` 段落，填入：
 - 測試通過數（若有）
 - 實際執行結果（對照 plan 中的「預期」）
+- 業界/學術參照落實情況 — 對照 plan 的 Industry & Standards Reference，確認各項參照是否已實際應用
 - 任何偏差或補充說明
 
 ---

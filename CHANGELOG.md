@@ -2,6 +2,17 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.7.1] - 2026-03-07
+
+### Fixed
+- `plan-rename`: path filter 改用 `realpath` + `startswith` 防止 traversal 繞過
+- `plan-rename`: sessionId 新增 regex 驗證，防止 `os.path.join` path traversal
+- `plan-rename`: exception 分層處理，unexpected error 輸出 stderr 可觀測
+- `plan-rename`: `echo` 改為 `printf '%s\n'`，避免 backslash 解析問題
+
+### Changed
+- `plan-rename/README.md`: 新增 Troubleshooting 區段、手動重命名覆蓋提醒、截斷描述精確化
+
 ## [v1.7.0] - 2026-03-07
 
 ### Added

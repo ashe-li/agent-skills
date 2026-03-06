@@ -5,8 +5,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF="$SCRIPT_DIR/ecc-skill-defer.conf"
-ECC_BASE="$HOME/.claude/plugins/cache/everything-claude-code/everything-claude-code"
-SKILLS_DIR="$(ls -td "$ECC_BASE"/*/ 2>/dev/null | head -1)skills"
+MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/everything-claude-code"
+CACHE_BASE="$HOME/.claude/plugins/cache/everything-claude-code/everything-claude-code"
+
+if [ -d "$MARKETPLACE_DIR/skills" ]; then
+  SKILLS_DIR="$MARKETPLACE_DIR/skills"
+else
+  SKILLS_DIR="$(ls -td "$CACHE_BASE"/*/ 2>/dev/null | head -1)skills"
+fi
 
 if [ ! -d "$SKILLS_DIR" ]; then
   echo "Error: ECC skills dir not found" >&2

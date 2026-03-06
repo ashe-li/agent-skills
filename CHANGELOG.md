@@ -2,6 +2,11 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.4.1] - 2026-03-07
+
+### Changed
+- `/ecc-skill-defer`: 調整預設 defer 清單 — meta skills 區只保留 `continuous-learning`，其餘 6 個改為 active（33 active / 23 deferred）
+
 ## [v1.4.0] - 2026-03-07
 
 ### Added

@@ -77,6 +77,18 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - 可自訂 `ecc-skill-defer.conf` 控制 defer 清單
 - 預設 defer 23 skills（Django/Spring Boot/Java/C++/business/meta），支援 marketplace 與 cache 雙路徑
 
+### `plan-rename` — Plan Mode 自動命名 Hook
+
+PostToolUse hook — 當 Claude 在 Plan Mode 建立計畫檔時，自動從 H1 標題擷取名稱並重命名 session。
+
+**機制：** 攔截 `Write` → 篩選 `~/.claude/plans/*.md` → 擷取 H1 標題 → append `custom-title` 到 transcript JSONL（與 `/rename` 相同格式）
+
+**Features:**
+- 零操作：進入 Plan Mode 寫 plan 後自動生效
+- 去除 `Plan:` / `Implementation Plan:` 等前綴
+- 標題截斷 80 字元
+- `|| true` 確保 python3 失敗不影響 hook chain
+
 ### `/plan-archive` — 歸檔已完成的 Plan
 
 實作完成後，將 `plans/active/` 中的 plan 移至 `plans/completed/`，補上驗證結果與完成時間。

@@ -2,6 +2,15 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.7.0] - 2026-03-07
+
+### Added
+- `plan-rename`: PostToolUse hook，Plan Mode 自動從 H1 標題重命名 session
+  - 攔截 Write tool，篩選 `~/.claude/plans/*.md`
+  - 擷取 H1 標題，去除 `Plan:` 等前綴，截斷 80 字元
+  - 直接 append `custom-title` 到 transcript JSONL（與 `/rename` 相同機制）
+  - 從 hook stdin 取 sessionId，多 session 並行安全
+
 ## [v1.6.0] - 2026-03-07
 
 ### Added

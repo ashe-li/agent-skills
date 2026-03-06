@@ -2,6 +2,18 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.6.0] - 2026-03-07
+
+### Added
+- 全 skill 業界/學術參照機制：規劃階段須附上業界標準（RFC、W3C、OWASP、12-Factor）、學術研究或標準化方案依據
+- 全 skill ECC 資源分配介入：核心 skill 深度整合盤點確認，輔助/輕量 skill 加入資源感知 blockquote
+- `/design`: plan.md 模板新增 `## Industry & Standards Reference` 表格
+- `/assist`: 新功能需求 pipeline 加入業界/學術方案調研；新增 ECC 資源分配原則；Handoff Protocol 新增 Industry & Standards Referenced 欄位
+- `/pr`: 對話脈絡分析和 PR Description Context 新增業界/學術依據
+- `/update`: learn-eval 提取範圍新增業界標準應用與標準化方案選型；交叉比對新增「業界標準是否已記錄到知識庫」確認項
+- `/plan-archive`: 歸檔驗證新增業界/學術參照落實情況
+- `/ecc-skill-defer`: 新增 Notes — 核心規劃 skill 保護提醒
+
 ## [v1.5.0] - 2026-03-07
 
 ### Changed

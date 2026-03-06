@@ -33,11 +33,12 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 **Pipeline:** ECC 資源盤點 → 複雜度評估 → planner → architect → plan.md
 
 **Features:**
-- 自動盤點可用的 agents/skills/commands，將合適的資源整合進計畫步驟
+- 自動盤點可用的 agents/skills/commands，資源分配須經盤點確認（不可假設可用）
 - 複雜度評估：簡單需求跳過 architect，走快速路徑
-- planner 建立實作計畫，architect 審查架構設計 + 文件影響評估
-- 計畫品質自審檢查表，確保完整性、可執行性、依賴正確性
-- plan.md 包含實作後的品質保障步驟（code-reviewer、/update、/verify）
+- planner 建立實作計畫，含業界實踐與標準化方案參照（RFC、OWASP、12-Factor 等）
+- architect 審查架構設計 + 文件影響評估 + 業界/學術參照可靠性
+- 計畫品質自審檢查表，確保完整性、可執行性、依賴正確性、業界/學術支撐
+- plan.md 包含 Industry & Standards Reference 表格和實作後的品質保障步驟
 - 不自動執行實作，使用者確認後才能開始
 
 ### `/assist` — 萬用助手
@@ -48,7 +49,7 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 | 情境 | Pipeline |
 |------|----------|
-| 新功能需求 | planner → architect → tdd-guide → code-reviewer |
+| 新功能需求 | planner（含業界/學術調研）→ architect → tdd-guide → code-reviewer |
 | Bug 修復 | planner → tdd-guide → code-reviewer |
 | 未 commit 變更需 review | code-reviewer → security-reviewer |
 | Build 失敗 | build-error-resolver |
@@ -60,7 +61,8 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 **Features:**
 - 自動偵測專案類型（Go/Python/Node.js），附加語言專用 reviewer
-- 使用 handoff protocol 在 agents 間傳遞 context
+- 使用 handoff protocol 在 agents 間傳遞 context（含 Industry & Standards Referenced）
+- ECC 資源分配原則：路由前確認 pipeline 中所有 agent 可用，若已被 defer 則提示 restore 或替代 pipeline
 - 無法判斷時透過互動式選單讓使用者選擇 pipeline
 
 ### `/ecc-skill-defer` — ECC Skill 漸進式載入

@@ -53,12 +53,17 @@ Agent(subagent_type="everything-claude-code:planner")
 
 1. **需求拆解** — 將需求分解為可執行的子任務
 2. **技術方案** — 每個子任務的實作方式
-3. **ECC 資源整合** — 明確指出每個步驟應使用哪個 agent/skill/command
+3. **業界實踐與標準化方案參照** — 每個技術方案須附上依據
+   - 是否有業界標準或慣例（RFC、W3C、OWASP、12-Factor 等）
+   - 是否有學術研究支撐（論文、benchmarks）
+   - 是否有成熟的標準化解決方案（官方 SDK、知名 library 的 canonical pattern）
+   - 若無直接標準，說明為何採用自訂方案，並引述最接近的參考
+4. **ECC 資源整合** — 明確指出每個步驟應使用哪個 agent/skill/command。**ECC 資源分配須經盤點確認** — 不可假設資源可用，須回溯 Step 1 的盤點結果
    - 例：「Step 3: 使用 tdd-guide agent 撰寫測試」
    - 例：「Step 5: 使用 /code-review 進行品質審查」
-4. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
-5. **風險評估** — 潛在的技術風險和對策
-6. **驗收標準** — 怎樣算完成
+5. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
+6. **風險評估** — 潛在的技術風險和對策
+7. **驗收標準** — 怎樣算完成
 
 ## Step 4: architect — 架構設計審查
 
@@ -74,7 +79,8 @@ Agent(subagent_type="everything-claude-code:architect")
 - 是否有更簡單的替代方案
 - 與現有程式碼的相容性
 - 效能和安全性考量
-- ECC 資源的選用是否恰當
+- **業界/學術參照的可靠性** — 引用的標準是否適用於當前情境、是否為最新版本、有無更好的標準化方案被遺漏
+- ECC 資源的選用是否恰當 — **須對照 Step 1 盤點結果，確認所選 agent/skill 在當前 session 可用**
 - 文件影響評估：實作後需要新增或更新哪些文件（README、API docs、CODEMAPS），列入 plan.md 待辦
 
 **如果有重大架構建議：** 回饋給 planner 調整計畫（最多迭代 2 次）。
@@ -91,6 +97,7 @@ Agent(subagent_type="everything-claude-code:architect")
 | 粒度適當 | 每個步驟 1-3 個具體動作 |
 | ECC 資源合理 | 每個 agent/skill 在其設計用途內使用 |
 | 驗收可測 | 每個驗收標準都可客觀驗證 |
+| 業界/學術支撐 | 每個技術方案都有明確的業界標準、學術研究或標準化方案參照 |
 | 實作後工具 | plan.md 的步驟中包含實作後的品質保障（code-reviewer、/update、/verify 等） |
 | Eval 基線 | 若涉及行為變更，計畫中包含 eval 基線建立與回歸驗證步驟（參考 `/quality-gate`） |
 
@@ -117,6 +124,11 @@ Agent(subagent_type="everything-claude-code:architect")
 | tdd-guide | agent | Step 3: 撰寫測試 |
 | code-reviewer | agent | Step 5: 品質審查 |
 | ... | ... | ... |
+
+## Industry & Standards Reference
+| 技術決策 | 參照依據 | 類型 | 來源 |
+|----------|---------|------|------|
+| ... | ... | 業界標準/學術研究/標準化方案/最佳實踐 | ... |
 
 ## Implementation Steps
 

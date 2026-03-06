@@ -69,6 +69,12 @@ ls -la
 | harness-optimizer | agent harness 設定優化（hooks/evals/routing） |
 | loop-operator | 自主迴圈運行與監控 |
 
+### ECC 資源分配原則
+
+- 盤點結果直接影響 Step 3 路由選擇
+- 路由決策前必須確認所選 pipeline 中的所有 agent 均為可用狀態
+- 若需要的 agent 已被 defer，提示使用者先 restore 或選擇替代 pipeline
+
 ## Step 3: 智慧路由
 
 根據 Step 1 的情境分析結果，自動選擇最佳 pipeline：
@@ -77,7 +83,7 @@ ls -la
 
 | 偵測到的情境 | 選擇的 Pipeline | 說明 |
 |---|---|---|
-| 有明確的新功能需求 | planner -> architect -> tdd-guide -> code-reviewer | 完整功能開發流程 |
+| 有明確的新功能需求 | planner（含業界/學術方案調研）-> architect -> tdd-guide -> code-reviewer | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐 |
 | 有 bug 描述或錯誤訊息 | planner -> tdd-guide -> code-reviewer | bug 修復流程 |
 | 有未 commit 變更需 review | code-reviewer -> security-reviewer | 快速品質審查 |
 | build 失敗 | build-error-resolver | 直接修復 build |
@@ -143,6 +149,9 @@ ls -la
 
 ### Findings
 <!-- 上一個 agent 的發現和產出 -->
+
+### Industry & Standards Referenced
+<!-- 本階段引用的業界標準或學術依據 -->
 
 ### Files Modified
 <!-- 被修改的檔案清單 -->

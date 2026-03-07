@@ -2,6 +2,12 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.7.2] - 2026-03-07
+
+### Fixed
+- `plan-rename`: `sessionId` → `session_id`（hook stdin 使用 snake_case，非 camelCase）
+- `plan-rename`: 移除 `os.getcwd()` slug 路徑拼接，改用 hook stdin 提供的 `transcript_path` 直接定位 session JSONL
+
 ## [v1.7.1] - 2026-03-07
 
 ### Fixed

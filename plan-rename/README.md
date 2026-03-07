@@ -48,7 +48,6 @@ chmod +x ~/.claude/scripts/plan-rename-hook.sh
 - 超長標題：截斷至 77 字元並附加 `...`（總長 80）
 - 多次更新 plan：每次都會更新 session 名稱（最後一次生效）
 - 手動重命名後再編輯 plan：自動重命名會覆蓋手動重命名，基於最新 H1 標題優先
-- CWD 含空格：project slug 仍可運作（路徑不含空格的假設由 Claude 保證）
 - python3 失敗：`|| true` 確保不影響 hook chain
 
 ## Troubleshooting

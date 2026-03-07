@@ -79,12 +79,14 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 ### `plan-rename` — Plan Mode 自動命名 Hook
 
-PostToolUse hook — 當 Claude 在 Plan Mode 建立計畫檔時，自動從 H1 標題擷取名稱並重命名 session。
+PreToolUse hook — 當 Claude 退出 Plan Mode 時，自動從 H1 標題擷取名稱並重命名 session。
 
-**機制：** 攔截 `Write` → 篩選 `~/.claude/plans/*.md` → 擷取 H1 標題 → append `custom-title` 到 transcript JSONL（與 `/rename` 相同格式）
+**機制：** 攔截 `ExitPlanMode`（PreToolUse）→ 從 `tool_input.plan` 擷取 H1 標題 → append `custom-title` 到 transcript JSONL（與 `/rename` 相同格式）
+
+> **注意：** 需手動設定 `settings.json`，詳見 `plan-rename/README.md`。推薦搭配 claude-hud 使用（`claude -r` 只 tail 64KB，長 session 可能不顯示）。
 
 **Features:**
-- 零操作：進入 Plan Mode 寫 plan 後自動生效
+- 零操作：退出 Plan Mode 後自動生效
 - 去除 `Plan:` / `Implementation Plan:` 等前綴
 - 標題截斷 80 字元
 - `|| true` 確保 python3 失敗不影響 hook chain

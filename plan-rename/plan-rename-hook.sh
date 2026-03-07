@@ -9,13 +9,10 @@ import json, sys, os, re
 
 try:
     data = json.load(sys.stdin)
-    fp = data.get("tool_input", {}).get("file_path", "")
-    content = data.get("tool_input", {}).get("content", "")
+    tool_input = data.get("tool_input", {})
 
-    # Only process plan files (resolve traversal before checking)
-    plans_dir = os.path.realpath(os.path.expanduser("~/.claude/plans"))
-    fp_resolved = os.path.realpath(os.path.expanduser(fp)) if fp else ""
-    if not fp_resolved.startswith(plans_dir + os.sep) or not fp_resolved.endswith(".md"):
+    content = tool_input.get("plan", "")
+    if not content:
         sys.exit(0)
 
     # Extract H1 title

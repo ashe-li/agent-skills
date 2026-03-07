@@ -38,17 +38,13 @@ try:
     if len(title) > 80:
         title = title[:77] + "..."
 
-    # Get sessionId from hook stdin (validate format)
-    session_id = data.get("sessionId", "")
+    # Get session info from hook stdin
+    session_id = data.get("session_id", "")
     if not session_id or not re.fullmatch(r"[a-zA-Z0-9_-]{8,128}", session_id):
         sys.exit(0)
 
-    cwd = os.getcwd()
-    project_slug = cwd.replace("/", "-")
-    project_dir = os.path.expanduser(f"~/.claude/projects/{project_slug}")
-    active_file = os.path.join(project_dir, f"{session_id}.jsonl")
-
-    if not os.path.isfile(active_file):
+    active_file = data.get("transcript_path", "")
+    if not active_file or not os.path.isfile(active_file):
         sys.exit(0)
 
     # Append custom-title entry (same format as /rename)

@@ -25,6 +25,18 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - code-reviewer 審查文件品質，確保文件與程式碼一致
 - learn-eval 提取可復用 patterns，自動評估品質後寫入知識庫
 - 與 `/pr` 分離設計：`/update` 負責知識沉澱，`/pr` 負責 git 輸出
+- **Pipeline 串接**：`/update /pr` 一條指令完成知識沉澱 + PR 交付，自動去重避免重複工作
+
+**Pipeline 串接與資源去重：**
+
+`/update` 完成後可自動觸發 `/pr`，透過 `[PIPELINE: from /update]` 標記通知下游 skill 跳過已完成的步驟：
+
+| `/pr` 步驟 | 單獨執行 | 從 `/update` 串接 | 原因 |
+|-------------|:-------:|:-----------------:|------|
+| Step 1a: Git 分析 | 完整執行 | 完整執行 | 目的不同：`/update` 只需檔案清單，`/pr` 需要完整 diff + commit history |
+| Step 1b: 對話脈絡分析 | 完整執行 | 完整執行 | `/update` 不做此步驟 |
+| Step 2: Quick Review | 完整執行 | **跳過** | `/update` Step 2 已用 code-reviewer agent 做過更深度審查 |
+| Step 3-6 | 完整執行 | 完整執行 | 無重疊 |
 
 ### `/design` — 開發設計
 
@@ -102,7 +114,10 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 # PR 已存在，補充新的 commit 後更新 description
 /pr 1234
 
-# 搭配 /update 使用：先沉澱知識，再開 PR
+# 搭配 /update 使用：一條指令完成（推薦）
+/update /pr
+
+# 或分開執行
 /update
 /pr
 ```
@@ -120,12 +135,18 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 # 大型重構後，確保文件跟上程式碼變更
 /update
+
+# Pipeline 串接：知識沉澱 + PR 一條龍完成（自動去重）
+/update /pr
+
+# Pipeline 串接：知識沉澱 + 更新指定 PR
+/update /pr 7238
 ```
 
 **適合：**
 - 完成功能開發或 bug 修復後，要同步文件
 - Session 中有值得記錄的 patterns、決策、除錯技巧
-- 搭配 `/pr` 使用：`/update` 先沉澱 → `/pr` 再交付
+- 搭配 `/pr` 使用：`/update /pr` 一條指令完成（推薦），或分開執行
 
 **不適合：** 還在開發中途、程式碼尚未穩定
 
@@ -182,7 +203,7 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 │
 ├─ 不確定 ──────────→ /assist（自動分析 + 路由）
 │
-├─ 組合使用 ─────────→ /design → 實作 → /update → /pr
+├─ 組合使用 ─────────→ /design → 實作 → /update /pr（一條龍）
 │
 ├─ Plan 寫完要收尾 ─→ /plan-archive（歸檔至 completed/）
 │
@@ -273,6 +294,8 @@ npx skills update
 /pr                        # 自動偵測是否有 open PR，沒有就建新的
 /pr 1234                   # 更新指定 PR 的 description
 /update                    # 更新知識庫（docs + patterns）
+/update /pr                # 知識沉澱 + PR 一條龍（自動去重）
+/update /pr 7238           # 知識沉澱 + 更新指定 PR
 /design <需求>              # 建立實作計畫
 /assist                    # 自動偵測情境並執行最佳 pipeline
 /assist <任務>              # 指定任務描述

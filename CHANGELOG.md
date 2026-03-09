@@ -2,6 +2,18 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.8.0] - 2026-03-09
+
+### Added
+- `/update`: Step 6 Pipeline 串接 — 支援 `/update /pr` 一條指令完成知識沉澱 + PR 交付
+  - 檢查 `$ARGUMENTS` 中的 skill 名稱，完成後自動觸發下游 skill
+  - `[PIPELINE: from /update]` 標記通知下游跳過已完成步驟
+  - 資源去重：`/pr` Step 2 (Quick Review) 自動跳過（`/update` Step 2 已用 code-reviewer agent 完成）
+  - 支援傳遞參數（如 `/update /pr 7238`）
+
+### Changed
+- `README.md`: 新增 pipeline 串接說明、去重表格、`/update /pr` 用法範例、選擇流程圖更新
+
 ## [v1.7.3] - 2026-03-07
 
 ### Fixed

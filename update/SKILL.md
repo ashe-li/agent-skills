@@ -169,3 +169,48 @@ learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正
 - 如果有未修正的問題，建議處理方式
 - 如果適合開 PR，建議執行 `/pr`
 ```
+
+## Step 6: Pipeline 串接（選擇性）
+
+檢查 `$ARGUMENTS` 是否包含其他 skill 名稱（如 `/pr`）。如果有，在 `/update` 完成後自動觸發。
+
+### 串接觸發
+
+```
+如果 $ARGUMENTS 包含 "/pr"：
+  → 使用 Skill tool 觸發 /pr（傳入 $ARGUMENTS 中 /pr 後面的參數）
+
+如果 $ARGUMENTS 包含其他 /<skill-name>：
+  → 使用 Skill tool 觸發對應 skill
+```
+
+### 資源去重
+
+串接時，`/update` 已完成的工作會透過環境標記傳遞給下游 skill，避免重複執行：
+
+**串接 `/pr` 時的去重規則：**
+
+| `/pr` 步驟 | 正常執行 | 從 `/update` 串接 | 原因 |
+|-------------|---------|-------------------|------|
+| Step 1a: Git 分析 | 完整執行 | 完整執行 | 目的不同：`/update` 只需檔案清單，`/pr` 需要完整 diff + commit history 寫 description |
+| Step 1b: 對話脈絡分析 | 完整執行 | 完整執行 | `/update` 不做此步驟 |
+| Step 2: Quick Review | 完整執行 | **跳過** | `/update` Step 2 已用 code-reviewer agent 做過更深度審查 |
+| Step 3-6 | 完整執行 | 完整執行 | 無重疊 |
+
+**實作方式：** 觸發 `/pr` 時，在 prompt 前加上以下指示：
+
+```
+[PIPELINE: from /update]
+以下步驟已由 /update 完成，請跳過：
+- Step 2 (Quick Review) — 已由 code-reviewer agent 完成，無 CRITICAL/HIGH 問題
+其餘步驟正常執行。
+```
+
+### 用法範例
+
+```bash
+/update /pr        # 先更新知識庫，再自動 commit + push + 建立/更新 PR
+/update /pr 7238   # 先更新知識庫，再更新 PR #7238
+```
+
+**注意：** 只在 `/update` 所有步驟（包含使用者確認）完成後才觸發下一個 skill，不會中途跳轉。

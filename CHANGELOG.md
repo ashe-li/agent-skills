@@ -13,6 +13,11 @@
   - 頁面載入失敗允許一次重試
 
 ### Changed
+- `/notion-fetch` → `/notion-plan`: 從單純的內容擷取升級為完整的 Notion → plan.md 工作流
+  - 整合 Notion 抓取（WebFetch → Playwright fallback）+ `/design` 串接
+  - 擷取內容後自動觸發 `/design` 建立實作計畫，一條指令完成
+  - 保留原有的雙路徑策略、Toggle 展開、登入偵測、長頁面捲動等功能
+  - 新增內容品質確認步驟（Step 5），空白或不完整時提示使用者
 - `README.md`: 新增 `/playwright-human-in-the-loop` skill 描述、Usage、選擇流程圖
 
 ## [v1.8.0] - 2026-03-09

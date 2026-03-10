@@ -16,14 +16,14 @@ allowed-tools: AskUserQuestion, mcp__playwright__browser_navigate, mcp__playwrig
 
 使用 `AskUserQuestion` 工具暫停執行並等待使用者回應，顯示即將執行的動作，確認後才繼續。
 
-| 類別 | 範例 |
-|------|------|
-| 建立/刪除資源 | Create/Delete IAM Role、OIDC Provider、EC2、RDS、S3 Bucket |
-| 修改權限/政策 | Attach/Detach Policy、修改 Trust Policy、修改 Security Group |
-| 安全敏感欄位 | Policy JSON、IAM policy document、權限設定、Security Group rules |
-| 費用相關 | 啟用付費服務、變更 instance type、購買 Reserved Instance |
-| 不可逆操作 | 刪除 S3 bucket、terminate instance、drop database |
-| 最終送出 | Create、Submit、Deploy、Confirm、Apply Changes 按鈕 |
+| 類別 | 判斷原則 | 範例 |
+|------|----------|------|
+| 建立/刪除資源 | 會產生或移除基礎設施、服務、帳號 | IAM Role、EC2、GCP Service Account、Vercel Project、DNS Record |
+| 修改權限/政策 | 會改變誰能存取什麼 | IAM Policy、Security Group、Firewall Rule、OAuth Scope、API Key 權限 |
+| 安全敏感欄位 | 欄位內容影響安全或存取控制 | Policy JSON、Trust Policy、env variables、webhook URL、redirect URI |
+| 費用相關 | 會產生或改變費用 | 變更 instance type、購買 Reserved Instance、升級 plan、啟用付費功能 |
+| 不可逆操作 | 執行後無法還原 | 刪除 S3 bucket、terminate instance、drop database、revoke API key |
+| 最終送出 | 確認按鈕，觸發實際變更 | Create、Submit、Deploy、Confirm、Apply Changes、Save 按鈕 |
 
 ### 非重大操作（自動執行）
 
@@ -36,7 +36,9 @@ allowed-tools: AskUserQuestion, mcp__playwright__browser_navigate, mcp__playwrig
 - 展開/收合面板
 - 截圖、讀取頁面內容
 
-> **注意**：涉及權限、政策、安全設定的欄位（如 Policy JSON）即使是「填寫」也屬於重大操作，必須確認內容後才送出。
+> **注意**：涉及權限、政策、安全設定的欄位（如 Policy JSON、env variables、webhook URL）即使是「填寫」也屬於重大操作，必須確認內容後才送出。
+>
+> **泛化原則**：上表範例不限於 AWS。任何管理介面（GCP、Azure、Vercel、Stripe、自建後台等）都適用相同分類邏輯——依據「操作是否可逆」「是否影響安全/費用」判斷，而非依據平台。
 
 ## Step 1: 確認 Playwright MCP 可用
 

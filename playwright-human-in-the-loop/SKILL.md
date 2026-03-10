@@ -1,3 +1,9 @@
+---
+name: playwright-human-in-the-loop
+description: Playwright Human-in-the-Loop 瀏覽器操作 — 透過 Playwright MCP 自動執行低風險操作，重大操作前暫停等待人類確認。適用 AWS Console、後台管理介面等場景。
+allowed-tools: AskUserQuestion, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_fill_form, mcp__playwright__browser_type, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_select_option, mcp__playwright__browser_press_key, mcp__playwright__browser_hover, mcp__playwright__browser_wait_for, mcp__playwright__browser_evaluate, mcp__playwright__browser_tabs, mcp__playwright__browser_close
+---
+
 # /playwright-hitl — Playwright Human-in-the-Loop 瀏覽器操作
 
 透過 Playwright MCP 操作瀏覽器，自動執行低風險操作，重大操作前暫停等待人類確認。
@@ -8,12 +14,13 @@
 
 ### 重大操作（必須 human confirmation）
 
-使用 `AskUserQuestion` 暫停，顯示即將執行的動作，等待使用者確認後才繼續。
+使用 `AskUserQuestion` 工具暫停執行並等待使用者回應，顯示即將執行的動作，確認後才繼續。
 
 | 類別 | 範例 |
 |------|------|
 | 建立/刪除資源 | Create/Delete IAM Role、OIDC Provider、EC2、RDS、S3 Bucket |
 | 修改權限/政策 | Attach/Detach Policy、修改 Trust Policy、修改 Security Group |
+| 安全敏感欄位 | Policy JSON、IAM policy document、權限設定、Security Group rules |
 | 費用相關 | 啟用付費服務、變更 instance type、購買 Reserved Instance |
 | 不可逆操作 | 刪除 S3 bucket、terminate instance、drop database |
 | 最終送出 | Create、Submit、Deploy、Confirm、Apply Changes 按鈕 |
@@ -23,15 +30,19 @@
 不需等待確認，直接執行：
 
 - 導航（navigate、click 連結、切換頁面）
-- 填寫表單欄位（fill、type）
+- 填寫一般資訊欄位（名稱、描述、標籤等 metadata）
 - 選擇 radio/dropdown/checkbox（select_option、click）
 - 搜尋、篩選、翻頁
 - 展開/收合面板
 - 截圖、讀取頁面內容
 
+> **注意**：涉及權限、政策、安全設定的欄位（如 Policy JSON）即使是「填寫」也屬於重大操作，必須確認內容後才送出。
+
 ## Step 1: 確認 Playwright MCP 可用
 
 檢查 Playwright MCP 工具是否可用（`mcp__playwright__browser_navigate` 等）。
+
+Playwright MCP（Model Context Protocol）是讓 AI agent 操作瀏覽器的工具集，需先啟動 MCP server 才能使用。
 
 如果不可用：
 1. 提示使用者啟動 Playwright MCP server
@@ -45,13 +56,13 @@
 - **風險評估**：標記哪些步驟是重大操作
 
 輸出操作計畫，格式：
-```
+```text
 操作計畫：
 1. [自動] 導航到 AWS Console IAM
 2. [自動] 搜尋 Role "github-actions-frontend-deploy"
 3. [自動] 點擊進入 Role 詳情
-4. [自動] 填寫 Policy JSON
-5. [確認] 點擊 "Create Policy" 按鈕  ← 重大操作
+4. [確認] 檢視並確認 Policy JSON 內容  ← 安全敏感欄位
+5. [確認] 點擊 "Create Policy" 按鈕    ← 重大操作
 ```
 
 ## Step 3: 執行操作
@@ -62,9 +73,9 @@
 直接使用 Playwright MCP 工具執行，每步驟後用 `browser_snapshot` 確認頁面狀態。
 
 ### 重大操作
-暫停並使用 `AskUserQuestion` 詢問：
+暫停並使用 `AskUserQuestion` 工具詢問（此工具會暫停執行並等待使用者回應）：
 
-```
+```text
 即將執行重大操作：
 - 動作：點擊 "Create Policy" 按鈕
 - 影響：建立新的 IAM Inline Policy
@@ -77,7 +88,7 @@
 ```
 
 ### 錯誤處理
-- 如果頁面載入失敗 → 截圖 + 報告，不重試
+- 如果頁面載入失敗 → 等待 3 秒後重試一次；若仍失敗則截圖 + 報告
 - 如果找不到元素 → `browser_snapshot` 檢查頁面狀態，嘗試替代選擇器
 - 如果操作後頁面顯示錯誤 → 截圖 + 報告，不嘗試修復
 

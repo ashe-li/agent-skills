@@ -2,6 +2,16 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.9.0] - 2026-03-10
+
+### Added
+- `/notion-fetch`: 新增 Notion 頁面內容擷取 skill
+  - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
+  - 雙路徑策略：WebFetch（快速）→ Playwright MCP（完整 JS 渲染）
+  - 自動處理長頁面捲動載入（scrollHeight 穩定性檢查）、Toggle 點擊展開、登入偵測
+  - 輸出結構化 Markdown（保留標題層級、表格、清單、程式碼區塊）
+  - 特殊內容類型處理：Database → Markdown table、Callout → blockquote、embed → URL
+
 ## [v1.8.0] - 2026-03-09
 
 ### Added

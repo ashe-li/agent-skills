@@ -190,15 +190,27 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 **不適合：** 已經知道要用哪個 skill（直接用 `/pr`、`/update`、`/design`）
 
-### `/notion-fetch` — Notion 內容擷取
+### `/notion-plan` — 有 Notion ticket 要轉為計畫
 
-貼上 Notion URL，自動擷取頁面內容並轉為 Markdown。支援公開頁面和需要登入的私人頁面。
+```
+# Notion 需求頁面 → 自動建立 plan.md
+/notion-plan https://www.notion.so/workspace/PDT-8590-abc123
+
+# 公開 Notion 頁面
+/notion-plan https://workspace.notion.site/public-page-abc123
+```
+
+**適合：**
+- 需求寫在 Notion，想一鍵轉為 plan.md
+- 不想手動複製貼上 Notion 內容再呼叫 `/design`
+
+**不適合：** 需求已在對話中或本地檔案（直接用 `/design`）
 
 **Features:**
 - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
-- 優先使用 WebFetch（快速），失敗時自動切換 Playwright MCP（完整 JS 渲染）
-- 自動處理長頁面捲動載入
-- 輸出結構化 Markdown（保留標題、表格、清單、程式碼區塊）
+- 雙路徑策略：WebFetch（快速）→ Playwright MCP（完整 JS 渲染）
+- 自動處理長頁面捲動載入、Toggle 展開、登入偵測
+- 擷取內容整理為結構化 Markdown 後，自動觸發 `/design` 建立 plan.md
 
 ### 選擇流程圖
 
@@ -217,7 +229,7 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 │
 ├─ Plan 寫完要收尾 ─→ /plan-archive（歸檔至 completed/）
 │
-├─ 抓 Notion 內容 ──→ /notion-fetch <URL>
+├─ 有 Notion ticket ──→ /notion-plan <URL>（抓取 → plan.md）
 │
 └─ 優化 init tokens ─→ /ecc-skill-defer apply
 ```
@@ -279,7 +291,7 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 | `/pr` | Pending | 涉及 git push + GitHub API，需 mock 環境 |
 | `/update` | Pending | 涉及 nested agents (doc-updater, code-reviewer, learn-eval) |
 | `/assist` | Pending | 情境分析可測，但 pipeline 執行會修改專案 |
-| `/notion-fetch` | Pending | 依賴外部 Notion 頁面，需 mock URL |
+| `/notion-plan` | Pending | 依賴外部 Notion 頁面，需 mock URL |
 
 ## Install
 
@@ -315,7 +327,7 @@ npx skills update
 /plan-archive              # 歸檔已完成的 plan（自動偵測）
 /plan-archive my-plan.md   # 指定檔名歸檔
 /ecc-skill-defer           # 查看 ECC skill defer 狀態
-/notion-fetch <URL>        # 從 Notion 擷取內容轉為 Markdown
+/notion-plan <URL>         # Notion 需求 → 自動建立 plan.md
 /ecc-skill-defer apply     # Defer 不常用的 skills
 /ecc-skill-defer restore X # 臨時啟用某個 skill
 ```

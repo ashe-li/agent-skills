@@ -4,13 +4,12 @@
 
 ## [v1.9.0] - 2026-03-10
 
-### Added
-- `/notion-fetch`: 新增 Notion 頁面內容擷取 skill
-  - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
-  - 雙路徑策略：WebFetch（快速）→ Playwright MCP（完整 JS 渲染）
-  - 自動處理長頁面捲動載入（scrollHeight 穩定性檢查）、Toggle 點擊展開、登入偵測
-  - 輸出結構化 Markdown（保留標題層級、表格、清單、程式碼區塊）
-  - 特殊內容類型處理：Database → Markdown table、Callout → blockquote、embed → URL
+### Changed
+- `/notion-fetch` → `/notion-plan`: 從單純的內容擷取升級為完整的 Notion → plan.md 工作流
+  - 整合 Notion 抓取（WebFetch → Playwright fallback）+ `/design` 串接
+  - 擷取內容後自動觸發 `/design` 建立實作計畫，一條指令完成
+  - 保留原有的雙路徑策略、Toggle 展開、登入偵測、長頁面捲動等功能
+  - 新增內容品質確認步驟（Step 5），空白或不完整時提示使用者
 
 ## [v1.8.0] - 2026-03-09
 

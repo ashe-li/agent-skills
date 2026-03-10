@@ -1,13 +1,13 @@
 ---
-name: notion-fetch
-description: 貼上 Notion URL，自動抓取頁面內容（標題、文字、表格、清單），轉為 Markdown 供後續使用。
-allowed-tools: Bash, Read, Write, WebFetch, AskUserQuestion, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_click
+name: notion-plan
+description: 貼上 Notion URL，自動抓取頁面需求內容，串接 /design 建立實作計畫。
+allowed-tools: Bash, Read, WebFetch, AskUserQuestion, Skill, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_click
 argument-hint: <Notion URL>
 ---
 
-# /notion-fetch — 從 Notion 頁面抓取內容
+# /notion-plan — 從 Notion URL 自動建立實作計畫
 
-貼上 Notion URL，自動擷取頁面內容並轉為 Markdown。支援公開頁面和需要登入的私人頁面。
+貼上 Notion URL，自動擷取頁面需求內容並串接 `/design` 建立實作計畫。一條指令完成 Notion 抓取 → 結構化整理 → plan.md 產出。
 
 ---
 
@@ -75,7 +75,7 @@ mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000
 
 若確認為登入頁面，使用 AskUserQuestion 告知使用者：
 
-> ⚠️ 此頁面需要登入。請在瀏覽器中登入 Notion 後重試，
+> 此頁面需要登入。請在瀏覽器中登入 Notion 後重試，
 > 或將頁面設為公開（Share → Publish to web）。
 
 若使用者的 Playwright 已有 Notion session（persistent profile），則直接繼續。
@@ -162,7 +162,7 @@ mcp__playwright__browser_snapshot()
 
 ---
 
-## Step 4：整理輸出
+## Step 4：整理為結構化 Markdown
 
 將擷取到的原始內容轉為結構化 Markdown：
 
@@ -199,21 +199,42 @@ mcp__playwright__browser_snapshot()
 
 ---
 
-## Step 5：確認與後續
+## Step 5：內容品質確認
 
-將整理好的 Markdown 內容直接輸出至對話中。
+檢查整理後的 Markdown 是否包含有效需求內容：
 
-若使用者需要將內容存檔：
-- 提議儲存路徑（如 `research/<topic>.md` 或 `docs/<topic>.md`）
-- 等待使用者確認後才寫入檔案
+- ✅ 有實質內容（標題 + 至少一段文字或清單）→ 進入 Step 6
+- ❌ 內容為空、僅有標題、或明顯不完整 → 使用 AskUserQuestion 詢問使用者：
+
+> 擷取到的內容似乎不完整。請確認：
+> 1. 頁面是否需要登入？
+> 2. 是否要手動貼上需求內容？
+
+---
+
+## Step 6：輸出 Notion 內容並觸發 /design
+
+### 6a. 在對話中輸出完整 Markdown
+
+將 Step 4 整理好的結構化 Markdown 完整輸出至對話中，供後續 `/design` 讀取。
+
+### 6b. 觸發 /design 建立實作計畫
+
+```
+Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的需求內容建立實作計畫")
+```
+
+> **注意：** `[SOURCE: /notion-plan]` 為 traceability 標記，僅標示需求來源。
+> `/design` 不做任何 skip 處理（與 `/update → /pr` 的 `[PIPELINE]` 語意不同），
+> 而是從對話脈絡中讀取 Notion 內容，零修改 `/design`。
 
 ---
 
 ## 使用方式
 
 ```bash
-/notion-fetch https://www.notion.so/workspace/Page-Title-abc123
-/notion-fetch https://workspace.notion.site/public-page-abc123
+/notion-plan https://www.notion.so/workspace/Page-Title-abc123
+/notion-plan https://workspace.notion.site/public-page-abc123
 ```
 
 ## 限制

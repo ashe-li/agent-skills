@@ -2,6 +2,19 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.9.0] - 2026-03-10
+
+### Added
+- `/playwright-human-in-the-loop`: Playwright Human-in-the-Loop 瀏覽器操作 skill
+  - 操作分級：重大操作（建立/刪除資源、修改權限、安全敏感欄位、費用、不可逆操作）需 `AskUserQuestion` 確認
+  - 非重大操作（導航、填寫 metadata、搜尋、截圖）自動執行
+  - 安全敏感欄位（Policy JSON、IAM policy document）即使是填寫也視為重大操作
+  - 4 步驟執行流程：確認 MCP → 理解任務 → 執行 → 報告
+  - 頁面載入失敗允許一次重試
+
+### Changed
+- `README.md`: 新增 `/playwright-human-in-the-loop` skill 描述、Usage、選擇流程圖
+
 ## [v1.8.0] - 2026-03-09
 
 ### Added

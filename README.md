@@ -77,6 +77,16 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - ECC 資源分配原則：路由前確認 pipeline 中所有 agent 可用，若已被 defer 則提示 restore 或替代 pipeline
 - 無法判斷時透過互動式選單讓使用者選擇 pipeline
 
+### `/playwright-human-in-the-loop` — Playwright Human-in-the-Loop 瀏覽器操作
+
+透過 Playwright MCP 操作瀏覽器，自動執行低風險操作，重大操作前暫停等待人類確認。
+
+**Features:**
+- 操作分級：重大操作（建立/刪除資源、修改權限、費用、安全敏感欄位）需人類確認，非重大操作自動執行
+- 安全敏感欄位（Policy JSON、env variables、webhook URL 等）即使是填寫也視為重大操作
+- 每步驟後 `browser_snapshot` 確認頁面狀態
+- 永不自動 Delete/Terminate，永不輸入 secrets，CAPTCHA/MFA 交由人類處理
+
 ### `/ecc-skill-defer` — ECC Skill 漸進式載入
 
 管理 ECC skills 的 defer/restore 狀態，將不常用的 skill 延遲載入以減少 init token 消耗。
@@ -227,6 +237,8 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 │
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr（一條龍）
 │
+├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop（安全的瀏覽器自動化）
+│
 ├─ Plan 寫完要收尾 ─→ /plan-archive（歸檔至 completed/）
 │
 ├─ 有 Notion ticket ──→ /notion-plan <URL>（抓取 → plan.md）
@@ -330,4 +342,5 @@ npx skills update
 /notion-plan <URL>         # Notion 需求 → 自動建立 plan.md
 /ecc-skill-defer apply     # Defer 不常用的 skills
 /ecc-skill-defer restore X # 臨時啟用某個 skill
+/playwright-human-in-the-loop           # 瀏覽器操作（自動 + 人類確認）
 ```

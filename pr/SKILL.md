@@ -107,6 +107,15 @@ gh pr create --base hotfix ...
 gh pr create --base master ...
 ```
 
+### PR Title 格式
+
+**當對話中出現 Notion ticket 或 PDT-XXXX 編號時，PR 標題必須包含 ticket 資訊。** 二擇一：
+
+1. 標題末尾附上 ticket 編號：`fix(seo): add noindex for empty salon about (PDT-8949)`
+2. 標題包含票名：`fix(seo): [Bug] 沙龍介紹頁無內容要 no-index`
+
+偵測方式：在對話脈絡中搜尋 `PDT-\d+`、Notion URL、或「Notion Ticket」字樣。
+
 ### 判斷邏輯
 
 - 如果提供了 PR 號碼（`$ARGUMENTS`），更新該 PR

@@ -2,6 +2,11 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.10.1] - 2026-03-11
+
+### Changed
+- `/pr`: PR 標題自動帶入 Notion ticket 資訊（PDT 編號或票名，二擇一），偵測對話中的 `PDT-\d+`、Notion URL 或「Notion Ticket」字樣
+
 ## [v1.10.0] - 2026-03-10
 
 ### Added

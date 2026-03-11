@@ -32,6 +32,7 @@ argument-hint: [PR 號碼或留空建立新 PR]
 - **放棄的嘗試**：有沒有試過但放棄的做法？為什麼放棄？
 - **隱含知識**：對話中出現但不會反映在 diff 裡的重要 context（例如：調查數據、外部工具比較、效能考量）
 - **業界/學術依據**：技術決策是否有引用業界標準（RFC、OWASP 等）或學術研究？方案是否基於標準化解決方案？
+- **Ticket 參照**：掃描對話中是否出現 `PDT-\d+` 編號、Notion URL、或「Notion Ticket」字樣，記錄找到的 ticket 編號與票名（供 Step 5 PR 標題使用）
 
 > ⚠️ **常見錯誤**：
 > - 只看 `git diff` 會遺漏 PR 中其他 commits 的內容
@@ -106,6 +107,15 @@ gh pr create --base hotfix ...
 # 禁止（除非使用者明確確認）
 gh pr create --base master ...
 ```
+
+### PR Title 格式
+
+**使用 Step 1b 提取的 ticket 參照決定 PR 標題：**
+
+- **有找到 ticket** → 標題必須包含 ticket 資訊，二擇一：
+  1. 標題末尾附上 ticket 編號：`fix(seo): add noindex for empty salon about (PDT-8949)`
+  2. 標題包含票名：`fix(seo): [Bug] 沙龍介紹頁無內容要 no-index`
+- **沒找到 ticket** → 正常標題，不需額外處理
 
 ### 判斷邏輯
 

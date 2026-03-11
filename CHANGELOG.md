@@ -2,6 +2,24 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.10.1] - 2026-03-11
+
+### Changed
+- `/pr`: PR 標題自動帶入 Notion ticket 資訊（PDT 編號或票名，二擇一），偵測對話中的 `PDT-\d+`、Notion URL 或「Notion Ticket」字樣
+
+## [v1.10.0] - 2026-03-10
+
+### Added
+- `/notion-plan`: 貼上 Notion URL，自動抓取頁面需求內容並串接 `/design` 建立實作計畫
+  - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
+  - 雙路徑策略：WebFetch（快速）→ Playwright MCP（完整 JS 渲染 fallback）
+  - 自動處理長頁面捲動載入、Toggle 展開、登入偵測
+  - 擷取內容整理為結構化 Markdown 後，自動觸發 `/design` 建立 plan.md
+  - 內容品質確認步驟，空白或不完整時提示使用者
+
+### Changed
+- `README.md`: 新增 `/notion-plan` skill 描述、Usage、選擇流程圖
+
 ## [v1.9.0] - 2026-03-10
 
 ### Added
@@ -13,11 +31,6 @@
   - 頁面載入失敗允許一次重試
 
 ### Changed
-- `/notion-fetch` → `/notion-plan`: 從單純的內容擷取升級為完整的 Notion → plan.md 工作流
-  - 整合 Notion 抓取（WebFetch → Playwright fallback）+ `/design` 串接
-  - 擷取內容後自動觸發 `/design` 建立實作計畫，一條指令完成
-  - 保留原有的雙路徑策略、Toggle 展開、登入偵測、長頁面捲動等功能
-  - 新增內容品質確認步驟（Step 5），空白或不完整時提示使用者
 - `README.md`: 新增 `/playwright-human-in-the-loop` skill 描述、Usage、選擇流程圖
 
 ## [v1.8.0] - 2026-03-09

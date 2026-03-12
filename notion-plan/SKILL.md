@@ -1,7 +1,7 @@
 ---
 name: notion-plan
 description: 貼上 Notion URL，自動抓取頁面需求內容，串接 /design 建立實作計畫。
-allowed-tools: Bash, Read, WebFetch, AskUserQuestion, Skill, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_click
+allowed-tools: Bash, Read, AskUserQuestion, Skill, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_click
 argument-hint: <Notion URL>
 ---
 
@@ -29,34 +29,17 @@ argument-hint: <Notion URL>
 
 ---
 
-## Step 2：嘗試 WebFetch（快速路徑）
+## Step 2：Playwright MCP 抓取
 
-先用 WebFetch 嘗試取得頁面內容：
+> **不使用 WebFetch**：Notion 100% client-side rendering，WebFetch 永遠只能拿到載入骨架，直接用 Playwright。
 
-```
-WebFetch(url=<notion_url>)
-```
-
-**判斷內容是否有效：**
-- ✅ 回傳的 HTML/文字包含頁面標題和實際內容 → 進入 Step 4 整理輸出
-- ❌ 回傳空白、需登入提示、或僅有 Notion 載入骨架（`<div id="notion-app">`）→ 進入 Step 3
-
-> Notion 使用 client-side rendering，公開頁面大多可透過 WebFetch 取得，
-> 但部分頁面或私人頁面需要 JavaScript 執行。
-
----
-
-## Step 3：Playwright MCP 抓取（備用路徑）
-
-當 WebFetch 無法取得內容時，使用 Playwright 瀏覽器：
-
-### 3a. 導航至頁面
+### 2a. 導航至頁面
 
 ```
 mcp__playwright__browser_navigate(url=<notion_url>)
 ```
 
-### 3b. 等待內容載入
+### 2b. 等待內容載入
 
 ```
 mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000)
@@ -67,7 +50,7 @@ mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000
 - `[data-block-id]`
 - `.layout-content`
 
-### 3c. 如需登入
+### 2c. 如需登入
 
 使用 `browser_snapshot` 檢查頁面狀態。判斷是否為登入頁面：
 - snapshot 不含任何 `[data-block-id]` 區塊
@@ -80,7 +63,7 @@ mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000
 
 若使用者的 Playwright 已有 Notion session（persistent profile），則直接繼續。
 
-### 3d. 擷取頁面內容
+### 2d. 擷取頁面內容
 
 先展開所有 Toggle 區塊（Notion toggle 預設收合，子內容不在 DOM 中）：
 
@@ -130,7 +113,7 @@ mcp__playwright__browser_snapshot()
 > **注意：** 使用 `pageContent.children`（直接子元素）而非 `querySelectorAll('[data-block-id]')`（所有後代），
 > 避免嵌套區塊（如 toggle 內的段落）被重複擷取。
 
-### 3e. 處理長頁面
+### 2e. 處理長頁面
 
 若頁面內容需要捲動才能載入完全：
 
@@ -162,18 +145,18 @@ mcp__playwright__browser_snapshot()
 
 ---
 
-## Step 4：整理為結構化 Markdown
+## Step 3：整理為結構化 Markdown
 
 將擷取到的原始內容轉為結構化 Markdown：
 
-### 4a. 內容清理
+### 3a. 內容清理
 
 - 移除 Notion UI 元素（側邊欄、工具列、分享按鈕等的殘留文字）
 - 保留語意結構（標題層級、清單、程式碼區塊、表格）
 - 移除重複的空行
 - 保留圖片 alt text（若有）
 
-### 4b. 輸出格式
+### 3b. 輸出格式
 
 ```markdown
 # [頁面標題]
@@ -186,7 +169,7 @@ mcp__playwright__browser_snapshot()
 [頁面內容，保留原始 Markdown 結構]
 ```
 
-### 4c. 特殊內容處理
+### 3c. 特殊內容處理
 
 | 內容類型 | 處理方式 |
 |----------|----------|
@@ -199,11 +182,11 @@ mcp__playwright__browser_snapshot()
 
 ---
 
-## Step 5：內容品質確認
+## Step 4：內容品質確認
 
 檢查整理後的 Markdown 是否包含有效需求內容：
 
-- ✅ 有實質內容（標題 + 至少一段文字或清單）→ 進入 Step 6
+- ✅ 有實質內容（標題 + 至少一段文字或清單）→ 進入 Step 5
 - ❌ 內容為空、僅有標題、或明顯不完整 → 使用 AskUserQuestion 詢問使用者：
 
 > 擷取到的內容似乎不完整。請確認：
@@ -212,13 +195,13 @@ mcp__playwright__browser_snapshot()
 
 ---
 
-## Step 6：輸出 Notion 內容並觸發 /design
+## Step 5：輸出 Notion 內容並觸發 /design
 
-### 6a. 在對話中輸出完整 Markdown
+### 5a. 在對話中輸出完整 Markdown
 
-將 Step 4 整理好的結構化 Markdown 完整輸出至對話中，供後續 `/design` 讀取。
+將 Step 3 整理好的結構化 Markdown 完整輸出至對話中，供後續 `/design` 讀取。
 
-### 6b. 觸發 /design 建立實作計畫
+### 5b. 觸發 /design 建立實作計畫
 
 ```
 Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的需求內容建立實作計畫")
@@ -239,7 +222,6 @@ Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的
 
 ## 限制
 
-- Notion 的 client-side rendering 可能導致 WebFetch 取得不完整內容
 - 私人頁面需要 Playwright 有 Notion session 或使用者手動登入
 - Database view 的篩選/排序/分組以頁面當前狀態為準
 - 非常長的頁面（100+ 區塊）可能需要多次捲動，擷取時間較長

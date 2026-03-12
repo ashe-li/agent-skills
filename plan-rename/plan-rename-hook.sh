@@ -58,17 +58,9 @@ try:
     if not resolved.is_file():
         sys.exit(0)
 
-    # Append custom-title entry (same format as /rename)
-    entry = json.dumps({
-        "type": "custom-title",
-        "customTitle": title,
-        "sessionId": session_id
-    })
-
-    with open(resolved, "a") as f:
-        f.write(entry + "\n")
-
-    # Save to sidecar for resilience against compaction/clear
+    # Write sidecar only (pending state).
+    # custom-title is written by the Stop guard AFTER user accepts ExitPlanMode.
+    # This avoids flashing titles on rejected plans.
     sidecar_dir = pathlib.Path.home() / ".claude" / "session-titles"
     sidecar_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     sidecar_path = sidecar_dir / f"{session_id}.json"
@@ -77,18 +69,22 @@ try:
     tmp_fd, tmp_path = tempfile.mkstemp(dir=sidecar_dir, suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w") as f:
-            json.dump({"title": title, "sessionId": session_id}, f)
+            json.dump({
+                "title": title,
+                "sessionId": session_id,
+                "transcriptPath": str(resolved),
+                "pending": True
+            }, f)
         os.chmod(tmp_path, 0o600)
         os.rename(tmp_path, sidecar_path)
     except Exception:
-        # Clean up temp file on failure
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
 
-    print(f"[plan-rename] Session renamed to: {title}", file=sys.stderr)
+    print(f"[plan-rename] Pending title: {title}", file=sys.stderr)
 except (KeyError, ValueError, json.JSONDecodeError):
     sys.exit(0)
 except Exception as e:

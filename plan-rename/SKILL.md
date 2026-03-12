@@ -12,25 +12,32 @@ Plan Mode 結束時自動從計畫的 H1 標題重新命名 session，並透過 
 
 兩個 shell 腳本協作：
 
-1. **`plan-rename-hook.sh`**（PreToolUse `ExitPlanMode`）：擷取計畫 H1 標題，寫入 JSONL `custom-title` 條目 + sidecar 備份檔
-2. **`plan-rename-guard.sh`**（Stop hook）：每次 Claude 回應後檢查 — 若 sidecar 存在但 JSONL 缺少 `custom-title`（被 compaction 清除），自動重新注入
+1. **`plan-rename-hook.sh`**（PreToolUse `ExitPlanMode`）：擷取計畫 H1 標題，寫入 sidecar 備份檔（`pending: true`）。**不直接寫入 JSONL** — 避免使用者 reject plan 時產生閃爍
+2. **`plan-rename-guard.sh`**（Stop hook）：每次 Claude 回應後檢查：
+   - **Pending 確認**：sidecar pending 時，掃描 JSONL 確認 ExitPlanMode 是否被 accept。被 reject 則跳過，accepted 才寫入 custom-title
+   - **Compaction 修復**：sidecar confirmed 但 JSONL 缺少 custom-title 時，自動重新注入
 
 ### 流程圖
 
 ```
 Plan Mode exit
-  → ExitPlanMode hook
+  → ExitPlanMode hook (PreToolUse)
     → 擷取 H1 標題（去除 "Plan:" 前綴，截斷 80 字元）
-    → append custom-title 到 session JSONL
-    → 寫入 sidecar 備份（~/.claude/session-titles/<session_id>.json）
+    → 寫入 sidecar（pending: true）
+    → 不寫 JSONL（等 Stop guard 確認）
 
-每次 Claude 回應後
-  → Stop guard
+使用者 accept/reject plan
+  → Claude 回應後 Stop hook 觸發
     → bash 快速檢查：有 sidecar 嗎？
-      → 沒有 → exit 0（~30ms，不啟動 Python）
-      → 有 → Python tail-scan JSONL 尾部 50 行
-        → 有 custom-title → exit 0
-        → 沒有 → 重新注入 custom-title
+      → 沒有 → exit 0（~30ms）
+      → 有 → Python 分析 JSONL
+        → sidecar pending?
+          → yes → 掃描 JSONL 尾部找 ExitPlanMode tool_result
+            → rejected → 跳過，保留 pending（使用者可能再試）
+            → accepted → 寫入 custom-title，sidecar 設為 confirmed
+          → no → compaction 檢查
+            → 有 custom-title → exit 0
+            → 沒有 → 重新注入 custom-title
 ```
 
 ## Hook Registration
@@ -155,5 +162,6 @@ Plan Mode exit
 - **Compaction drops custom-title**：JSONL 由 Claude Code 管理，非 message 條目可能被 compaction 清除。必須用 sidecar 備份
 - **Stop hook Python cold-start**：bash+jq pre-check 跳過 Python 是關鍵效能優化
 - **PostToolUse 無法攔截 Plan Mode**：必須用 PreToolUse ExitPlanMode
+- **PreToolUse 在 user approval 之前觸發**：因此 hook 只寫 sidecar（pending），由 Stop guard 在確認 accept 後才寫 JSONL。避免 rejected plan 造成 title 閃爍
 - **欄位命名**：hook stdin 使用 `session_id`（snake_case），非 `sessionId`（camelCase）
 - **路徑來源**：使用 stdin 提供的 `transcript_path`，不要手動拼接

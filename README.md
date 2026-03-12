@@ -51,6 +51,7 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - architect 審查架構設計 + 文件影響評估 + 業界/學術參照可靠性
 - 計畫品質自審檢查表，確保完整性、可執行性、依賴正確性、業界/學術支撐
 - plan.md 包含 Industry & Standards Reference 表格和實作後的品質保障步驟
+- Step 0 條件式 HITL：agent 評估任務複雜度，建議啟用時詢問使用者（附 token 預估），不可自動啟用；支援 TaskCreate/TaskUpdate 進度追蹤
 - 不自動執行實作，使用者確認後才能開始
 
 ### `/assist` — 萬用助手
@@ -75,6 +76,7 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - 自動偵測專案類型（Go/Python/Node.js），附加語言專用 reviewer
 - 使用 handoff protocol 在 agents 間傳遞 context（含 Industry & Standards Referenced）
 - ECC 資源分配原則：路由前確認 pipeline 中所有 agent 可用，若已被 defer 則提示 restore 或替代 pipeline
+- Step 0 條件式 HITL：agent 評估任務複雜度，建議啟用時詢問使用者（附 token 預估），不可自動啟用；支援 TaskCreate/TaskUpdate 進度追蹤
 - 無法判斷時透過互動式選單讓使用者選擇 pipeline
 
 ### `/playwright-human-in-the-loop` — Playwright Human-in-the-Loop 瀏覽器操作

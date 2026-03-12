@@ -2,6 +2,20 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.12.0] - 2026-03-12
+
+### Changed
+- `/design`: 新增 Step 0 條件式 HITL — agent 判斷任務複雜度後詢問是否啟用 task tracking
+  - frontmatter 新增 `TaskCreate, TaskUpdate, TaskList` 至 allowed-tools
+  - 各步驟加入條件式 task tracking 標記（含 activeForm、addBlockedBy）
+- `/assist`: 新增 Step 0 條件式 HITL — agent 判斷任務複雜度後詢問是否啟用 task tracking
+  - frontmatter 新增 `TaskCreate, TaskUpdate, TaskList` 至 allowed-tools
+  - Step 4 Pipeline 執行加入條件式 task tracking 標記（含 activeForm、addBlockedBy）
+- `~/.claude/CLAUDE.md`: Task Tracking 規則從「超過 3 步驟主動啟用」改為「agent 判斷 + HITL 詢問，不可自動啟用」
+
+### Fixed
+- `/pr`: 移除 frontmatter 中從未使用的 `Task` allowed-tool
+
 ## [v1.11.0] - 2026-03-12
 
 ### Added

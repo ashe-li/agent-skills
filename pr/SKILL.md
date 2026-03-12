@@ -1,7 +1,7 @@
 ---
 name: pr
 description: 總結當前工作、commit、推送並建立或更新 PR。自動將對話脈絡寫入 PR description，確保 reviewer 能快速理解背景。
-allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Task, AskUserQuestion
+allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion
 argument-hint: [PR 號碼或留空建立新 PR]
 ---
 

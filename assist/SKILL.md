@@ -1,13 +1,45 @@
 ---
 name: assist
 description: 萬用助手 — 自動分析情境、盤點 ECC 資源、智慧路由至最佳 agent pipeline，一鍵完成複雜工作流。
-allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion
+allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: [任務描述，留空則自動偵測情境]
 ---
 
 # /assist — 萬用助手
 
 自動分析當前情境，盤點可用 ECC 資源，智慧選擇最佳 agent pipeline 並執行。適合不確定該用哪個工具時使用。
+
+## Step 0: 任務追蹤（條件式 HITL）
+
+評估本次任務是否適合啟用 task tracking。
+
+**判斷依據：**
+
+| 建議啟用 | 建議跳過 |
+|----------|----------|
+| 預估 4+ 實作步驟 | 1-3 個簡單步驟 |
+| 有步驟間依賴關係 | 線性無依賴 |
+| 跨多個檔案/模組 | 單一檔案修改 |
+| 預計執行時間較長 | 快速完成的任務 |
+
+**若判斷為「建議啟用」：** 使用 AskUserQuestion 詢問使用者：
+
+> 本次任務較為複雜（[簡述原因]），建議啟用任務追蹤。
+>
+> 啟用後會在每個步驟使用 TaskCreate/TaskUpdate 追蹤進度，
+> 支援依賴管理（addBlockedBy）和即時狀態顯示（activeForm）。
+> 預估額外 token 消耗：~500-1,000 tokens。
+>
+> 1. **啟用** — 全程追蹤
+> 2. **不啟用** — 直接開始
+
+**若判斷為「建議跳過」：** 不詢問，直接進入 Step 1。
+
+**啟用後的行為：**
+- TaskCreate 父任務（subject: `/assist: [任務摘要]`）
+- 每個 Step 開始前 TaskCreate 子任務（含 activeForm），**保留回傳的 task ID**，完成後 TaskUpdate 為 completed
+- 有依賴的步驟使用 addBlockedBy 標記（填入前序步驟 TaskCreate 回傳的 task ID）
+- 不啟用則完全跳過所有 Task 工具呼叫
 
 ## Step 1: 情境分析
 
@@ -131,6 +163,8 @@ ls -la
 ```
 
 ## Step 4: 執行 Pipeline
+
+> **若啟用 task tracking：** 每個 agent 執行前 TaskCreate 子任務（含 activeForm，**保留回傳的 task ID**），執行後 TaskUpdate 為 completed。若有 pipeline 依賴順序，使用 addBlockedBy 標記（填入前序 agent TaskCreate 回傳的 task ID）。
 
 按選定的 pipeline 依序執行 agents，使用 handoff protocol 傳遞 context。
 

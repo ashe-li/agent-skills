@@ -1,7 +1,7 @@
 ---
 name: design
 description: 開發設計 — 自動盤點 ECC 資源，透過 planner + architect 建立完整實作計畫，輸出 plan.md 供使用者確認後才進入實作。
-allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion
+allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: <功能描述或需求>
 ---
 
@@ -9,7 +9,41 @@ argument-hint: <功能描述或需求>
 
 接收功能需求，自動盤點可用的 ECC 資源（agents/skills/commands），建立完整實作計畫並輸出 plan.md。**不會自動執行實作，必須等使用者確認。**
 
+## Step 0: 任務追蹤（條件式 HITL）
+
+評估本次任務是否適合啟用 task tracking。
+
+**判斷依據：**
+
+| 建議啟用 | 建議跳過 |
+|----------|----------|
+| 預估 4+ 實作步驟 | 1-3 個簡單步驟 |
+| 有步驟間依賴關係 | 線性無依賴 |
+| 跨多個檔案/模組 | 單一檔案修改 |
+| 預計執行時間較長 | 快速完成的任務 |
+
+**若判斷為「建議啟用」：** 使用 AskUserQuestion 詢問使用者：
+
+> 本次任務較為複雜（[簡述原因]），建議啟用任務追蹤。
+>
+> 啟用後會在每個步驟使用 TaskCreate/TaskUpdate 追蹤進度，
+> 支援依賴管理（addBlockedBy）和即時狀態顯示（activeForm）。
+> 預估額外 token 消耗：~500-1,000 tokens。
+>
+> 1. **啟用** — 全程追蹤
+> 2. **不啟用** — 直接開始
+
+**若判斷為「建議跳過」：** 不詢問，直接進入 Step 1。
+
+**啟用後的行為：**
+- TaskCreate 父任務（subject: `/design: [需求摘要]`）
+- 每個 Step 開始前 TaskCreate 子任務（含 activeForm），**保留回傳的 task ID**，完成後 TaskUpdate 為 completed
+- 有依賴的步驟使用 addBlockedBy 標記（填入前序步驟 TaskCreate 回傳的 task ID）
+- 不啟用則完全跳過所有 Task 工具呼叫
+
 ## Step 1: 盤點 ECC 資源
+
+> **若啟用 task tracking：** TaskCreate(subject: "盤點 ECC 資源", activeForm: "掃描 agents/skills/commands 中...") → 完成後 TaskUpdate(status: "completed")
 
 掃描所有可用的 ECC agents、skills 和 commands，作為後續規劃的參考。
 
@@ -36,6 +70,8 @@ argument-hint: <功能描述或需求>
 > 無論走哪條路徑，都會輸出 plan.md。
 
 ## Step 3: planner — 建立實作計畫
+
+> **若啟用 task tracking：** TaskCreate(subject: "planner 建立實作計畫", activeForm: "planner agent 規劃中...") → 完成後 TaskUpdate(status: "completed")
 
 使用 **planner** agent 建立詳細的實作計畫。
 
@@ -67,6 +103,8 @@ Agent(subagent_type="everything-claude-code:planner")
 
 ## Step 4: architect — 架構設計審查
 
+> **若啟用 task tracking：** TaskCreate(subject: "architect 架構審查", activeForm: "architect agent 審查中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID]) → 完成後 TaskUpdate(status: "completed")
+
 使用 **architect** agent 審查 Step 3 的計畫。
 
 ```
@@ -86,6 +124,8 @@ Agent(subagent_type="everything-claude-code:architect")
 **如果有重大架構建議：** 回饋給 planner 調整計畫（最多迭代 2 次）。
 
 ## Step 5: 輸出 plan.md
+
+> **若啟用 task tracking：** TaskCreate(subject: "輸出 plan.md", activeForm: "品質檢查與輸出中...") → 完成後 TaskUpdate(status: "completed")
 
 將最終計畫寫入檔案前，先對照以下檢查清單確認計畫品質：
 

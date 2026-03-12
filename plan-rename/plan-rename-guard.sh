@@ -4,17 +4,36 @@
 
 INPUT=$(cat)
 
-# Fast path in bash: extract session_id with jq, skip Python entirely if no sidecar
+# Fast path in bash: extract session_id and transcript_path with jq
 SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 [[ -z "$SESSION_ID" ]] && exit 0
 [[ "$SESSION_ID" =~ ^[a-zA-Z0-9_-]{8,128}$ ]] || exit 0
 
-SIDECAR="$HOME/.claude/session-titles/${SESSION_ID}.json"
-[[ -f "$SIDECAR" ]] || exit 0
+TRANSCRIPT=$(printf '%s\n' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+SIDECAR_DIR="$HOME/.claude/session-titles"
 
-# Sidecar exists — need Python for JSONL analysis
+# Check if there's a pending file OR a confirmed sidecar
+# Pending file: _pending_<project-hash>.json (project-scoped, survives session_id change)
+# Confirmed sidecar: <session_id>.json (session-scoped, for compaction re-injection)
+HAS_PENDING=false
+HAS_SIDECAR=false
+
+if [[ -n "$TRANSCRIPT" && -d "$SIDECAR_DIR" ]]; then
+    PROJECT_DIR=$(dirname "$TRANSCRIPT")
+    PROJECT_HASH=$(printf '%s' "$PROJECT_DIR" | shasum -a 256 | cut -c1-16)
+    PENDING_FILE="${SIDECAR_DIR}/_pending_${PROJECT_HASH}.json"
+    [[ -f "$PENDING_FILE" ]] && HAS_PENDING=true
+fi
+
+SIDECAR="${SIDECAR_DIR}/${SESSION_ID}.json"
+[[ -f "$SIDECAR" ]] && HAS_SIDECAR=true
+
+# Fast exit if nothing to do
+[[ "$HAS_PENDING" == "false" && "$HAS_SIDECAR" == "false" ]] && exit 0
+
+# Need Python for JSONL analysis
 python3 -c '
-import json, sys, os, re, pathlib, collections, tempfile
+import json, sys, os, re, pathlib, collections, tempfile, hashlib
 
 try:
     data = json.load(sys.stdin)
@@ -23,21 +42,8 @@ try:
     if not session_id or not re.fullmatch(r"[a-zA-Z0-9_-]{8,128}", session_id):
         sys.exit(0)
 
-    sidecar_path = pathlib.Path.home() / ".claude" / "session-titles" / f"{session_id}.json"
-    if not sidecar_path.is_file():
-        sys.exit(0)
-
-    with open(sidecar_path) as f:
-        sidecar = json.load(f)
-
-    title = sidecar.get("title", "")
-    if not title:
-        sys.exit(0)
-
-    pending = sidecar.get("pending", False)
-
-    # Resolve transcript path — prefer sidecar (set by hook), fallback to stdin
-    active_file = sidecar.get("transcriptPath", "") or data.get("transcript_path", "")
+    # Validate transcript_path
+    active_file = data.get("transcript_path", "")
     if not active_file:
         sys.exit(0)
     allowed_root = pathlib.Path.home() / ".claude"
@@ -47,43 +53,30 @@ try:
     if not resolved.is_file():
         sys.exit(0)
 
-    # Tail-scan: check last 50 lines
-    tail = collections.deque(maxlen=50)
-    with open(resolved) as f:
-        for line in f:
-            tail.append(line)
-    tail_list = list(tail)
+    sidecar_dir = pathlib.Path.home() / ".claude" / "session-titles"
+    project_dir = str(resolved.parent)
+    project_key = hashlib.sha256(project_dir.encode()).hexdigest()[:16]
+    pending_path = sidecar_dir / f"_pending_{project_key}.json"
+    sidecar_path = sidecar_dir / f"{session_id}.json"
 
-    if pending:
-        # --- Pending confirmation flow ---
-        # Check if the most recent ExitPlanMode was accepted or rejected.
-        # Scan forward to find the LAST ExitPlanMode tool_use, then check
-        # if the tool_result that follows it contains rejection text.
+    # --- Phase 1: Check project-scoped pending file ---
+    if pending_path.is_file():
+        with open(pending_path) as f:
+            pending = json.load(f)
 
-        last_exit_idx = -1
-        for i, line in enumerate(tail_list):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            content = entry.get("message", {}).get("content", [])
-            if isinstance(content, list):
-                for c in content:
-                    if isinstance(c, dict) and c.get("name") == "ExitPlanMode":
-                        last_exit_idx = i
+        title = pending.get("title", "")
+        if title:
+            # Tail-scan JSONL for ExitPlanMode rejection
+            tail = collections.deque(maxlen=50)
+            with open(resolved) as f:
+                for line in f:
+                    tail.append(line)
+            tail_list = list(tail)
 
-        if last_exit_idx < 0:
-            # No ExitPlanMode in tail — might be compacted away.
-            # If pending, the session continued past plan mode, so assume accepted.
-            pass  # fall through to write
-        else:
-            # Check tool_result after the last ExitPlanMode
-            rejected = False
-            for i in range(last_exit_idx + 1, len(tail_list)):
-                line = tail_list[i].strip()
+            # Find last ExitPlanMode tool_use in tail
+            last_exit_idx = -1
+            for i, line in enumerate(tail_list):
+                line = line.strip()
                 if not line:
                     continue
                 try:
@@ -91,80 +84,105 @@ try:
                 except json.JSONDecodeError:
                     continue
                 content = entry.get("message", {}).get("content", [])
-                if not isinstance(content, list):
-                    continue
-                for c in content:
-                    if not isinstance(c, dict):
+                if isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("name") == "ExitPlanMode":
+                            last_exit_idx = i
+
+            # Check if ExitPlanMode was rejected
+            rejected = False
+            if last_exit_idx >= 0:
+                for i in range(last_exit_idx + 1, len(tail_list)):
+                    line = tail_list[i].strip()
+                    if not line:
                         continue
-                    if c.get("type") == "tool_result":
-                        result_text = str(c.get("content", ""))
-                        if "rejected" in result_text.lower():
-                            rejected = True
-                        break  # found first tool_result after ExitPlanMode
-                if rejected or any(
-                    isinstance(c, dict) and c.get("type") == "tool_result"
-                    for c in content
-                    if isinstance(c, dict)
-                ):
-                    break
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    content = entry.get("message", {}).get("content", [])
+                    if not isinstance(content, list):
+                        continue
+                    found_result = False
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "tool_result":
+                            if "rejected" in str(c.get("content", "")).lower():
+                                rejected = True
+                            found_result = True
+                            break
+                    if found_result:
+                        break
 
             if rejected:
-                # Plan was rejected — keep sidecar pending for next attempt
-                print(f"[plan-rename-guard] ExitPlanMode rejected, skipping title write", file=sys.stderr)
+                print(f"[plan-rename-guard] ExitPlanMode rejected, skipping", file=sys.stderr)
                 sys.exit(0)
 
-        # Accepted (or no ExitPlanMode in tail) — write custom-title
-        entry = json.dumps({
-            "type": "custom-title",
-            "customTitle": title,
-            "sessionId": session_id
-        })
-        with open(resolved, "a") as f:
-            f.write(entry + "\n")
+            # Accepted (or no ExitPlanMode in tail = context was cleared after accept)
+            # Write custom-title to CURRENT transcript
+            ct_entry = json.dumps({
+                "type": "custom-title",
+                "customTitle": title,
+                "sessionId": session_id
+            })
+            with open(resolved, "a") as f:
+                f.write(ct_entry + "\n")
 
-        # Update sidecar: mark as confirmed (pending=false)
-        sidecar_dir = sidecar_path.parent
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=sidecar_dir, suffix=".tmp")
-        try:
-            with os.fdopen(tmp_fd, "w") as f:
-                json.dump({"title": title, "sessionId": session_id, "pending": False}, f)
-            os.chmod(tmp_path, 0o600)
-            os.rename(tmp_path, sidecar_path)
-        except Exception:
+            # Create confirmed session-scoped sidecar (for compaction re-injection)
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=sidecar_dir, suffix=".tmp")
             try:
-                os.unlink(tmp_path)
+                with os.fdopen(tmp_fd, "w") as f:
+                    json.dump({"title": title, "sessionId": session_id}, f)
+                os.chmod(tmp_path, 0o600)
+                os.rename(tmp_path, sidecar_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+            # Remove pending file
+            try:
+                pending_path.unlink()
             except OSError:
                 pass
 
-        print(f"[plan-rename-guard] Confirmed title: {title}", file=sys.stderr)
+            print(f"[plan-rename-guard] Confirmed title: {title}", file=sys.stderr)
+            sys.exit(0)
 
-    else:
-        # --- Compaction re-injection flow ---
-        # Sidecar is confirmed. Check if custom-title still exists in JSONL.
-        has_title = False
-        for line in tail_list:
+    # --- Phase 2: Check session-scoped sidecar (compaction re-injection) ---
+    if sidecar_path.is_file():
+        with open(sidecar_path) as f:
+            sidecar = json.load(f)
+
+        title = sidecar.get("title", "")
+        if not title:
+            sys.exit(0)
+
+        # Tail-scan for existing custom-title
+        tail = collections.deque(maxlen=50)
+        with open(resolved) as f:
+            for line in f:
+                tail.append(line)
+
+        for line in tail:
             line = line.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line)
                 if entry.get("type") == "custom-title":
-                    has_title = True
-                    break
+                    sys.exit(0)  # Already has title
             except json.JSONDecodeError:
                 continue
 
-        if has_title:
-            sys.exit(0)
-
         # Re-inject custom-title (lost to compaction)
-        entry = json.dumps({
+        ct_entry = json.dumps({
             "type": "custom-title",
             "customTitle": title,
             "sessionId": session_id
         })
         with open(resolved, "a") as f:
-            f.write(entry + "\n")
+            f.write(ct_entry + "\n")
 
         print(f"[plan-rename-guard] Re-injected title: {title}", file=sys.stderr)
 

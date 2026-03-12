@@ -58,12 +58,16 @@ try:
     if not resolved.is_file():
         sys.exit(0)
 
-    # Write sidecar only (pending state).
+    # Write project-scoped pending file.
+    # Keyed by project dir (not session_id) because "clear context" may change session_id.
     # custom-title is written by the Stop guard AFTER user accepts ExitPlanMode.
-    # This avoids flashing titles on rejected plans.
+    import hashlib
     sidecar_dir = pathlib.Path.home() / ".claude" / "session-titles"
     sidecar_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    sidecar_path = sidecar_dir / f"{session_id}.json"
+
+    project_dir = str(resolved.parent)
+    project_key = hashlib.sha256(project_dir.encode()).hexdigest()[:16]
+    pending_path = sidecar_dir / f"_pending_{project_key}.json"
 
     # Atomic write: temp file + rename
     tmp_fd, tmp_path = tempfile.mkstemp(dir=sidecar_dir, suffix=".tmp")
@@ -72,11 +76,11 @@ try:
             json.dump({
                 "title": title,
                 "sessionId": session_id,
-                "transcriptPath": str(resolved),
+                "projectDir": project_dir,
                 "pending": True
             }, f)
         os.chmod(tmp_path, 0o600)
-        os.rename(tmp_path, sidecar_path)
+        os.rename(tmp_path, pending_path)
     except Exception:
         try:
             os.unlink(tmp_path)

@@ -2,6 +2,22 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.11.0] - 2026-03-12
+
+### Added
+- `plan-rename`: 將 hook 系統從 `~/.claude/scripts/` 遷移至 agent-skills repo，納入版本控制
+  - `plan-rename/plan-rename-hook.sh`：PreToolUse ExitPlanMode hook，從 Plan H1 標題自動命名 session
+  - `plan-rename/plan-rename-guard.sh`：Stop hook，compaction 後自動重新注入 custom-title
+  - `plan-rename/SKILL.md`：完整文件（`user_invocable: false`），含使用前須知、成本分析、穩定性風險、安裝步驟
+
+### Changed
+- `README.md`: 新增 Background Hooks 區塊，說明 plan-rename 非使用者呼叫的 hook skill
+
+### Removed
+- `~/.claude/scripts/plan-rename-hook.sh`：遷移至 repo，不再為孤兒檔案
+- `~/.claude/scripts/plan-rename-guard.sh`：同上
+- `~/.claude/skills/learned/claude-code-session-rename-hook.md`：內容已併入 `plan-rename/SKILL.md`
+
 ## [v1.10.1] - 2026-03-11
 
 ### Changed

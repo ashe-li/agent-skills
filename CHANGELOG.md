@@ -2,6 +2,13 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.13.0] - 2026-03-14
+
+### Added
+- `rules/worktree-prompt.md`: 實作 plan 或大範圍變更前，agent 自動詢問是否使用 worktree 隔離開發
+  - 觸發條件：實作 `plans/active/` 中的計畫、跨 5+ 檔案的 migration/refactoring、基礎設施變更
+  - 跳過條件：使用者已明確表態、當前目錄已是 worktree、單檔小修
+
 ## [v1.12.0] - 2026-03-12
 
 ### Changed

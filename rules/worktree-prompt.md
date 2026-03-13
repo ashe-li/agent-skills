@@ -11,5 +11,5 @@ Use AskUserQuestion:
 
 Skip the prompt if:
 - The user already explicitly said to use (or not use) a worktree
-- The current directory is already a worktree (`git rev-parse --show-toplevel` differs from the main worktree)
+- The current directory is already a worktree (`.git` is a file, not a directory — worktrees use a `.git` file pointing to the main repo's `.git/worktrees/`)
 - The task is small (single file, quick fix)

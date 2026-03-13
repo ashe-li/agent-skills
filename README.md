@@ -222,7 +222,23 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 - 自動處理長頁面捲動載入、Toggle 展開、登入偵測
 - 擷取內容整理為結構化 Markdown 後，自動觸發 `/design` 建立 plan.md
 
-### 選擇流程圖
+## Background Hooks
+
+非使用者呼叫的 hook skill，安裝後在背景自動運作。
+
+### `plan-rename` — Plan Mode Session Auto-Rename
+
+Plan Mode 結束時自動從計畫 H1 標題重新命名 session，compaction 後自動修復。
+
+**組成：**
+- `plan-rename-hook.sh`：PreToolUse `ExitPlanMode` hook — 擷取 H1 標題，寫入 JSONL + sidecar
+- `plan-rename-guard.sh`：Stop hook — 偵測 compaction 導致 title 遺失，自動重新注入
+
+**安裝注意：** `npx skills add` 只安裝檔案，需手動在 `~/.claude/settings.json` 加入兩條 hook 設定。詳見 `plan-rename/SKILL.md`。
+
+**需求：** `python3`、`jq`、`bash`
+
+## 選擇流程圖
 
 ```
 你現在要做什麼？

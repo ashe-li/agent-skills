@@ -7,7 +7,7 @@ argument-hint: <Notion URL>
 
 # /notion-plan — 從 Notion URL 自動建立實作計畫
 
-貼上 Notion URL，自動擷取頁面需求內容並串接 `/design` 建立實作計畫。一條指令完成 Notion 抓取 → 結構化整理 → plan.md 產出。
+貼上 Notion URL，自動擷取頁面需求內容並串接 `/design` 建立實作計畫。一條指令完成 Notion 抓取 → 結構化整理 → plans/active/<slug>.md 產出。
 
 ---
 

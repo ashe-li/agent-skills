@@ -131,6 +131,10 @@ npx skills add ashe-li/agent-skills --global
 | 文件更新 | doc-updater → code-reviewer |
 | Harness 設定優化 | harness-optimizer |
 | 自主迴圈任務 | loop-operator |
+| 預定義工作流模板 | `/orchestrate` command |
+| 詢問該用哪個 model | `/model-route` command |
+| 迴圈任務需監控 | loop-operator + `/loop-status` |
+| 多模型協作（ace-tool MCP） | `multi-*` commands |
 | 不確定 | 互動式選擇 |
 
 - 自動偵測專案類型（Go/Python/Node.js），附加語言專用 reviewer
@@ -202,7 +206,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - `restore <name>` 臨時啟用 / `restore --all` 全部恢復
 - `status` / `list` 檢視目前狀態
 - 可自訂 `ecc-skill-defer.conf` 控制 defer 清單
-- 預設 defer 23 skills，支援 marketplace 與 cache 雙路徑
+- 預設 defer 24 skills，支援 marketplace 與 cache 雙路徑
 
 </details>
 

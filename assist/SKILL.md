@@ -101,6 +101,17 @@ ls -la
 | harness-optimizer | agent harness 設定優化（hooks/evals/routing） |
 | loop-operator | 自主迴圈運行與監控 |
 
+**可用 Commands（根據情境篩選）：**
+
+| Command | 適用情境 |
+|---------|----------|
+| /orchestrate | 預定義多 agent 工作流（feature/bugfix/refactor/security） |
+| /loop-start | 啟動自主迴圈任務 |
+| /loop-status | 監控進行中的迴圈狀態 |
+| /model-route | 依任務複雜度推薦 model 層級 |
+| /checkpoint | 工作流中建立/驗證進度檢查點 |
+| /quality-gate | 品質閘——測試覆蓋率、lint、安全掃描 |
+
 ### ECC 資源分配原則
 
 - 盤點結果直接影響 Step 3 路由選擇
@@ -126,6 +137,10 @@ ls -la
 | 涉及資料庫 schema 或 query | 在 pipeline 中加入 database-reviewer | 自動附加資料庫 reviewer |
 | 需要優化 agent harness 設定 | harness-optimizer | hooks/evals/routing 設定調優 |
 | 需要執行自主迴圈任務 | loop-operator | 長時間 autonomous loop 監控 |
+| 需要預定義工作流模板 | `/orchestrate` command | 當任務明確符合 feature/bugfix/refactor/security 模板時，委派給 orchestrate 而非手動組裝 pipeline |
+| 使用者詢問該用哪個 model | `/model-route` command | 依任務複雜度推薦 Haiku/Sonnet/Opus |
+| 長時間迴圈任務需監控 | loop-operator + `/loop-status` | 啟動迴圈後配合狀態查詢 |
+| 需要多模型協作（ace-tool MCP 可用時） | `multi-*` commands | 條件：偵測到 ace-tool MCP 已設定時才路由 |
 | 不確定 / 多種可能 | 列出建議 pipeline，讓使用者選擇 | 透過 AskUserQuestion 互動 |
 
 ### 路由判斷邏輯

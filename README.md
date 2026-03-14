@@ -35,6 +35,7 @@ npx skills add ashe-li/agent-skills --global
 /worktree                  # 列出所有 worktree 狀態
 /worktree create <name>    # 建立新 worktree
 /worktree cleanup          # 清理已 merge 的 worktree
+/curation                  # 清理 learned skills 格式問題
 /plan-archive              # 歸檔已完成的 plan
 /ecc-skill-defer apply     # Defer 不常用的 skills
 /playwright-human-in-the-loop  # 安全的瀏覽器自動化
@@ -50,6 +51,7 @@ npx skills add ashe-li/agent-skills --global
 | [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
 | [`/worktree`](#worktree--git-worktree-管理) | Worktree 建立、狀態、清理 |
+| [`/curation`](#curation--learned-skills-品質管控) | 掃描 learned skills 格式、標準化、清理廢棄 |
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | Defer/restore skills 減少 init tokens |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
@@ -72,14 +74,16 @@ npx skills add ashe-li/agent-skills --global
 
 ### `/update` — 更新知識庫
 
-將 session 工作沉澱為文件與可復用知識。Pipeline: doc-updater → code-reviewer → learn-eval
+將 session 工作沉澱為文件與可復用知識。Pipeline: doc-updater → code-reviewer → context 整理 → learn-eval
 
 <details>
 <summary>Features & 串接細節</summary>
 
 - 自動掃描變更並更新 docs/codemaps/README
 - code-reviewer 審查文件品質，確保文件與程式碼一致
-- learn-eval 提取可復用 patterns，自動評估品質後寫入知識庫
+- **對話 context 整理**：提取決策脈絡、研究成果、使用者偏好，HITL 確認後寫入知識庫
+- learn-eval 提取可復用 patterns，強制 frontmatter + 5 維度評分表格
+- **知識庫交叉比對強化**：偵測遺漏時主動起草修正內容並寫入（非僅報告差異）
 - **Pipeline 串接**：`/update /pr` 一條指令完成知識沉澱 + PR 交付，自動去重
 
 **`/update /pr` 資源去重：**
@@ -89,7 +93,7 @@ npx skills add ashe-li/agent-skills --global
 | Step 1a: Git 分析 | 完整 | 完整 | 目的不同 |
 | Step 1b: 對話脈絡 | 完整 | 完整 | `/update` 不做此步驟 |
 | Step 2: Quick Review | 完整 | **跳過** | `/update` 已做更深度審查 |
-| Step 3-6 | 完整 | 完整 | 無重疊 |
+| /pr Step 3-6 | 完整 | 完整 | 無重疊 |
 
 </details>
 
@@ -179,6 +183,22 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
+### `/curation` — Learned Skills 品質管控
+
+按需執行的維護工具，掃描 `~/.claude/skills/learned/` 的格式問題並標準化。
+
+<details>
+<summary>Features</summary>
+
+- 掃描 learned skills：frontmatter 有無/完整度、評分格式、檔案大小
+- 分類問題：無 frontmatter、不完整 frontmatter、評分格式不統一、已廢棄
+- 格式問題自動修正（從內容推斷 name/description）
+- 廢棄項目需 HITL 確認後才刪除
+- 批次操作：全部修正 / 只修格式 / 逐一確認 / 只查看
+- **明確不做**：不自動合併相似 skills、不重新評分
+
+</details>
+
 ### `/plan-archive` — 歸檔 Plan
 
 將 `plans/active/` 中完成的 plan 移至 `plans/completed/`，補上驗證結果與完成時間。
@@ -237,6 +257,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 ├─ 不確定 ──────────→ /assist
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr
 ├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop
+├─ Learned skills 要整理 → /curation
 ├─ Plan 要收尾 ─────→ /plan-archive
 ├─ 需要 worktree ───→ /worktree create <name>
 ├─ Worktree 要清理 ─→ /worktree cleanup

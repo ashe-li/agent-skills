@@ -2,6 +2,28 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.14.0] - 2026-03-14
+
+### Added
+- `/curation`: Learned Skills 品質管控 skill
+  - 掃描 `~/.claude/skills/learned/` 格式問題（frontmatter、評分格式、廢棄標記）
+  - 自動修正格式問題（從內容推斷 name/description）、HITL 確認後刪除廢棄項目
+  - 批次操作模式（全部修正 / 只修格式 / 逐一確認 / 只查看）
+- `/update` Step 3: 對話 context 整理（新增步驟，位於 code-reviewer 之後、learn-eval 之前）
+  - 從對話中提取決策脈絡、研究成果、架構演進、Bug 根因等有價值的 context
+  - 三層分流：專案知識庫（給人讀）、learned skills（給 Claude 學）、MEMORY.md（跨 session 狀態）
+  - 知識庫目錄不硬編碼，HITL 確認寫入位置
+
+### Changed
+- `/update` Step 4 (原 Step 3, learn-eval): 新增寫入格式強制規範
+  - 強制 frontmatter（name/description/user-invocable/origin）
+  - 品質評分統一為 5 維度表格格式，廢棄單行格式
+- `/update` Step 5 (原 Step 4, 知識庫交叉比對): 從被動報告改為主動寫入
+  - 偵測遺漏時起草修正內容，HITL 確認後直接寫入
+  - 新增 MEMORY.md 路徑定位規則與自動建立邏輯
+  - 新增 Step 3 context 寫入完整性確認
+- `/update`: 步驟重新編號（原 Step 3-6 → Step 4-7）
+
 ## [v1.13.0] - 2026-03-14
 
 ### Added

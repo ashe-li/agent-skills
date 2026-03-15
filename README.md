@@ -265,6 +265,29 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - **82% 的 skills 確實有幫助**：平均提升 44 百分點 pass rate
 - **33% 是「沉默浪費」**：結構好但消融測試無效果
 
+### Triage 結果（2026-03-15）
+
+基於 616 ablation runs 的四層分流處理：
+
+| 動作 | 數量 | 效果 |
+|------|------|------|
+| 退役 degraded (T1) | 5 learned | delta -0.13~-0.25，幫倒忙 |
+| 退役 Q3 delta=0 (T2) | 5 learned | 無效 context token |
+| 補 frontmatter (T3) | 7 learned | delta +0.50~+1.00 的高效用 skills |
+| Q4 審查清單 | 10 learned | 待人工判斷 |
+
+Learned skills：144 → 134（-6.9%）。所有操作可逆（`skills-triage.sh restore`）。
+
+#### ECC Agent 退化警告
+
+| Agent | Delta | 說明 |
+|-------|-------|------|
+| `architect` | **-0.50** | 消融實驗中表現最差，建議 ECC 上游調查 |
+| `build-error-resolver` | **-0.13** | 同為負向效果 |
+
+這兩個 agents 位於 ECC plugin cache（`~/.claude/plugins/cache/everything-claude-code/`），
+不適合直接退役（ECC 更新會覆蓋）。已在 `RETIRED_LOG.md` 標記 documented-only。
+
 ### CI 品質閘門
 
 PR 修改 `SKILL.md` 時自動觸發 structural eval（0 tokens）。

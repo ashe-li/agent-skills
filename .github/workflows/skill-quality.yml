@@ -1,0 +1,45 @@
+name: Skill Quality Gate
+on:
+  pull_request:
+    paths: ["*/SKILL.md"]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pyyaml
+      - name: Detect changed skills
+        id: changed
+        run: |
+          ALL=$(git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -E '^[^/]+/SKILL\.md$' || true)
+          NEW=$(git diff --diff-filter=A --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -E '^[^/]+/SKILL\.md$' || true)
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$ALL" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "new_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$NEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Run quality check
+        if: steps.changed.outputs.files != ''
+        env:
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          NEW_FILES: ${{ steps.changed.outputs.new_files }}
+        run: |
+          ARGS=""
+          for f in $CHANGED_FILES; do
+            ARGS="$ARGS $f"
+          done
+          CMD="python scripts/check_skill.py --files $ARGS --repo-dir ."
+          if [ -n "$NEW_FILES" ]; then
+            NEW_ARGS=""
+            for f in $NEW_FILES; do
+              NEW_ARGS="$NEW_ARGS $f"
+            done
+            CMD="$CMD --new-files $NEW_ARGS"
+          fi
+          $CMD

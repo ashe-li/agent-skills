@@ -176,6 +176,8 @@ origin: auto-extracted
 
 廢棄 `specificity=4, actionability=5, ...` 單行格式。
 
+> 既有 learned skills 的格式修復 → `/curation`（批量 remediation）。
+
 ## Step 5: 知識庫交叉比對（主動寫入 + HITL 確認）
 
 learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正確更新。**偵測到遺漏時主動起草修正內容。**

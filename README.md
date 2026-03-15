@@ -244,6 +244,38 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
+<details>
+<summary>Quality Management</summary>
+
+### 品質評估框架
+
+每個 skill 用 5 維度評估（來自 [skills-ecosystem-eval](https://github.com/ashe-li/skills-ecosystem-eval) 研究）：
+
+| 維度 | 說明 | 來源 |
+|------|------|------|
+| Specificity | 指令和範例的具體程度 | 結構分析 |
+| Actionability | 載入後是否真的改善輸出 | 消融實驗 |
+| Scope Fit | 描述是否精準觸發 | 描述品質 |
+| Non-redundancy | 與其他 skills 的重疊度 | Jaccard 比對 |
+| Coverage | 章節和內容的完整度 | 結構分析 |
+
+### 研究發現
+
+- **靜態品質 != 動態效用**（r = -0.04）：結構漂亮不代表有幫助
+- **82% 的 skills 確實有幫助**：平均提升 44 百分點 pass rate
+- **33% 是「沉默浪費」**：結構好但消融測試無效果
+
+### CI 品質閘門
+
+PR 修改 `SKILL.md` 時自動觸發 structural eval（0 tokens）。
+完整評估（含消融）可在本地執行 bridge：
+
+```bash
+python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --mode full
+```
+
+</details>
+
 ---
 
 ## 選什麼？

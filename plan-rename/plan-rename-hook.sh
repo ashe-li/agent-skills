@@ -52,7 +52,9 @@ try:
         sys.exit(0)
     allowed_root = pathlib.Path.home() / ".claude"
     resolved = pathlib.Path(active_file).resolve()
-    if not str(resolved).startswith(str(allowed_root.resolve())):
+    try:
+        resolved.relative_to(allowed_root.resolve())
+    except ValueError:
         print(f"[plan-rename] Blocked path outside ~/.claude/: {active_file}", file=sys.stderr)
         sys.exit(0)
     if not resolved.is_file():

@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Guard: confirms pending titles + re-injects custom-title after compaction
-# Runs as Stop hook — fast early-exit in bash when no sidecar exists
+# Guard: confirms pending titles + fallback compaction re-injection
+# Runs as Stop hook — fast early-exit when no sidecar exists
+# Primary compaction handling is in plan-rename-compact.sh (SessionStart compact)
 
 INPUT=$(cat)
 
-# Fast path in bash: extract session_id and transcript_path with jq
-SESSION_ID=$(printf '%s\n' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+# Fast path: extract fields without jq (patterns handle optional whitespace around colon)
+SESSION_ID=$(printf '%s\n' "$INPUT" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 [[ -z "$SESSION_ID" ]] && exit 0
 [[ "$SESSION_ID" =~ ^[a-zA-Z0-9_-]{8,128}$ ]] || exit 0
 
-TRANSCRIPT=$(printf '%s\n' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+TRANSCRIPT=$(printf '%s\n' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 SIDECAR_DIR="$HOME/.claude/session-titles"
 
-# Check if there's a pending file OR a confirmed sidecar
-# Pending file: _pending_<project-hash>.json (project-scoped, survives session_id change)
-# Confirmed sidecar: <session_id>.json (session-scoped, for compaction re-injection)
+# Check for pending file OR confirmed sidecar
 HAS_PENDING=false
 HAS_SIDECAR=false
 
@@ -42,13 +41,14 @@ try:
     if not session_id or not re.fullmatch(r"[a-zA-Z0-9_-]{8,128}", session_id):
         sys.exit(0)
 
-    # Validate transcript_path
     active_file = data.get("transcript_path", "")
     if not active_file:
         sys.exit(0)
     allowed_root = pathlib.Path.home() / ".claude"
     resolved = pathlib.Path(active_file).resolve()
-    if not str(resolved).startswith(str(allowed_root.resolve())):
+    try:
+        resolved.relative_to(allowed_root.resolve())
+    except ValueError:
         sys.exit(0)
     if not resolved.is_file():
         sys.exit(0)
@@ -59,7 +59,7 @@ try:
     pending_path = sidecar_dir / f"_pending_{project_key}.json"
     sidecar_path = sidecar_dir / f"{session_id}.json"
 
-    # --- Phase 1: Check project-scoped pending file ---
+    # --- Phase 1: Confirm pending title ---
     if pending_path.is_file():
         with open(pending_path) as f:
             pending = json.load(f)
@@ -73,7 +73,6 @@ try:
                     tail.append(line)
             tail_list = list(tail)
 
-            # Find last ExitPlanMode tool_use in tail
             last_exit_idx = -1
             for i, line in enumerate(tail_list):
                 line = line.strip()
@@ -89,7 +88,6 @@ try:
                         if isinstance(c, dict) and c.get("name") == "ExitPlanMode":
                             last_exit_idx = i
 
-            # Check if ExitPlanMode was rejected
             rejected = False
             if last_exit_idx >= 0:
                 for i in range(last_exit_idx + 1, len(tail_list)):
@@ -114,11 +112,10 @@ try:
                         break
 
             if rejected:
-                print(f"[plan-rename-guard] ExitPlanMode rejected, skipping", file=sys.stderr)
+                print("[plan-rename-guard] ExitPlanMode rejected, skipping", file=sys.stderr)
                 sys.exit(0)
 
-            # Accepted (or no ExitPlanMode in tail = context was cleared after accept)
-            # Write custom-title to CURRENT transcript
+            # Accepted — write custom-title
             ct_entry = json.dumps({
                 "type": "custom-title",
                 "customTitle": title,
@@ -127,7 +124,7 @@ try:
             with open(resolved, "a") as f:
                 f.write(ct_entry + "\n")
 
-            # Create confirmed session-scoped sidecar (for compaction re-injection)
+            # Create confirmed sidecar (for compact hook)
             tmp_fd, tmp_path = tempfile.mkstemp(dir=sidecar_dir, suffix=".tmp")
             try:
                 with os.fdopen(tmp_fd, "w") as f:
@@ -140,7 +137,6 @@ try:
                 except OSError:
                     pass
 
-            # Remove pending file
             try:
                 pending_path.unlink()
             except OSError:
@@ -149,33 +145,27 @@ try:
             print(f"[plan-rename-guard] Confirmed title: {title}", file=sys.stderr)
             sys.exit(0)
 
-    # --- Phase 2: Check session-scoped sidecar (compaction re-injection) ---
+    # --- Phase 2: Fallback compaction re-injection ---
+    # Primary handler: SessionStart compact hook. This is a safety net.
     if sidecar_path.is_file():
         with open(sidecar_path) as f:
-            sidecar = json.load(f)
-
-        title = sidecar.get("title", "")
+            title = json.load(f).get("title", "")
         if not title:
             sys.exit(0)
 
-        # Tail-scan for existing custom-title
         tail = collections.deque(maxlen=50)
         with open(resolved) as f:
             for line in f:
                 tail.append(line)
 
         for line in tail:
-            line = line.strip()
-            if not line:
-                continue
             try:
-                entry = json.loads(line)
-                if entry.get("type") == "custom-title":
-                    sys.exit(0)  # Already has title
-            except json.JSONDecodeError:
+                if json.loads(line.strip()).get("type") == "custom-title":
+                    sys.exit(0)
+            except (json.JSONDecodeError, AttributeError):
                 continue
 
-        # Re-inject custom-title (lost to compaction)
+        # Missing custom-title — compact hook likely missed, re-inject
         ct_entry = json.dumps({
             "type": "custom-title",
             "customTitle": title,
@@ -183,8 +173,7 @@ try:
         })
         with open(resolved, "a") as f:
             f.write(ct_entry + "\n")
-
-        print(f"[plan-rename-guard] Re-injected title: {title}", file=sys.stderr)
+        print(f"[plan-rename-guard] Fallback re-inject: {title}", file=sys.stderr)
 
 except Exception as e:
     print(f"[plan-rename-guard] Error: {e}", file=sys.stderr)

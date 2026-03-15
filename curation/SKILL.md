@@ -1,12 +1,21 @@
 ---
 name: curation
-description: Learned Skills 品質管控 — 掃描格式問題、標準化 frontmatter、清理廢棄項目。
+description: Retrospective batch cleanup — 修復 learned skills 的格式缺陷（malformed frontmatter、legacy 評分格式），HITL 確認後刪除已廢棄項目。不重新評分、不提取新 patterns。
 allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion
 ---
 
 # /curation — Learned Skills 品質管控
 
 按需執行的維護工具，用於清理和標準化 `~/.claude/skills/learned/` 中累積的 learned skills。不綁定任何自動化流程，使用者想整理時手動呼叫。
+
+## Role: Retrospective Format Remediation
+
+修復**既有** learned skills 的格式漂移。與 `/update` Step 4（在**新寫入**時強制格式）互補，非替代。
+
+| 時機 | 工具 |
+|------|------|
+| 批量修復既有 learned skills | `/curation` |
+| 新 skill 寫入時格式把關 | `/update` Step 4 (learn-eval) |
 
 ## Step 1: 掃描 learned skills
 

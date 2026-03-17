@@ -381,23 +381,6 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ---
 
 <details>
-<summary>Background Hooks</summary>
-
-### `plan-rename` — Plan Mode Session Auto-Rename
-
-Plan Mode 結束時自動從計畫 H1 標題重新命名 session，compaction 後自動修復。
-
-**組成：**
-- `plan-rename-hook.sh`：PreToolUse `ExitPlanMode` hook — 擷取 H1 標題，寫入 JSONL + sidecar
-- `plan-rename-guard.sh`：Stop hook — 偵測 compaction 導致 title 遺失，自動重新注入
-
-**安裝注意：** `npx skills add` 只安裝檔案，需手動在 `~/.claude/settings.json` 加入兩條 hook 設定。詳見 `plan-rename/SKILL.md`。
-
-**需求：** `python3`、`jq`、`bash`
-
-</details>
-
-<details>
 <summary>Benchmark</summary>
 
 Output quality evaluation using [Anthropic skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator).

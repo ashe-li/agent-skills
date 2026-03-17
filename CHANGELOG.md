@@ -8,6 +8,34 @@
 - `plan-rename`: 移除整個 skill（SKILL.md + 3 個 hook 腳本 + v2 實作計畫）— Claude Code 已內建 Plan Mode 自動命名功能，不再需要自訂 hook
 - `README.md`: 移除 Background Hooks 段落
 
+### Changed
+- `/playwright-human-in-the-loop`: 從 Playwright MCP-only 改為 4 層 multi-tool 架構
+  - 工具偵測優先順序：Claude in Chrome → agent-browser → playwright-cli → Playwright MCP
+  - Claude in Chrome：用使用者已登入的 Chrome，auth 零設定，支援 extension（密碼管理器、VPN）
+  - agent-browser：`snapshot -i` 只列可互動元素（~3.5K tokens vs MCP ~58KB）
+  - playwright-cli：snapshot 存檔案，按需讀取，不污染 context
+  - 新增完整指令對照表（4 種工具 × 11 種操作）
+  - 新增登入管理介面的 auth 指引（headed 模式、CDP 接管 Chrome、playwright-cli state-save/load）
+  - frontmatter 新增 `Bash` + `Read` 至 allowed-tools
+- `/notion-plan`: Step 2 從 Playwright MCP-only 改為 4 層 multi-tool
+  - 新增 Step 2a 瀏覽器工具偵測（同上優先順序）
+  - Step 2d 登入處理全面重寫：6 種登入方式（Claude in Chrome / headed / CDP 接管 Chrome / state-load / 手動貼上 / 設為公開）
+  - Claude in Chrome 直接用已登入 session，auth 零設定
+  - agent-browser `connect <port>` 接管已登入 Chrome（需 CDP）
+  - playwright-cli `state-save` / `state-load` 持久化登入狀態
+  - Cloudflare Access / SSO 場景指引：headless 會被擋，需 headed 模式
+  - Notion 大頁面優先用 eval DOM 提取（避免 snapshot token 爆炸）
+
+### Fixed
+- `/notion-plan`: 登入選項編號不一致 — list 1-6 與 section heading 選項 1-5 不匹配
+  - 新增「選項 1：Claude in Chrome」section
+  - 選項 2-6 重新編號對齊 AskUserQuestion 提示
+- `/notion-plan`: `agent-browser eval` 在 Notion 頁面回傳空物件 `{}`
+  - eval 回傳值改用 `JSON.stringify()` 序列化
+  - 新增 fallback 策略：eval 失敗時改用 snapshot 提取文字
+  - 註明 Claude in Chrome 為動態工具（需 `--chrome` 啟動）
+- `/notion-plan`: code block 缺 language tag（```` ``` ```` → ```` ```text ````）
+
 ## [v1.14.0] - 2026-03-14
 
 ### Added

@@ -5,6 +5,8 @@ allowed-tools: Bash, Read, AskUserQuestion, Skill, mcp__playwright__browser_navi
 argument-hint: <Notion URL>
 ---
 
+<!-- 瀏覽器工具選擇：優先 agent-browser（Bash），次選 playwright-cli（Bash），最後 Playwright MCP。偵測邏輯見 Step 2a。 -->
+
 # /notion-plan — 從 Notion URL 自動建立實作計畫
 
 貼上 Notion URL，自動擷取頁面需求內容並串接 `/design` 建立實作計畫。一條指令完成 Notion 抓取 → 結構化整理 → plans/active/<slug>.md 產出。
@@ -29,41 +31,140 @@ argument-hint: <Notion URL>
 
 ---
 
-## Step 2：Playwright MCP 抓取
+## Step 2：瀏覽器抓取
 
-> **不使用 WebFetch**：Notion 100% client-side rendering，WebFetch 永遠只能拿到載入骨架，直接用 Playwright。
+> **不使用 WebFetch**：Notion 100% client-side rendering，WebFetch 永遠只能拿到載入骨架。
 
-### 2a. 導航至頁面
+### 2a. 偵測瀏覽器工具
 
+依優先順序偵測，選中第一個可用的工具：
+
+| 優先順序 | 工具 | 偵測方式 | 優勢 |
+|---------|------|---------|------|
+| 1 | Claude in Chrome | 檢查 `mcp__claude-in-chrome__*` 工具是否可用 | 直接用使用者已登入的 Chrome，auth 零設定（動態工具，需 `--chrome` 啟動） |
+| 2 | `agent-browser` | `Bash: agent-browser --version` | Token 效率最高（`snapshot -i` ~3.5K tokens） |
+| 3 | `playwright-cli` | `Bash: playwright-cli --help` | Snapshot 存檔案，不灌 context |
+| 4 | Playwright MCP | 嘗試 `mcp__playwright__browser_snapshot` | Fallback（每次 action ~58KB） |
+
+> **Notion 需要登入時**：優先使用 Claude in Chrome（天然有 auth）或 agent-browser `connect <port>`（接管已登入的 Chrome，需 CDP）。
+
+以下步驟以偵測到的工具執行。指令對照：
+
+| 操作 | Claude in Chrome | agent-browser | playwright-cli | Playwright MCP |
+|------|-----------------|--------------|---------------|----------------|
+| 導航 | 透過 extension 導航 | `open <url>` | `open <url>` (首次) / `goto <url>` (已開啟) | `browser_navigate(url)` |
+| Snapshot | extension 提供 DOM 存取 | `snapshot` | `snapshot` | `browser_snapshot()` |
+| 執行 JS | extension eval | `eval "() => ..."` | `eval "() => ..."` | `browser_evaluate(expression)` |
+| 等待 | — | `wait ".selector"` | — | `browser_wait_for(selector)` |
+| 點擊 | extension click | `click @ref` | `click ref` | `browser_click(ref)` |
+
+### 2b. 導航至頁面
+
+使用偵測到的工具導航至 Notion URL。
+
+### 2c. 等待內容載入
+
+等待 `.notion-page-content` 出現（timeout 10s）。
+
+agent-browser / playwright-cli 使用 eval 檢查：
+```javascript
+() => !!document.querySelector('.notion-page-content')
 ```
-mcp__playwright__browser_navigate(url=<notion_url>)
-```
 
-### 2b. 等待內容載入
+若等待逾時，嘗試備用 selector：`.notion-frame`、`[data-block-id]`、`.layout-content`。
 
-```
-mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000)
-```
+### 2d. 如需登入
 
-若等待逾時，嘗試備用 selector：
-- `.notion-frame`
-- `[data-block-id]`
-- `.layout-content`
-
-### 2c. 如需登入
-
-使用 `browser_snapshot` 檢查頁面狀態。判斷是否為登入頁面：
+使用 snapshot 檢查頁面狀態。判斷是否為登入頁面：
 - snapshot 不含任何 `[data-block-id]` 區塊
 - 且包含 `input[type="email"]` 或文字 "Sign in"、"Log in"、"Continue with"
 
-若確認為登入頁面，使用 AskUserQuestion 告知使用者：
+若 Step 2a 選中 Claude in Chrome，**不會遇到此問題**——直接使用使用者已登入的 Chrome session，跳過整個 2d。
 
-> 此頁面需要登入。請在瀏覽器中登入 Notion 後重試，
+若使用其他工具且確認為登入頁面，使用 AskUserQuestion 提供以下選項：
+
+```text
+此頁面需要登入。請選擇登入方式：
+
+1. [Claude in Chrome] 啟用 /chrome，直接用你已登入的 Chrome（推薦）
+2. [headed 模式] 開啟瀏覽器視窗，你手動登入後我接手
+3. [接管 Chrome（CDP）] 連接你已登入的 Chrome（需以 --remote-debugging-port 啟動）
+4. [已有 profile] 使用之前儲存的登入狀態（playwright-cli state-load）
+5. [手動貼上] 跳過抓取，直接貼上頁面內容
+6. [設為公開] 請先將頁面設為公開（Share → Publish to web）再重試
+```
+
+> **Cloudflare Access / SSO 場景**：headless 瀏覽器會被企業防護擋住。使用選項 2（headed + persistent）讓使用者在可見視窗中完成登入，或選項 5 手動貼上。
+
+根據使用者選擇執行對應的登入流程：
+
+#### 選項 1：Claude in Chrome — 直接使用已登入 session
+
+若 Step 2a 選中 Claude in Chrome，此步驟自動跳過——extension 已提供完整 auth，無需額外登入。
+
+#### 選項 2：headed 模式 — 人工登入後接手
+
+開啟 headed 瀏覽器，使用者在視窗中完成登入（含 CAPTCHA/MFA），完成後 CLI 接管。
+
+```bash
+# agent-browser
+agent-browser open <notion_url> --headed
+# → 使用者在視窗中登入 Notion
+# → 登入完成後，使用者回到對話確認
+
+# playwright-cli（--persistent 保留登入狀態供下次使用）
+playwright-cli open --headed --persistent <notion_url>
+```
+
+使用 AskUserQuestion 等待使用者確認登入完成，再繼續 snapshot。
+
+**可選：儲存登入狀態供下次使用**（playwright-cli 登入成功後）：
+```bash
+playwright-cli state-save notion-auth.json
+```
+
+#### 選項 3：接管已登入的 Chrome（CDP）
+
+適合使用者的 Chrome 已安裝密碼管理器、VPN 等 extension 的場景。
+
+使用者需先以 remote-debugging 啟動 Chrome：
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+```
+
+然後接管：
+```bash
+# agent-browser — 連接指定 CDP port
+agent-browser connect 9222
+agent-browser open <notion_url>
+```
+
+> **注意：** CDP 連接會接管使用者的 Chrome 視窗。操作完成後應使用 `agent-browser close` 釋放連接，不要關閉使用者的 Chrome。
+
+#### 選項 4：使用已儲存的 profile
+
+若之前已透過 playwright-cli 儲存過 auth state：
+
+```bash
+# playwright-cli — 載入 storage state
+playwright-cli open --headed <notion_url>
+playwright-cli state-load notion-auth.json
+playwright-cli reload
+```
+
+#### 選項 5/6：跳過瀏覽器
+
+- **選項 5**：請使用者手動貼上頁面 Markdown 內容，直接進入 Step 3
+- **選項 6**：結束流程，請使用者調整頁面權限後重新執行 `/notion-plan`
+
+#### Playwright MCP fallback
+
+若使用的是 Playwright MCP（Step 2a 選中），登入處理回退為原始流程：
+
+> 此頁面需要登入。請在 Playwright MCP 開啟的瀏覽器視窗中手動登入後回覆確認。
 > 或將頁面設為公開（Share → Publish to web）。
 
-若使用者的 Playwright 已有 Notion session（persistent profile），則直接繼續。
-
-### 2d. 擷取頁面內容
+### 2e. 擷取頁面內容
 
 先展開所有 Toggle 區塊（Notion toggle 預設收合，子內容不在 DOM 中）：
 
@@ -79,41 +180,32 @@ mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000
 
 若有 toggle 被展開，等待 1 秒讓子內容載入。
 
-接著使用 `browser_snapshot` 取得 accessibility tree：
-
-```
-mcp__playwright__browser_snapshot()
-```
-
-若內容過長或需要更精確擷取，使用 `browser_evaluate` 執行 DOM 提取：
+嘗試使用 eval 執行 DOM 提取（比 snapshot 更精確，且避免 Notion 大頁面的 snapshot token 爆炸）：
 
 ```javascript
 () => {
-  // 擷取頁面標題
   const title = document.querySelector('.notion-page-block, .notion-collection_view-block h1, [data-root="true"] h1')?.textContent?.trim() || '';
-
-  // 只擷取 page content 容器下的頂層區塊，避免嵌套重複
   const pageContent = document.querySelector('.notion-page-content');
   const topLevelBlocks = pageContent
     ? Array.from(pageContent.children).filter(el => el.dataset.blockId)
     : Array.from(document.querySelectorAll('[data-block-id]'));
-
   const content = [];
   topLevelBlocks.forEach(block => {
     const text = block.innerText?.trim();
-    if (text && text.length > 0) {
-      content.push(text);
-    }
+    if (text && text.length > 0) content.push(text);
   });
-
-  return { title, content: content.join('\n\n') };
+  return JSON.stringify({ title, content: content.join('\n\n') });
 }
 ```
 
 > **注意：** 使用 `pageContent.children`（直接子元素）而非 `querySelectorAll('[data-block-id]')`（所有後代），
 > 避免嵌套區塊（如 toggle 內的段落）被重複擷取。
+>
+> **已知問題：** `agent-browser eval` 在某些 Notion 頁面回傳空物件 `{}`（可能與 Notion 的 CSP 或 iframe sandbox 有關）。
+> 若 eval 回傳空值，**fallback 到 snapshot**：使用 `snapshot -i`（agent-browser）或 `snapshot`（playwright-cli）取得頁面內容，
+> 再從 snapshot 的 textbox / StaticText 節點中提取文字。返回值務必用 `JSON.stringify()` 包裝以確保序列化。
 
-### 2e. 處理長頁面
+### 2f. 處理長頁面
 
 若頁面內容需要捲動才能載入完全：
 
@@ -125,14 +217,9 @@ mcp__playwright__browser_snapshot()
     const timer = setInterval(() => {
       window.scrollBy(0, distance);
       const newHeight = document.body.scrollHeight;
-      // 若 scrollHeight 不再增長，表示已載入完畢
-      if (newHeight === lastHeight) {
-        clearInterval(timer);
-        resolve(true);
-      }
+      if (newHeight === lastHeight) { clearInterval(timer); resolve(true); }
       lastHeight = newHeight;
     }, 300);
-    // 安全上限：最多捲動 30 秒
     setTimeout(() => { clearInterval(timer); resolve(true); }, 30000);
   });
 }
@@ -222,6 +309,8 @@ Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的
 
 ## 限制
 
-- 私人頁面需要 Playwright 有 Notion session 或使用者手動登入
+- 私人頁面需要登入：優先用 Claude in Chrome（零設定）或 `playwright-cli open --headed --persistent`（手動登入）
+- Cloudflare Access 等企業防護會擋 headless 瀏覽器 — 需用 headed 模式或 macOS `open` 指令讓使用者在自己的瀏覽器登入
+- Claude in Chrome 需要 claude.ai 付費方案（Pro/Max/Team/Enterprise）
 - Database view 的篩選/排序/分組以頁面當前狀態為準
 - 非常長的頁面（100+ 區塊）可能需要多次捲動，擷取時間較長

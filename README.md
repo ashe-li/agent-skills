@@ -156,7 +156,7 @@ npx skills add ashe-li/agent-skills --global
 <summary>Features</summary>
 
 - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
-- Playwright MCP 抓取（Notion 為 CSR，不用 WebFetch）
+- 瀏覽器抓取（agent-browser / playwright-cli / MCP，Notion 為 CSR 不用 WebFetch）
 - 自動處理長頁面捲動載入、Toggle 展開、登入偵測
 - 擷取內容整理為結構化 Markdown 後，自動觸發 `/design`
 
@@ -232,14 +232,15 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 ### `/playwright-human-in-the-loop` — 瀏覽器操作
 
-透過 Playwright MCP 操作瀏覽器，重大操作前暫停等待人類確認。
+自動選擇最佳瀏覽器工具（agent-browser → playwright-cli → Playwright MCP），重大操作前暫停等待人類確認。
 
 <details>
 <summary>Features</summary>
 
+- **Multi-tool**：自動偵測 agent-browser（`snapshot -i` ~3.5K tokens）→ playwright-cli（存檔按需讀）→ Playwright MCP（fallback）
 - 操作分級：重大操作（建立/刪除、權限、費用、安全敏感欄位）需確認
 - 安全敏感欄位即使是填寫也視為重大操作
-- 每步驟後 `browser_snapshot` 確認頁面狀態
+- 每步驟後 snapshot 確認頁面狀態
 - 永不自動 Delete/Terminate，永不輸入 secrets，CAPTCHA/MFA 交由人類
 
 </details>

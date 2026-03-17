@@ -2,6 +2,12 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.15.0] - 2026-03-17
+
+### Removed
+- `plan-rename`: 移除整個 skill（SKILL.md + 3 個 hook 腳本 + v2 實作計畫）— Claude Code 已內建 Plan Mode 自動命名功能，不再需要自訂 hook
+- `README.md`: 移除 Background Hooks 段落
+
 ## [v1.14.0] - 2026-03-14
 
 ### Added

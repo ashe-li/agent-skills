@@ -67,6 +67,9 @@ playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwri
 
 所有 `playwright-cli` 指令使用 session `-s=notion` 和 persistent profile `--profile ~/.playwright-cli/notion-profile`。
 
+> **引號規則：** `eval` 指令外層用 **single-quote**，內部 JS 用 **double-quote**。
+> 避免 `\"` escape 導致 Playwright serialization 錯誤。
+
 ### 2a. 導航至頁面
 
 ```bash
@@ -113,7 +116,7 @@ ls -t .playwright-cli/*.yml | head -1
 先展開所有 Toggle 區塊（Notion toggle 預設收合，子內容不在 DOM 中）：
 
 ```bash
-playwright-cli -s=notion eval "() => { const toggles = document.querySelectorAll('.notion-toggle-block > div[role=\"button\"]'); toggles.forEach(t => { if (t.getAttribute('aria-expanded') !== 'true') t.click(); }); return toggles.length; }"
+playwright-cli -s=notion eval '() => { const toggles = document.querySelectorAll(".notion-toggle-block > div[role=button]"); toggles.forEach(t => { if (t.getAttribute("aria-expanded") !== "true") t.click(); }); return toggles.length; }'
 ```
 
 若有 toggle 被展開，等待 1 秒讓子內容載入：
@@ -130,10 +133,16 @@ playwright-cli -s=notion snapshot
 
 用 Read 工具讀取最新的 `.playwright-cli/*.yml` 檔案。
 
-若內容過長或需要更精確擷取，使用 `eval` 執行 DOM 提取：
+使用 `eval` 提取頁面文字內容（主要方式，簡潔有效）：
 
 ```bash
-playwright-cli -s=notion eval "() => { const title = document.querySelector('.notion-page-block, .notion-collection_view-block h1, [data-root=\"true\"] h1')?.textContent?.trim() || ''; const pageContent = document.querySelector('.notion-page-content'); const topLevelBlocks = pageContent ? Array.from(pageContent.children).filter(el => el.dataset.blockId) : Array.from(document.querySelectorAll('[data-block-id]')); const content = []; topLevelBlocks.forEach(block => { const text = block.innerText?.trim(); if (text && text.length > 0) content.push(text); }); return JSON.stringify({ title, content: content.join('\n\n') }); }"
+playwright-cli -s=notion eval '() => document.querySelector(".notion-page-content")?.innerText || "NO CONTENT"'
+```
+
+若需要更結構化的提取（標題 + 內容分離）：
+
+```bash
+playwright-cli -s=notion eval '() => { const title = document.querySelector(".notion-page-block, .notion-collection_view-block h1, [data-root=true] h1")?.textContent?.trim() || ""; const content = document.querySelector(".notion-page-content")?.innerText || ""; return JSON.stringify({ title, content }); }'
 ```
 
 > **注意：** 使用 `pageContent.children`（直接子元素）而非 `querySelectorAll('[data-block-id]')`（所有後代），

@@ -81,7 +81,7 @@ playwright-cli -s=notion open "<notion_url>" --profile ~/.playwright-cli/notion-
 使用 `eval` 輪詢等待 Notion 內容 selector 出現：
 
 ```bash
-playwright-cli -s=notion eval "() => new Promise((resolve, reject) => { const selectors = ['.notion-page-content', '.notion-frame', '[data-block-id]', '.layout-content']; const check = () => { for (const s of selectors) { if (document.querySelector(s)) return resolve(s); } setTimeout(check, 500); }; check(); setTimeout(() => reject('timeout: no Notion content found'), 15000); })"
+playwright-cli -s=notion eval '() => new Promise((resolve, reject) => { const selectors = [".notion-page-content", ".notion-frame", "[data-block-id]", ".layout-content"]; const check = () => { for (const s of selectors) { if (document.querySelector(s)) return resolve(s); } setTimeout(check, 500); }; check(); setTimeout(() => reject("timeout: no Notion content found"), 15000); })'
 ```
 
 若 `playwright-cli eval` 回傳非零 exit code 或 stderr 包含 error/reject 訊息，視為逾時，進入 Step 2c 檢查是否需要登入。
@@ -125,15 +125,7 @@ playwright-cli -s=notion eval '() => { const toggles = document.querySelectorAll
 sleep 1
 ```
 
-接著使用 `snapshot` 取得 accessibility tree（存檔不注入 context）：
-
-```bash
-playwright-cli -s=notion snapshot
-```
-
-用 Read 工具讀取最新的 `.playwright-cli/*.yml` 檔案。
-
-使用 `eval` 提取頁面文字內容（主要方式，簡潔有效）：
+使用 `eval` 提取頁面文字內容（主要擷取方式，足以取得完整文字）：
 
 ```bash
 playwright-cli -s=notion eval '() => document.querySelector(".notion-page-content")?.innerText || "NO CONTENT"'
@@ -145,15 +137,15 @@ playwright-cli -s=notion eval '() => document.querySelector(".notion-page-conten
 playwright-cli -s=notion eval '() => { const title = document.querySelector(".notion-page-block, .notion-collection_view-block h1, [data-root=true] h1")?.textContent?.trim() || ""; const content = document.querySelector(".notion-page-content")?.innerText || ""; return JSON.stringify({ title, content }); }'
 ```
 
-> **注意：** 使用 `pageContent.children`（直接子元素）而非 `querySelectorAll('[data-block-id]')`（所有後代），
-> 避免嵌套區塊（如 toggle 內的段落）被重複擷取。
+> **注意：** `eval innerText` 為主要擷取方式，已足夠取得頁面文字內容。
+> 若使用者的需求提及 Status、負責人、截止日期等屬性欄位，或頁面預期含有留言討論，則在完成 2d 後額外執行 Step 2f。
 
 ### 2e. 處理長頁面
 
 若頁面內容需要捲動才能載入完全：
 
 ```bash
-playwright-cli -s=notion eval "() => new Promise(resolve => { let lastHeight = document.body.scrollHeight; const distance = 500; const timer = setInterval(() => { window.scrollBy(0, distance); const newHeight = document.body.scrollHeight; if (newHeight === lastHeight) { clearInterval(timer); resolve(true); } lastHeight = newHeight; }, 300); setTimeout(() => { clearInterval(timer); resolve(true); }, 30000); })"
+playwright-cli -s=notion eval '() => new Promise(resolve => { let lastHeight = document.body.scrollHeight; const distance = 500; const timer = setInterval(() => { window.scrollBy(0, distance); const newHeight = document.body.scrollHeight; if (newHeight === lastHeight) { clearInterval(timer); resolve(true); } lastHeight = newHeight; }, 300); setTimeout(() => { clearInterval(timer); resolve(true); }, 30000); })'
 ```
 
 > 使用 `scrollHeight` 穩定性檢查（連續兩次高度不變即停止），而非累計距離比較，
@@ -162,7 +154,36 @@ playwright-cli -s=notion eval "() => new Promise(resolve => { let lastHeight = d
 捲動完成後捲回頂部，重新擷取內容：
 
 ```bash
-playwright-cli -s=notion eval "() => window.scrollTo(0, 0)"
+playwright-cli -s=notion eval '() => window.scrollTo(0, 0)'
+```
+
+### 2f. 擷取 properties / comments（可選）
+
+若需求包含頁面屬性（如 Status、Assignee、Due Date）或留言討論，需從 snapshot YAML 提取：
+
+```bash
+playwright-cli -s=notion snapshot
+```
+
+找到最新 snapshot 檔案並用 Read 工具讀取：
+
+```bash
+ls -t .playwright-cli/*.yml | head -1
+```
+
+在 YAML 中搜尋以下區塊：
+
+- **Page properties：** 找到 `table "Page properties"` 區塊，提取各屬性的 key-value
+- **Comments：** 找到 `Comments` 或 `Discussion` 區塊，提取留言內容與作者
+
+> **注意：** `eval innerText` 無法取得 properties 和 comments，這些資訊僅存在於 accessibility tree（snapshot YAML）。
+
+### 2g. 關閉 session
+
+流程結束後關閉 browser session，釋放資源：
+
+```bash
+playwright-cli -s=notion close
 ```
 
 ---

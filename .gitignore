@@ -1,0 +1,3 @@
+# Playwright CLI runtime artifacts
+.playwright-cli/
+.playwright-mcp/

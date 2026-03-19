@@ -2,6 +2,15 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.16.0] - 2026-03-19
+
+### Changed
+- `/notion-plan`: Playwright MCP → `playwright-cli` CLI 遷移
+  - `allowed-tools` 移除所有 `mcp__playwright__*`，改用 Bash 執行 `playwright-cli`
+  - 新增 `--profile` 持久化 Notion 登入（首次 headed 登入後 session 持久保存）
+  - 新增 `-s=notion` 命名 session 管理
+  - snapshot 存檔按需讀取，避免 MCP 每次操作自動注入 ~58KB context
+
 ## [v1.15.0] - 2026-03-17
 
 ### Removed

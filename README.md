@@ -156,7 +156,8 @@ npx skills add ashe-li/agent-skills --global
 <summary>Features</summary>
 
 - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
-- Playwright MCP 抓取（Notion 為 CSR，不用 WebFetch）
+- `playwright-cli` CLI 抓取（Notion 為 CSR，不用 WebFetch 或 MCP）
+- `--profile` 持久化 Notion 登入，首次設定後免重複登入
 - 自動處理長頁面捲動載入、Toggle 展開、登入偵測
 - 擷取內容整理為結構化 Markdown 後，自動觸發 `/design`
 

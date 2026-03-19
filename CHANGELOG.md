@@ -2,6 +2,26 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.16.1] - 2026-03-19
+
+### Fixed
+- `/notion-plan`: 統一所有 `eval` 指令引號為 single-quote 外層、double-quote 內層（Step 2b/2e）
+- `/notion-plan`: `eval innerText` 升格為主要擷取方式，snapshot 降為可選（Step 2d）
+
+### Added
+- `/notion-plan`: 新增 Step 2f — 從 snapshot YAML 提取 Page properties 和 Comments（可選）
+- `/notion-plan`: 新增 Step 2g — `playwright-cli -s=notion close` 流程結束釋放 browser session
+- `.gitignore`: 排除 `.playwright-cli/` 和 `.playwright-mcp/` runtime artifacts
+
+## [v1.16.0] - 2026-03-19
+
+### Changed
+- `/notion-plan`: Playwright MCP → `playwright-cli` CLI 遷移
+  - `allowed-tools` 移除所有 `mcp__playwright__*`，改用 Bash 執行 `playwright-cli`
+  - 新增 `--profile` 持久化 Notion 登入（首次 headed 登入後 session 持久保存）
+  - 新增 `-s=notion` 命名 session 管理
+  - snapshot 存檔按需讀取，避免 MCP 每次操作自動注入 ~58KB context
+
 ## [v1.15.0] - 2026-03-17
 
 ### Removed

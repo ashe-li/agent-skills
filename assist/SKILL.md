@@ -111,6 +111,7 @@ ls -la
 | /model-route | 依任務複雜度推薦 model 層級 |
 | /checkpoint | 工作流中建立/驗證進度檢查點 |
 | /quality-gate | 品質閘——測試覆蓋率、lint、安全掃描 |
+| /simplify | code-reviewer 後自動修正（refactor-cleaner：dead code、命名、nesting） |
 
 ### ECC 資源分配原則
 
@@ -126,12 +127,12 @@ ls -la
 
 | 偵測到的情境 | 選擇的 Pipeline | 說明 |
 |---|---|---|
-| 有明確的新功能需求 | planner（含業界/學術方案調研）-> architect -> tdd-guide -> code-reviewer | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐 |
-| 有 bug 描述或錯誤訊息 | planner -> tdd-guide -> code-reviewer | bug 修復流程 |
-| 有未 commit 變更需 review | code-reviewer -> security-reviewer | 快速品質審查 |
+| 有明確的新功能需求 | planner（含業界/學術方案調研）-> architect -> tdd-guide -> code-reviewer -> /simplify | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐 |
+| 有 bug 描述或錯誤訊息 | planner -> tdd-guide -> code-reviewer -> /simplify | bug 修復流程 |
+| 有未 commit 變更需 review | code-reviewer -> /simplify -> security-reviewer | 快速品質審查；先修正再安全審查 |
 | build 失敗 | build-error-resolver | 直接修復 build |
-| 需要重構（使用者明確要求或偵測到 code smell） | architect -> refactor-cleaner -> code-reviewer | 安全重構流程 |
-| 需要寫文件 | doc-updater -> code-reviewer | 文件更新流程 |
+| 需要重構（使用者明確要求或偵測到 code smell） | architect -> refactor-cleaner -> code-reviewer | 安全重構流程（已有 refactor-cleaner，不加 /simplify 避免重複） |
+| 需要寫文件 | doc-updater -> code-reviewer | 文件更新流程（文件審查不適用程式碼簡化） |
 | Go 專案 | 在 pipeline 中加入 go-reviewer | 自動附加語言專用 reviewer |
 | Python 專案 | 在 pipeline 中加入 python-reviewer | 自動附加語言專用 reviewer |
 | 涉及資料庫 schema 或 query | 在 pipeline 中加入 database-reviewer | 自動附加資料庫 reviewer |

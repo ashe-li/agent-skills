@@ -31,6 +31,7 @@ npx skills add ashe-li/agent-skills --global
 /design <需求>              # 建立實作計畫 → plans/active/<slug>.md
 /assist                    # 自動偵測情境 → 最佳 pipeline
 /assist <任務>              # 指定任務描述
+/simplify                  # 自動修正程式碼（dead code、命名、nesting）
 /notion-plan <URL>         # Notion 需求 → 實作計畫
 /worktree                  # 列出所有 worktree 狀態
 /worktree create <name>    # 建立新 worktree
@@ -49,6 +50,7 @@ npx skills add ashe-li/agent-skills --global
 | [`/update`](#update--更新知識庫) | 文件更新 + 模式提取，可串接 `/pr` |
 | [`/design`](#design--開發設計) | 盤點資源 → planner → architect → plan |
 | [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
+| [`/simplify`](#simplify--自動修正) | code-reviewer 後自動修正（並行互補模式） |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
 | [`/worktree`](#worktree--git-worktree-管理) | Worktree 建立、狀態、清理 |
 | [`/curation`](#curation--learned-skills-品質管控) | 掃描 learned skills 格式、標準化、清理廢棄 |
@@ -127,12 +129,12 @@ npx skills add ashe-li/agent-skills --global
 
 | 情境 | Pipeline |
 |------|----------|
-| 新功能需求 | planner → architect → tdd-guide → code-reviewer |
-| Bug 修復 | planner → tdd-guide → code-reviewer |
-| 未 commit 變更需 review | code-reviewer → security-reviewer |
+| 新功能需求 | planner → architect → tdd-guide → code-reviewer → /simplify |
+| Bug 修復 | planner → tdd-guide → code-reviewer → /simplify |
+| 未 commit 變更需 review | code-reviewer → /simplify → security-reviewer |
 | Build 失敗 | build-error-resolver |
-| 重構 | architect → refactor-cleaner → code-reviewer |
-| 文件更新 | doc-updater → code-reviewer |
+| 重構 | architect → refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
+| 文件更新 | doc-updater → code-reviewer（文件審查不適用） |
 | Harness 設定優化 | harness-optimizer |
 | 自主迴圈任務 | loop-operator |
 | 預定義工作流模板 | `/orchestrate` command |
@@ -148,6 +150,35 @@ npx skills add ashe-li/agent-skills --global
 
 </details>
 
+### `/simplify` — 自動修正
+
+code-reviewer 後自動修正程式碼品質問題，形成「診斷 → 治療」並行互補 pipeline。
+
+<details>
+<summary>Features & 並行互補模式</summary>
+
+**Pipeline:** code-reviewer（只讀、診斷）→ /simplify（可寫、治療）
+
+- 委派 refactor-cleaner agent（model: sonnet）執行自動修正
+- 修正範圍：dead code 移除、命名改善、nesting 降低、重複程式碼合併
+- HITL 確認：修正完成後讓使用者選擇適用全部 / 逐一確認 / 跳過
+- 無可修正問題時自動跳過，不增加額外 token 消耗
+
+**整合位置：**
+
+| Skill | 整合方式 |
+|-------|---------|
+| `/pr` | Step 2b，Quick Review 後自動修正 |
+| `/assist` | 新功能、Bug 修復、Review pipeline 自動附加 |
+| `/design` | Plan 模板 Phase 2 品質保障步驟 |
+| `/update` | 不整合（文件審查不適用） |
+
+**不加 /simplify 的情況：**
+- 重構 pipeline（已有 refactor-cleaner，避免重複）
+- 文件審查 pipeline（code-reviewer 審查文件品質，非程式碼）
+
+</details>
+
 ### `/notion-plan` — Notion 需求轉計畫
 
 貼上 Notion URL，自動擷取內容並串接 `/design` 建立實作計畫。
@@ -156,8 +187,7 @@ npx skills add ashe-li/agent-skills --global
 <summary>Features</summary>
 
 - 支援 `notion.so`、`notion.site`、短網址等多種 URL 格式
-- `playwright-cli` CLI 抓取（Notion 為 CSR，不用 WebFetch 或 MCP）
-- `--profile` 持久化 Notion 登入，首次設定後免重複登入
+- Playwright MCP 抓取（Notion 為 CSR，不用 WebFetch）
 - 自動處理長頁面捲動載入、Toggle 展開、登入偵測
 - 擷取內容整理為結構化 Markdown 後，自動觸發 `/design`
 
@@ -311,6 +341,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ Session 要收尾 ───→ /update（或 /update /pr）
 ├─ 準備開始新工作 ───→ /design <需求>
 ├─ 不確定 ──────────→ /assist
+├─ 程式碼要簡化 ────→ /simplify
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr
 ├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop
 ├─ Learned skills 要整理 → /curation

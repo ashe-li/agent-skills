@@ -1,44 +1,13 @@
 ---
 name: notion-plan
 description: 貼上 Notion URL，自動抓取頁面需求內容，串接 /design 建立實作計畫。
-allowed-tools: Bash, Read, AskUserQuestion, Skill
+allowed-tools: Bash, Read, AskUserQuestion, Skill, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for, mcp__playwright__browser_click
 argument-hint: <Notion URL>
 ---
 
 # /notion-plan — 從 Notion URL 自動建立實作計畫
 
 貼上 Notion URL，自動擷取頁面需求內容並串接 `/design` 建立實作計畫。一條指令完成 Notion 抓取 → 結構化整理 → plans/active/<slug>.md 產出。
-
-> **Token 效率：** 使用 `playwright-cli` (CLI) 而非 Playwright MCP。
-> snapshot 存入 `.playwright-cli/*.yml` 檔案，按需讀取，避免每次操作自動注入 ~58KB 到 context。
-
----
-
-## Step 0：登入持久化（首次設定）
-
-使用 `--profile` 持久化 Notion session，避免每次重新登入。
-
-Profile 路徑：`~/.playwright-cli/notion-profile`
-
-**首次登入：** 若偵測到需要登入（Step 2c），使用 AskUserQuestion 提供選項：
-
-> Notion 需要登入才能存取此頁面。
->
-> 選項：
-> 1. **幫我開啟登入頁面** — 自動執行 headed 瀏覽器，開啟 Notion 登入頁面供手動登入
-> 2. **手動貼上內容** — 跳過瀏覽器登入，直接貼上頁面需求內容
-
-若使用者選擇「幫我開啟」：
-
-```bash
-# 先關閉現有 session（避免衝突）
-playwright-cli -s=notion close
-# 以 headed 模式開啟登入頁面
-playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwright-cli/notion-profile --headed
-```
-
-開啟後提示使用者：「已開啟瀏覽器，請登入 Notion。完成後告訴我。」
-使用者確認登入後，用同一 session 導航至目標頁面繼續抓取。登入狀態會持久保存，後續不需重複登入。
 
 ---
 
@@ -60,131 +29,119 @@ playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwri
 
 ---
 
-## Step 2：Playwright CLI 抓取
+## Step 2：Playwright MCP 抓取
 
-> **不使用 WebFetch**：Notion 100% client-side rendering，WebFetch 永遠只能拿到載入骨架。
-> **不使用 Playwright MCP**：MCP 每次操作注入 ~58KB snapshot，改用 CLI 存檔讀取。
-
-所有 `playwright-cli` 指令使用 session `-s=notion` 和 persistent profile `--profile ~/.playwright-cli/notion-profile`。
-
-> **引號規則：** `eval` 指令外層用 **single-quote**，內部 JS 用 **double-quote**。
-> 避免 `\"` escape 導致 Playwright serialization 錯誤。
+> **不使用 WebFetch**：Notion 100% client-side rendering，WebFetch 永遠只能拿到載入骨架，直接用 Playwright。
 
 ### 2a. 導航至頁面
 
-```bash
-playwright-cli -s=notion open "<notion_url>" --profile ~/.playwright-cli/notion-profile
+```
+mcp__playwright__browser_navigate(url=<notion_url>)
 ```
 
 ### 2b. 等待內容載入
 
-使用 `eval` 輪詢等待 Notion 內容 selector 出現：
-
-```bash
-playwright-cli -s=notion eval '() => new Promise((resolve, reject) => { const selectors = [".notion-page-content", ".notion-frame", "[data-block-id]", ".layout-content"]; const check = () => { for (const s of selectors) { if (document.querySelector(s)) return resolve(s); } setTimeout(check, 500); }; check(); setTimeout(() => reject("timeout: no Notion content found"), 15000); })'
+```
+mcp__playwright__browser_wait_for(selector=".notion-page-content", timeout=10000)
 ```
 
-若 `playwright-cli eval` 回傳非零 exit code 或 stderr 包含 error/reject 訊息，視為逾時，進入 Step 2c 檢查是否需要登入。
+若等待逾時，嘗試備用 selector：
+- `.notion-frame`
+- `[data-block-id]`
+- `.layout-content`
 
 ### 2c. 如需登入
 
-取得 snapshot 檢查頁面狀態：
+使用 `browser_snapshot` 檢查頁面狀態。判斷是否為登入頁面：
+- snapshot 不含任何 `[data-block-id]` 區塊
+- 且包含 `input[type="email"]` 或文字 "Sign in"、"Log in"、"Continue with"
 
-```bash
-playwright-cli -s=notion snapshot
-```
+若確認為登入頁面，使用 AskUserQuestion 告知使用者：
 
-讀取 snapshot 檔案判斷是否為登入頁面。`playwright-cli snapshot` 會將檔案寫入執行時的工作目錄下 `.playwright-cli/` 資料夾：
+> 此頁面需要登入。請在瀏覽器中登入 Notion 後重試，
+> 或將頁面設為公開（Share → Publish to web）。
 
-```bash
-# 找到最新的 snapshot 檔案（確保在專案根目錄執行）
-ls -t .playwright-cli/*.yml | head -1
-```
-
-然後用 Read 工具讀取該 yml 檔案。判斷條件：
-- snapshot 不含任何 `data-block-id` 相關內容
-- 且包含 `email`、"Sign in"、"Log in"、"Continue with" 等字樣
-
-若確認為登入頁面，使用 AskUserQuestion 提供選項（參見 Step 0）：
-- **幫我開啟登入頁面** — 自動執行 headed 瀏覽器
-- **手動貼上內容** — 跳過登入，直接貼上需求
-
-若已有 persistent profile 且 session 有效，直接繼續。
+若使用者的 Playwright 已有 Notion session（persistent profile），則直接繼續。
 
 ### 2d. 擷取頁面內容
 
 先展開所有 Toggle 區塊（Notion toggle 預設收合，子內容不在 DOM 中）：
 
-```bash
-playwright-cli -s=notion eval '() => { const toggles = document.querySelectorAll(".notion-toggle-block > div[role=button]"); toggles.forEach(t => { if (t.getAttribute("aria-expanded") !== "true") t.click(); }); return toggles.length; }'
+```javascript
+() => {
+  const toggles = document.querySelectorAll('.notion-toggle-block > div[role="button"]');
+  toggles.forEach(t => {
+    if (t.getAttribute('aria-expanded') !== 'true') t.click();
+  });
+  return toggles.length;
+}
 ```
 
-若有 toggle 被展開，等待 1 秒讓子內容載入：
+若有 toggle 被展開，等待 1 秒讓子內容載入。
 
-```bash
-sleep 1
+接著使用 `browser_snapshot` 取得 accessibility tree：
+
+```
+mcp__playwright__browser_snapshot()
 ```
 
-使用 `eval` 提取頁面文字內容（主要擷取方式，足以取得完整文字）：
+若內容過長或需要更精確擷取，使用 `browser_evaluate` 執行 DOM 提取：
 
-```bash
-playwright-cli -s=notion eval '() => document.querySelector(".notion-page-content")?.innerText || "NO CONTENT"'
+```javascript
+() => {
+  // 擷取頁面標題
+  const title = document.querySelector('.notion-page-block, .notion-collection_view-block h1, [data-root="true"] h1')?.textContent?.trim() || '';
+
+  // 只擷取 page content 容器下的頂層區塊，避免嵌套重複
+  const pageContent = document.querySelector('.notion-page-content');
+  const topLevelBlocks = pageContent
+    ? Array.from(pageContent.children).filter(el => el.dataset.blockId)
+    : Array.from(document.querySelectorAll('[data-block-id]'));
+
+  const content = [];
+  topLevelBlocks.forEach(block => {
+    const text = block.innerText?.trim();
+    if (text && text.length > 0) {
+      content.push(text);
+    }
+  });
+
+  return { title, content: content.join('\n\n') };
+}
 ```
 
-若需要更結構化的提取（標題 + 內容分離）：
-
-```bash
-playwright-cli -s=notion eval '() => { const title = document.querySelector(".notion-page-block, .notion-collection_view-block h1, [data-root=true] h1")?.textContent?.trim() || ""; const content = document.querySelector(".notion-page-content")?.innerText || ""; return JSON.stringify({ title, content }); }'
-```
-
-> **注意：** `eval innerText` 為主要擷取方式，已足夠取得頁面文字內容。
-> 若使用者的需求提及 Status、負責人、截止日期等屬性欄位，或頁面預期含有留言討論，則在完成 2d 後額外執行 Step 2f。
+> **注意：** 使用 `pageContent.children`（直接子元素）而非 `querySelectorAll('[data-block-id]')`（所有後代），
+> 避免嵌套區塊（如 toggle 內的段落）被重複擷取。
 
 ### 2e. 處理長頁面
 
 若頁面內容需要捲動才能載入完全：
 
-```bash
-playwright-cli -s=notion eval '() => new Promise(resolve => { let lastHeight = document.body.scrollHeight; const distance = 500; const timer = setInterval(() => { window.scrollBy(0, distance); const newHeight = document.body.scrollHeight; if (newHeight === lastHeight) { clearInterval(timer); resolve(true); } lastHeight = newHeight; }, 300); setTimeout(() => { clearInterval(timer); resolve(true); }, 30000); })'
+```javascript
+() => {
+  return new Promise(resolve => {
+    let lastHeight = document.body.scrollHeight;
+    const distance = 500;
+    const timer = setInterval(() => {
+      window.scrollBy(0, distance);
+      const newHeight = document.body.scrollHeight;
+      // 若 scrollHeight 不再增長，表示已載入完畢
+      if (newHeight === lastHeight) {
+        clearInterval(timer);
+        resolve(true);
+      }
+      lastHeight = newHeight;
+    }, 300);
+    // 安全上限：最多捲動 30 秒
+    setTimeout(() => { clearInterval(timer); resolve(true); }, 30000);
+  });
+}
 ```
 
 > 使用 `scrollHeight` 穩定性檢查（連續兩次高度不變即停止），而非累計距離比較，
 > 避免 lazy-load 不斷擴展頁面導致無限捲動。
 
-捲動完成後捲回頂部，重新擷取內容：
-
-```bash
-playwright-cli -s=notion eval '() => window.scrollTo(0, 0)'
-```
-
-### 2f. 擷取 properties / comments（可選）
-
-若需求包含頁面屬性（如 Status、Assignee、Due Date）或留言討論，需從 snapshot YAML 提取：
-
-```bash
-playwright-cli -s=notion snapshot
-```
-
-找到最新 snapshot 檔案並用 Read 工具讀取：
-
-```bash
-ls -t .playwright-cli/*.yml | head -1
-```
-
-在 YAML 中搜尋以下區塊：
-
-- **Page properties：** 找到 `table "Page properties"` 區塊，提取各屬性的 key-value
-- **Comments：** 找到 `Comments` 或 `Discussion` 區塊，提取留言內容與作者
-
-> **注意：** `eval innerText` 無法取得 properties 和 comments，這些資訊僅存在於 accessibility tree（snapshot YAML）。
-
-### 2g. 關閉 session
-
-流程結束後關閉 browser session，釋放資源：
-
-```bash
-playwright-cli -s=notion close
-```
+捲動完成後捲回頂部，重新擷取內容。
 
 ---
 
@@ -229,8 +186,8 @@ playwright-cli -s=notion close
 
 檢查整理後的 Markdown 是否包含有效需求內容：
 
-- 有實質內容（標題 + 至少一段文字或清單）→ 進入 Step 5
-- 內容為空、僅有標題、或明顯不完整 → 使用 AskUserQuestion 詢問使用者：
+- ✅ 有實質內容（標題 + 至少一段文字或清單）→ 進入 Step 5
+- ❌ 內容為空、僅有標題、或明顯不完整 → 使用 AskUserQuestion 詢問使用者：
 
 > 擷取到的內容似乎不完整。請確認：
 > 1. 頁面是否需要登入？
@@ -263,17 +220,8 @@ Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的
 /notion-plan https://workspace.notion.site/public-page-abc123
 ```
 
-## Token 效率比較
-
-| 項目 | MCP (舊) | CLI (新) |
-|------|----------|----------|
-| snapshot 注入方式 | 自動注入 context (~58KB/次) | 存檔按需讀取 |
-| 典型 5 步操作 | ~290KB context 消耗 | ~0KB（僅讀取需要的檔案） |
-| 登入持久化 | 無 | `--profile` 持久 session |
-| Session 管理 | 無 | `-s=notion` 命名 session |
-
 ## 限制
 
-- 首次使用需在 headed 模式下手動登入 Notion（之後 session 持久保存）
+- 私人頁面需要 Playwright 有 Notion session 或使用者手動登入
 - Database view 的篩選/排序/分組以頁面當前狀態為準
 - 非常長的頁面（100+ 區塊）可能需要多次捲動，擷取時間較長

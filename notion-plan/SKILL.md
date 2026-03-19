@@ -20,15 +20,25 @@ argument-hint: <Notion URL>
 
 Profile 路徑：`~/.playwright-cli/notion-profile`
 
-**首次登入：** 若偵測到需要登入（Step 2c），使用 AskUserQuestion 引導使用者：
+**首次登入：** 若偵測到需要登入（Step 2c），使用 AskUserQuestion 提供選項：
 
-> Notion 需要登入。請執行以下指令在 headed 模式下手動登入：
+> Notion 需要登入才能存取此頁面。
 >
-> ```bash
-> playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwright-cli/notion-profile --headed
-> ```
->
-> 登入完成後，輸入 `done` 繼續。登入狀態會持久保存，後續不需重複登入。
+> 選項：
+> 1. **幫我開啟登入頁面** — 自動執行 headed 瀏覽器，開啟 Notion 登入頁面供手動登入
+> 2. **手動貼上內容** — 跳過瀏覽器登入，直接貼上頁面需求內容
+
+若使用者選擇「幫我開啟」：
+
+```bash
+# 先關閉現有 session（避免衝突）
+playwright-cli -s=notion close
+# 以 headed 模式開啟登入頁面
+playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwright-cli/notion-profile --headed
+```
+
+開啟後提示使用者：「已開啟瀏覽器，請登入 Notion。完成後告訴我。」
+使用者確認登入後，用同一 session 導航至目標頁面繼續抓取。登入狀態會持久保存，後續不需重複登入。
 
 ---
 
@@ -92,7 +102,9 @@ ls -t .playwright-cli/*.yml | head -1
 - snapshot 不含任何 `data-block-id` 相關內容
 - 且包含 `email`、"Sign in"、"Log in"、"Continue with" 等字樣
 
-若確認為登入頁面，使用 AskUserQuestion 引導使用者（參見 Step 0）。
+若確認為登入頁面，使用 AskUserQuestion 提供選項（參見 Step 0）：
+- **幫我開啟登入頁面** — 自動執行 headed 瀏覽器
+- **手動貼上內容** — 跳過登入，直接貼上需求
 
 若已有 persistent profile 且 session 有效，直接繼續。
 

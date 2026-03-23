@@ -100,6 +100,8 @@ ls -la
 | database-reviewer | 資料庫相關 |
 | harness-optimizer | agent harness 設定優化（hooks/evals/routing） |
 | loop-operator | 自主迴圈運行與監控 |
+| docs-lookup | Context7 文件與 API 查詢 |
+| typescript-reviewer | TypeScript/JavaScript 專案型別安全與 best-practice 審查 |
 
 **可用 Commands（根據情境篩選）：**
 
@@ -112,6 +114,13 @@ ls -la
 | /checkpoint | 工作流中建立/驗證進度檢查點 |
 | /quality-gate | 品質閘——測試覆蓋率、lint、安全掃描 |
 | /simplify | code-reviewer 後自動修正（refactor-cleaner：dead code、命名、nesting） |
+| /docs | 需要查詢 Context7 文件或 API 行為 |
+| /aside | 需要暫時切換話題但不丟失當前任務 context |
+| /skill-health | 檢視 skill portfolio 健康狀態與冗餘/缺口分析 |
+| /prompt-optimize | 優化 prompt、SKILL.md 描述、system instructions 品質 |
+| /blueprint | 需跨 session 持續推進的大型建構計畫 |
+| /context-budget | context window 即將超限時稽核用量 |
+| /save-session \| /resume-session | 跨 session 保存/恢復工作進度 |
 
 ### ECC 資源分配原則
 
@@ -142,6 +151,11 @@ ls -la
 | 使用者詢問該用哪個 model | `/model-route` command | 依任務複雜度推薦 Haiku/Sonnet/Opus |
 | 長時間迴圈任務需監控 | loop-operator + `/loop-status` | 啟動迴圈後配合狀態查詢 |
 | 需要多模型協作（ace-tool MCP 可用時） | `multi-*` commands | 條件：偵測到 ace-tool MCP 已設定時才路由 |
+| 需要查詢特定 API 或框架文件 | `/docs` command 或 docs-lookup agent | Context7 MCP 查詢，比 WebFetch 更準確 |
+| TypeScript/JavaScript 專案 | 在 pipeline 中加入 typescript-reviewer | 自動附加語言專用 reviewer |
+| 需要優化 prompt/SKILL.md 描述品質 | `/prompt-optimize` command | advisory only，不執行實際任務 |
+| context 即將超出限制或效能下降 | `/context-budget` command | 稽核各元件用量、建議精簡 |
+| 長時間/跨 session 任務需要保存進度 | `/save-session` → 下次 `/resume-session` | 在適當中斷點儲存狀態 |
 | 不確定 / 多種可能 | 列出建議 pipeline，讓使用者選擇 | 透過 AskUserQuestion 互動 |
 
 ### 路由判斷邏輯

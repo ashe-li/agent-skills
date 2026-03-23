@@ -32,6 +32,8 @@ ls -la ~/.claude/scripts/skills-triage.sh
 
 顯示已退役數量、清單、及審計日誌。
 
+如果 `/skill-health` command 可用，建議先執行以取得 portfolio 全局視圖（重複覆蓋率、gap 分析），再決定退役優先順序。
+
 ## Step 2: 退役 Skill
 
 使用者提供 skill 名稱和原因時：

@@ -29,6 +29,9 @@ cmd_apply() {
     local f="$SKILLS_DIR/$skill/SKILL.md"
     if [ -f "$f" ]; then
       mv "$f" "$SKILLS_DIR/$skill/SKILL.deferred.md"
+      local ts; ts="$(date +%Y-%m-%d)"
+      local reason="${DEFER_REASON:-ECC update}"
+      echo "${ts} | ${skill} | ${reason}" >> "${SCRIPT_DIR}/DEFER_LOG.md"
       count=$((count + 1))
     fi
   done < <(read_conf)
@@ -82,10 +85,23 @@ cmd_list() {
     if [ -f "$dir/SKILL.md" ]; then
       printf "%-40s %s\n" "$name" "active"
     elif [ -f "$dir/SKILL.deferred.md" ]; then
-      printf "%-40s %s\n" "$name" "deferred"
+      local status="deferred"
+      if [[ -f "${SCRIPT_DIR}/DEFER_LOG.md" ]]; then
+        local reason_line; reason_line="$(grep "| ${name} |" "${SCRIPT_DIR}/DEFER_LOG.md" 2>/dev/null | tail -1 | cut -d'|' -f3 | xargs)" || true
+        [[ -n "$reason_line" ]] && status="deferred (${reason_line})"
+      fi
+      printf "%-40s %s\n" "$name" "$status"
     fi
   done
 }
+
+DEFER_REASON=""
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --reason) DEFER_REASON="${2:-ECC update}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 
 case "${1:-help}" in
   apply)       cmd_apply ;;

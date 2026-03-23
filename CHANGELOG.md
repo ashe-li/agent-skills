@@ -2,6 +2,15 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.17.0] - 2026-03-21
+
+### Changed
+- `/design`: 資源盤點去版本化，新增 docs-lookup/typescript-reviewer agents 和 /docs /aside /skill-health /prompt-optimize /blueprint /context-budget /save-session /resume-session commands；Step 2 新增多 session 複雜度路徑
+- `/assist`: agent 表新增 docs-lookup/typescript-reviewer；commands 表新增 7 項 1.9.0 commands；routing 表新增 5 項情境
+- `/ecc-skill-defer`: 新增 `--reason` 支援 defer 原因追蹤（DEFER_LOG.md）；新增 /skill-health 整合建議；conf 新增 39 個 1.9.0 語言/領域/媒體 skills
+- `/triage`: Step 1 新增 /skill-health 補充視圖建議
+- `README.md`: 總覽表補齊 /triage 和 /learn-eval-deep；決策樹新增對應入口
+
 ## [v1.16.1] - 2026-03-20
 
 ### Fixed

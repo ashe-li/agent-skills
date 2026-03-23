@@ -57,6 +57,8 @@ npx skills add ashe-li/agent-skills --global
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | Defer/restore skills 減少 init tokens |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
+| [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
+| [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
 
@@ -349,6 +351,8 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 需要 worktree ───→ /worktree create <name>
 ├─ Worktree 要清理 ─→ /worktree cleanup
 ├─ 有 Notion ticket ─→ /notion-plan <URL>
+├─ Learned skills 要分流 → /triage
+├─ Skill 品質要深度驗證 → /learn-eval-deep <skill>
 └─ 優化 init tokens ─→ /ecc-skill-defer apply
 ```
 

@@ -138,7 +138,7 @@ Agent(subagent_type="everything-claude-code:architect")
 | ECC 資源合理 | 每個 agent/skill 在其設計用途內使用 |
 | 驗收可測 | 每個驗收標準都可客觀驗證 |
 | 業界/學術支撐 | 每個技術方案都有明確的業界標準、學術研究或標準化方案參照 |
-| 實作後工具 | plan 的步驟中包含實作後的品質保障（code-reviewer、/update、/verify 等） |
+| 實作後工具 | plan 的步驟中包含實作後的品質保障（code-reviewer、/simplify、/update、/verify 等） |
 | Eval 基線 | 若涉及行為變更，計畫中包含 eval 基線建立與回歸驗證步驟（參考 `/quality-gate`） |
 
 如果發現問題，直接修正計畫內容。
@@ -181,6 +181,7 @@ Agent(subagent_type="everything-claude-code:architect")
 |----------|------|-------|
 | tdd-guide | agent | Step 3: 撰寫測試 |
 | code-reviewer | agent | Step 5: 品質審查 |
+| refactor-cleaner | agent | Phase 2: /simplify 自動修正（dead code、命名、nesting、重複程式碼合併） |
 | ... | ... | ... |
 
 ## Industry & Standards Reference
@@ -198,6 +199,7 @@ Agent(subagent_type="everything-claude-code:architect")
 
 ### Phase 2: [品質保障]
 - [ ] 執行 code-reviewer 審查程式碼品質
+- [ ] 執行 /simplify 自動修正（refactor-cleaner：dead code、命名、nesting、重複程式碼合併）
 - [ ] 執行 security-reviewer 檢查安全性
 - [ ] 執行 /verify 進行全面驗證
 

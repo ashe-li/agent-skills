@@ -2,25 +2,26 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
-## [v1.16.1] - 2026-03-19
+## [v1.16.1] - 2026-03-20
 
 ### Fixed
-- `/notion-plan`: 統一所有 `eval` 指令引號為 single-quote 外層、double-quote 內層（Step 2b/2e）
-- `/notion-plan`: `eval innerText` 升格為主要擷取方式，snapshot 降為可選（Step 2d）
-
-### Added
-- `/notion-plan`: 新增 Step 2f — 從 snapshot YAML 提取 Page properties 和 Comments（可選）
-- `/notion-plan`: 新增 Step 2g — `playwright-cli -s=notion close` 流程結束釋放 browser session
-- `.gitignore`: 排除 `.playwright-cli/` 和 `.playwright-mcp/` runtime artifacts
+- `pr/SKILL.md`: allowed-tools 補上 `Agent`（Step 2b 委派 refactor-cleaner 需要 Agent tool 權限）
+- `pr/SKILL.md`: fenced code block 加上 python 語言標識（MD040）
+- `pr/SKILL.md`: 「適用所有修正」→「套用所有修正」錯字修正
+- `design/SKILL.md`: ECC Resources 表格與 Phase 2 checklist 補上「重複程式碼合併」，與 pr/README 一致
 
 ## [v1.16.0] - 2026-03-19
 
-### Changed
-- `/notion-plan`: Playwright MCP → `playwright-cli` CLI 遷移
-  - `allowed-tools` 移除所有 `mcp__playwright__*`，改用 Bash 執行 `playwright-cli`
-  - 新增 `--profile` 持久化 Notion 登入（首次 headed 登入後 session 持久保存）
-  - 新增 `-s=notion` 命名 session 管理
-  - snapshot 存檔按需讀取，避免 MCP 每次操作自動注入 ~58KB context
+### Added
+- `/simplify` 並行互補整合：code-reviewer（診斷）後自動加入 refactor-cleaner（治療）
+  - `/pr`: 新增 Step 2b 自動修正步驟，Quick Review 後委派 refactor-cleaner 修正 dead code、命名、nesting
+  - `/assist`: 新功能、Bug 修復、Review pipeline 自動附加 `/simplify`（重構和文件 pipeline 除外）
+  - `/design`: Plan 模板 Phase 2 品質保障加入 `/simplify`，ECC Resources 表格加入 refactor-cleaner 範例
+  - 所有自動修正步驟含 HITL 確認（套用全部 / 逐一確認 / 跳過）
+- `README.md`: 新增 `/simplify` skill 描述、Usage quick-reference、選什麼流程圖條目
+
+### Unchanged
+- `/update`: 文件審查不適用程式碼簡化，保持原樣
 
 ## [v1.15.0] - 2026-03-17
 

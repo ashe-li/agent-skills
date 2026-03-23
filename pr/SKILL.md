@@ -1,7 +1,7 @@
 ---
 name: pr
 description: 總結當前工作、commit、推送並建立或更新 PR。自動將對話脈絡寫入 PR description，確保 reviewer 能快速理解背景。
-allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion
+allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion, Agent
 argument-hint: [PR 號碼或留空建立新 PR]
 ---
 
@@ -70,6 +70,31 @@ Review 完成後，使用 AskUserQuestion 詢問使用者：
 - **先修正問題**：先處理 review 發現的問題，修完再重新執行 `/pr`
 
 如果使用者選擇「先修正問題」，則根據 review 結果逐一修正，修正完後重新從 Step 1 開始。
+
+## Step 2b: /simplify — 自動修正
+
+若 Step 2 發現可自動修正的問題（code quality、style），委派 refactor-cleaner agent 執行自動修正：
+
+```python
+Agent(subagent_type="everything-claude-code:refactor-cleaner")
+```
+
+**修正範圍：**
+
+- Dead code 移除
+- 命名改善（更具語意）
+- Nesting 降低（提前 return、guard clause）
+- 重複程式碼合併
+
+**HITL 確認：**
+
+修正完成後，使用 AskUserQuestion 呈現變更摘要，讓使用者選擇：
+
+1. **套用所有修正** — 接受全部變更
+2. **逐一確認** — 逐項決定
+3. **跳過** — 不套用自動修正
+
+> 若 Step 2 未發現可自動修正的問題，跳過此步驟。
 
 ## Step 3: Commit 當前變更
 

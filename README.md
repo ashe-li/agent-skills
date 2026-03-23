@@ -259,7 +259,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - `restore <name>` 臨時啟用 / `restore --all` 全部恢復
 - `status` / `list` 檢視目前狀態
 - 可自訂 `ecc-skill-defer.conf` 控制 defer 清單
-- 預設 defer 24 skills，支援 marketplace 與 cache 雙路徑
+- 預設 defer 61 skills（依 ECC 1.9.0 模組結構組織），支援 marketplace 與 cache 雙路徑
 
 </details>
 

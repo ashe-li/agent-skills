@@ -2,6 +2,13 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.17.1] - 2026-03-23
+
+### Changed
+- `/ecc-skill-defer`: conf 依 ECC 1.9.0 `install-modules.json` 模組結構重組；新增 swift-apple（6 skills）和 framework-specific security（4 skills）；113 → 52 active（61 deferred）
+- `DEFER_REFERENCE.md`: 改為模組對齊的雙表格格式（Whole Modules / Within-Module）
+- `README.md`: defer 數量更新 24 → 61
+
 ## [v1.17.0] - 2026-03-21
 
 ### Changed

@@ -2,6 +2,14 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.18.0] - 2026-03-26
+
+### Added
+- `rules/skill-auto-match.md`: 強制 skill 查詢機制 — 回應前自動比對 skill 映射表，匹配就 invoke Skill tool（靈感：obra/superpowers）
+- `rules/subagent-isolation.md`: Subagent 隔離原則 — 規範何時用 Agent 工具，防止探索任務污染主 context
+- `rules/verification-gates.md`: 驗證門檻 — 3 個強制閘門（Plan / Implementation / PR），完成前必須附客觀證據
+- `/systematic-debugging`: 結構化除錯 skill — 4 階段流程 Observe → Hypothesize → Test → Fix，禁止盲目重試，失敗 3 次強制 escalate
+
 ## [v1.17.2] - 2026-03-25
 
 ### Added

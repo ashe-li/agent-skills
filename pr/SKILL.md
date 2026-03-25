@@ -133,7 +133,38 @@ gh pr create --base hotfix ...
 gh pr create --base master ...
 ```
 
+### CHANGELOG 檢查（Release PR 專用）
+
+當 base branch 為 `master` 或 `main` 時，**必須**檢查 CHANGELOG.md：
+
+1. 確認專案根目錄是否有 `CHANGELOG.md`
+2. 如果有，檢查最新條目是否涵蓋本次 PR 的變更：
+   - 讀取 CHANGELOG.md 最新版本區塊
+   - 比對 `git log <base-branch>..HEAD --oneline` 的 commits
+   - 如果有 commits 未被記錄在 CHANGELOG 中 → 使用 AskUserQuestion 提醒：
+     > CHANGELOG.md 尚未包含以下變更：
+     > - `<未記錄的 commit 摘要>`
+     >
+     > 1. **幫我更新 CHANGELOG** — 自動補上缺少的條目
+     > 2. **跳過** — 不更新 CHANGELOG，繼續 PR 流程
+3. 如果專案沒有 CHANGELOG.md，跳過此步驟
+
 ### PR Title 格式
+
+**依據 base branch 和 ticket 參照決定 PR 標題：**
+
+#### Release PR（base branch 為 master/main）
+
+當 PR 的 base branch 為 `master` 或 `main` 時，標題**必須**使用 Release 格式：
+
+- 格式：`Release vX.Y.Z: <摘要>`
+- 範例：`Release v1.18.0: add skill defer + CHANGELOG updates`
+- 版本號推斷優先順序：CHANGELOG.md 最新版本 → package.json version → git tag
+- 摘要從 PR 包含的 commits 中提取主要變更，簡短描述即可
+
+> 更新既有 PR 時，也必須檢查 title 是否符合此規則，不符合則一併更新。
+
+#### 一般 PR（base branch 非 master/main）
 
 **使用 Step 1b 提取的 ticket 參照決定 PR 標題：**
 

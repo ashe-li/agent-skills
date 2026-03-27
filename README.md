@@ -48,7 +48,7 @@ npx skills add ashe-li/agent-skills --global
 |-------|------|
 | [`/pr`](#pr--pr-自動化) | commit + push + PR，自動寫 description |
 | [`/update`](#update--更新知識庫) | 文件更新 + 模式提取，可串接 `/pr` |
-| [`/design`](#design--開發設計) | 盤點資源 → planner → architect → plan |
+| [`/design`](#design--開發設計) | 盤點資源 → planner → plan |
 | [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
 | [`/simplify`](#simplify--自動修正) | code-reviewer 後自動修正（並行互補模式） |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
@@ -103,17 +103,15 @@ npx skills add ashe-li/agent-skills --global
 
 ### `/design` — 開發設計
 
-接收功能需求，盤點 ECC 資源，透過 planner + architect 建立實作計畫。輸出至 `plans/active/<slug>.md`。
+接收功能需求，盤點 ECC 資源，透過 planner 建立實作計畫。輸出至 `plans/active/<slug>.md`。
 
 <details>
 <summary>Features</summary>
 
-**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner → architect → plan
+**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner → plan
 
 - 自動盤點 agents/skills/commands，資源分配須經盤點確認
-- 複雜度評估：簡單需求跳過 architect，走快速路徑
 - planner 含業界實踐與標準化方案參照（RFC、OWASP、12-Factor 等）
-- architect 審查架構 + 文件影響評估 + 參照可靠性
 - 計畫品質自審檢查表（完整性、可執行性、依賴正確性、業界支撐）
 - plan 含 Industry & Standards Reference 表格和品質保障步驟
 - Step 0 條件式 HITL：評估複雜度後詢問是否啟用 TaskCreate/TaskUpdate
@@ -131,11 +129,11 @@ npx skills add ashe-li/agent-skills --global
 
 | 情境 | Pipeline |
 |------|----------|
-| 新功能需求 | planner → architect → tdd-guide → code-reviewer → /simplify |
+| 新功能需求 | planner → tdd-guide → code-reviewer → /simplify |
 | Bug 修復 | planner → tdd-guide → code-reviewer → /simplify |
 | 未 commit 變更需 review | code-reviewer → /simplify → security-reviewer |
 | Build 失敗 | build-error-resolver |
-| 重構 | architect → refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
+| 重構 | planner → refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
 | 文件更新 | doc-updater → code-reviewer（文件審查不適用） |
 | Harness 設定優化 | harness-optimizer |
 | 自主迴圈任務 | loop-operator |
@@ -315,11 +313,12 @@ Learned skills：144 → 134（-6.9%）。所有操作可逆（`skills-triage.sh
 
 | Agent | Delta | 說明 |
 |-------|-------|------|
-| `architect` | **-0.50** | 消融實驗中表現最差，建議 ECC 上游調查 |
+| `architect` | **-0.50** | 消融實驗中表現最差，**已從 /design 和 /assist pipeline 移除** |
 | `build-error-resolver` | **-0.13** | 同為負向效果 |
 
 這兩個 agents 位於 ECC plugin cache（`~/.claude/plugins/cache/everything-claude-code/`），
 不適合直接退役（ECC 更新會覆蓋）。已在 `RETIRED_LOG.md` 標記 documented-only。
+`architect` 已從所有本地 skill pipeline 中移除，避免退化影響。
 
 ### CI 品質閘門
 

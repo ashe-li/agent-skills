@@ -108,11 +108,12 @@ npx skills add ashe-li/agent-skills --global
 <details>
 <summary>Features</summary>
 
-**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner → plan
+**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner（含架構決策）→ 品質與架構審查 → plan
 
 - 自動盤點 agents/skills/commands，資源分配須經盤點確認
 - planner 含業界實踐與標準化方案參照（RFC、OWASP、12-Factor 等）
-- 計畫品質自審檢查表（完整性、可執行性、依賴正確性、業界支撐）
+- 中等以上複雜度：planner 輸出架構決策（替代方案、相容性、效能/安全影響、文件影響評估）
+- 品質與架構審查檢查表（完整性、可執行性、依賴正確性、業界支撐 + 架構審查），問題可回饋修正（最多 2 次迭代）
 - plan 含 Industry & Standards Reference 表格和品質保障步驟
 - Step 0 條件式 HITL：評估複雜度後詢問是否啟用 TaskCreate/TaskUpdate
 - Step 6 可選進入 worktree 隔離開發
@@ -129,11 +130,11 @@ npx skills add ashe-li/agent-skills --global
 
 | 情境 | Pipeline |
 |------|----------|
-| 新功能需求 | planner → tdd-guide → code-reviewer → /simplify |
+| 新功能需求 | planner（含架構決策）→ tdd-guide → code-reviewer → /simplify |
 | Bug 修復 | planner → tdd-guide → code-reviewer → /simplify |
 | 未 commit 變更需 review | code-reviewer → /simplify → security-reviewer |
 | Build 失敗 | build-error-resolver |
-| 重構 | planner → refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
+| 重構 | planner（含架構決策）→ refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
 | 文件更新 | doc-updater → code-reviewer（文件審查不適用） |
 | Harness 設定優化 | harness-optimizer |
 | 自主迴圈任務 | loop-operator |
@@ -453,14 +454,14 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 | plan.md 被建立 | PASS | PASS |
 | 包含 `## Overview` | PASS | FAIL |
 | 包含 `## Implementation Steps` | PASS | FAIL |
-| 正確跳過 architect (低複雜度快速路徑) | PASS | PASS |
+| 正確跳過架構審查 (低複雜度快速路徑) | PASS | PASS |
 | 狀態標記 PENDING APPROVAL | PASS | FAIL |
 
 #### Key Findings
 
 - **結構化格式** — Skill 嚴格遵循 plan 模板，baseline 自由格式
 - **ECC 資源整合** — Skill 盤點 agents 並分配到步驟，baseline 不知有哪些 agent
-- **複雜度路由** — Skill 正確識別低複雜度並跳過 architect
+- **複雜度路由** — Skill 正確識別低複雜度並跳過架構審查
 - **產出精簡** — Skill 產出更短（256 vs 451 行）但涵蓋所有區塊
 - **安全閘門** — Skill 強制 PENDING APPROVAL，baseline 無此控制
 

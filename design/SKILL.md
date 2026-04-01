@@ -160,8 +160,8 @@ Agent(subagent_type="general-purpose", model="sonnet")
 **subagent 回報後的處理：**
 
 - **全部 PASS：** 進入 Step 4b
-- **有 FAIL 項目：** 回饋至 Step 3 重新規劃（將 FAIL 項目和修正方向作為額外 context 傳給 planner），修正後重新啟動 Step 4a subagent 檢查。最多迭代 2 次
-- **迭代 2 次仍有 FAIL：** 在 plan 的 Review Notes 中標記待確認項目，交由使用者決定
+- **有 FAIL 項目：** 回饋至 Step 3 重新規劃（將 FAIL 項目和修正方向作為額外 context 傳給 planner），修正後重新啟動 Step 4a subagent 檢查。初次檢查 + 最多 2 次重試（共最多 3 輪）
+- **經 3 輪仍有 FAIL：** 在 plan 的 Review Notes 中標記待確認項目，交由使用者決定
 
 ### Step 4b: EnterPlanMode 呈現計畫
 

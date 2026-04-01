@@ -89,6 +89,7 @@ def check_structural(
     metadata, body = parse_frontmatter(text)
     skill_type = detect_skill_type(metadata, skill_path)
     line_count = len(text.splitlines())
+    peers: set[str] = set(metadata.get("redundancy-peers", []) or [])
 
     issues: list[str] = []
 
@@ -213,7 +214,7 @@ def check_structural(
     )
 
     # --- Redundancy (Jaccard overlap within repo) ---
-    redundancy = _check_redundancy(skill_path, body, repo_dir, skill_type)
+    redundancy = _check_redundancy(skill_path, body, repo_dir, skill_type, peers)
 
     return {
         "skill_path": str(skill_path),
@@ -246,11 +247,18 @@ def _check_redundancy(
     body: str,
     repo_dir: Path,
     skill_type: str,
+    peers: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Jaccard keyword overlap check against sibling skills."""
+    """Jaccard keyword overlap check against sibling skills.
+
+    Skills listed in ``redundancy-peers`` frontmatter are excluded from
+    penalty calculation (their overlap is expected and intentional).
+    """
     target_keywords = _extract_keywords(body)
     if not target_keywords:
         return {"redundancy_penalty": 0, "overlaps": []}
+
+    peers = peers or set()
 
     # For user-invocable: compare against other SKILL.md in the repo
     # For learned: compare against ~/.claude/skills/learned/
@@ -263,12 +271,16 @@ def _check_redundancy(
         return {"redundancy_penalty": 0, "overlaps": []}
 
     overlaps: list[dict[str, Any]] = []
+    peer_overlaps: list[dict[str, Any]] = []
     skill_resolved = skill_path.resolve()
 
     glob_pattern = "SKILL.md" if skill_type == "user-invocable" else "*.md"
     for md_file in search_dir.rglob(glob_pattern):
+        if any(part.startswith(".") for part in md_file.parts):
+            continue
         if md_file.resolve() == skill_resolved:
             continue
+        other_name = md_file.stem if md_file.name != "SKILL.md" else md_file.parent.name
         try:
             other_content = md_file.read_text(encoding="utf-8")
         except OSError:
@@ -282,13 +294,19 @@ def _check_redundancy(
         jaccard = len(intersection) / len(union) if union else 0
 
         if jaccard >= 0.25:
-            overlaps.append({
-                "skill": md_file.stem if md_file.name != "SKILL.md" else md_file.parent.name,
+            entry = {
+                "skill": other_name,
                 "jaccard": round(jaccard, 3),
                 "shared_keywords": sorted(intersection)[:10],
-            })
+            }
+            if other_name in peers:
+                entry["peer"] = True
+                peer_overlaps.append(entry)
+            else:
+                overlaps.append(entry)
 
     overlaps.sort(key=lambda x: -x["jaccard"])
+    peer_overlaps.sort(key=lambda x: -x["jaccard"])
     max_jaccard = overlaps[0]["jaccard"] if overlaps else 0
     penalty = round(min(5, max_jaccard * 10), 1)
 
@@ -296,6 +314,7 @@ def _check_redundancy(
         "redundancy_penalty": penalty,
         "max_jaccard": max_jaccard,
         "overlaps": overlaps[:5],
+        "peer_overlaps": peer_overlaps[:3],
     }
 
 

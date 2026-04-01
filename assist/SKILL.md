@@ -3,6 +3,7 @@ name: assist
 description: 萬用助手 — 自動分析情境、盤點 ECC 資源、智慧路由至最佳 agent pipeline，一鍵完成複雜工作流。
 allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: [任務描述，留空則自動偵測情境]
+redundancy-peers: [design]
 ---
 
 # /assist — 萬用助手

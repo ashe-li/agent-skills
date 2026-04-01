@@ -3,6 +3,7 @@ name: design
 description: 開發設計 — 自動盤點 ECC 資源，透過 planner 建立完整實作計畫，輸出至 plans/active/<slug>.md 供使用者確認後才進入實作。
 allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, EnterPlanMode, TaskCreate, TaskUpdate, TaskList
 argument-hint: <功能描述或需求>
+redundancy-peers: [assist]
 ---
 
 # /design — 開發設計

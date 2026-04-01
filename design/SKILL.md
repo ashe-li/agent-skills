@@ -63,8 +63,8 @@ redundancy-peers: [assist]
 
 | 複雜度 | 判斷標準 | 執行路徑 |
 |--------|---------|---------|
-| **低** | 單一檔案、不涉及架構變更（例：更新 README、加 badge、改設定） | Step 3 → Step 4 |
-| **中等以上** | 跨檔案或有架構影響 | 完整流程 Step 3 → Step 4 |
+| **低** | 單一檔案、不涉及架構變更（例：更新 README、加 badge、改設定） | Step 3 → Step 4（跳過架構審查） |
+| **中等以上** | 跨檔案或有架構影響 | Step 3（含架構決策）→ Step 4（含架構審查）|
 | **多 session** | 需跨 session 持續推進的大型計畫（遷移框架、多天重架構） | 先執行 `/blueprint` 建立多 session 建構計畫，再從 Phase 1 進入標準流程 |
 
 如果需求過於模糊無法判斷複雜度，使用 AskUserQuestion 請使用者補充具體資訊。
@@ -96,20 +96,42 @@ Agent(subagent_type="everything-claude-code:planner")
    - 是否有學術研究支撐（論文、benchmarks）
    - 是否有成熟的標準化解決方案（官方 SDK、知名 library 的 canonical pattern）
    - 若無直接標準，說明為何採用自訂方案，並引述最接近的參考
-4. **ECC 資源整合** — 明確指出每個步驟應使用哪個 agent/skill/command。**ECC 資源分配須經盤點確認** — 不可假設資源可用，須回溯 Step 1 的盤點結果
+4. **架構決策**（中等以上複雜度必填）— 每個涉及架構的技術選擇須包含：
+   - 選擇的方案及理由
+   - 考慮過但排除的替代方案（至少 1 個），附排除原因
+   - 與現有程式碼的相容性分析
+   - 可擴展性評估 — 能否應對合理範圍的需求增長
+   - 效能和安全性影響評估
+   - 實作後需要新增或更新的文件（README、API docs、CODEMAPS）
+5. **ECC 資源整合** — 明確指出每個步驟應使用哪個 agent/skill/command。**ECC 資源分配須經盤點確認** — 不可假設資源可用，須回溯 Step 1 的盤點結果
    - 例：「Step 3: 使用 tdd-guide agent 撰寫測試」
    - 例：「Step 5: 使用 /code-review 進行品質審查」
-5. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
-6. **風險評估** — 潛在的技術風險和對策
-7. **驗收標準** — 怎樣算完成
+6. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
+7. **風險評估** — 潛在的技術風險和對策
+8. **驗收標準** — 怎樣算完成
 
 ## Step 4: 品質檢查與 Plan Mode 呈現
 
 > **若啟用 task tracking：** TaskCreate(subject: "品質檢查與 Plan Mode 呈現", activeForm: "品質檢查與輸出中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID]) → 完成後 TaskUpdate(status: "completed")
 
-### Step 4a: 品質檢查
+### Step 4a: 品質審查（subagent 隔離）
 
-將最終計畫寫入檔案前，先對照以下檢查清單確認計畫品質：
+啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用 `everything-claude-code:architect`（消融實驗 delta=-0.50），改用通用 agent 搭配明確審查 prompt。
+
+```
+Agent(subagent_type="general-purpose", model="sonnet")
+```
+
+**傳入 subagent 的 context：**
+
+- Step 3 產出的完整計畫內容
+- Step 1 的 ECC 資源盤點結果
+- Step 2 判定的複雜度等級
+- 下方的審查檢查清單
+
+**subagent 須逐項檢查並回報結果（PASS/FAIL + 說明）。對於「業界支撐」相關維度，subagent 應主動驗證：每個技術方案的做法是否有業界支撐（RFC、W3C、OWASP、12-Factor、官方文件、知名 library 的 canonical pattern），若計畫中缺少引述或引述有誤，標記為 FAIL。**
+
+**基礎品質（所有複雜度）：**
 
 | 維度 | 通過標準 |
 |------|---------|
@@ -117,13 +139,29 @@ Agent(subagent_type="everything-claude-code:planner")
 | 可執行性 | 每個步驟有明確的檔案路徑和具體動作 |
 | 依賴正確性 | 步驟間依賴無環且順序合理 |
 | 粒度適當 | 每個步驟 1-3 個具體動作 |
-| ECC 資源合理 | 每個 agent/skill 在其設計用途內使用 |
+| ECC 資源合理 | 每個 agent/skill 在其設計用途內使用，且對照 Step 1 盤點結果確認可用 |
 | 驗收可測 | 每個驗收標準都可客觀驗證 |
 | 業界/學術支撐 | 每個技術方案都有明確的業界標準、學術研究或標準化方案參照 |
 | 實作後工具 | plan 的步驟中包含實作後的品質保障（code-reviewer、/simplify、/update、/verify 等） |
 | Eval 基線 | 若涉及行為變更，計畫中包含 eval 基線建立與回歸驗證步驟（參考 `/quality-gate`） |
 
-如果發現問題，直接修正計畫內容。
+**架構審查（中等以上複雜度才執行）：**
+
+| 維度 | 通過標準 |
+|------|---------|
+| 替代方案 | 每個架構決策都列出至少 1 個被排除的替代方案及原因 |
+| 簡單性 | 沒有更簡單的方案能達成同樣目標（若有，須說明為何選複雜方案） |
+| 可擴展性 | 架構能應對合理範圍的需求增長，不會因規模變化需要重寫 |
+| 相容性 | 與現有程式碼的整合方式明確，無破壞性變更或已標記 migration 步驟 |
+| 效能/安全 | 已評估效能影響和安全性考量 |
+| 參照可靠性 | 引用的業界標準適用於當前情境、為最新版本、無更好的標準被遺漏 |
+| 文件影響 | 已列出實作後需新增或更新的文件（README、API docs、CODEMAPS） |
+
+**subagent 回報後的處理：**
+
+- **全部 PASS：** 進入 Step 4b
+- **有 FAIL 項目：** 回饋至 Step 3 重新規劃（將 FAIL 項目和修正方向作為額外 context 傳給 planner），修正後重新啟動 Step 4a subagent 檢查。最多迭代 2 次
+- **迭代 2 次仍有 FAIL：** 在 plan 的 Review Notes 中標記待確認項目，交由使用者決定
 
 ### Step 4b: EnterPlanMode 呈現計畫
 
@@ -204,7 +242,9 @@ Agent(subagent_type="everything-claude-code:planner")
 - [ ] 或手動執行 /update-docs + /update-codemaps
 
 ## Architecture Notes
-<!-- 架構相關備註 -->
+<!-- 中等以上複雜度必填 -->
+<!-- 每個架構決策：選擇方案、排除的替代方案、相容性分析、效能/安全影響 -->
+<!-- 文件影響評估：實作後需新增或更新哪些文件 -->
 
 ## Risks & Mitigations
 <!-- 風險評估 -->

@@ -2,6 +2,15 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.18.0] - 2026-04-01
+
+### Changed
+- `/design`: 移除消融實驗表現最差的 ECC architect agent（delta=-0.50），將架構審查職責重新分配至 planner（Step 3 架構決策）和品質審查（Step 4a subagent 隔離審查）
+- `/design`: Step 4a 改用 general-purpose subagent 隔離審查，含 PASS/FAIL 結構化回報和回饋迭代（最多 2 次）；新增可擴展性審查維度；業界支撐改為主動驗證
+- `/design`: Step 2 複雜度評估恢復低/中等差異化路徑（低複雜度跳過架構審查）
+- `/assist`: 新功能和重構 pipeline 標記 planner 含架構決策
+- `check_skill.py`: 新增 `redundancy-peers` frontmatter 支援排除 sibling skill 互相扣分；跳過隱藏目錄避免 worktree 干擾
+
 ## [v1.17.2] - 2026-03-25
 
 ### Added

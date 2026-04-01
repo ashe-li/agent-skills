@@ -1,13 +1,13 @@
 ---
 name: design
-description: 開發設計 — 自動盤點 ECC 資源，透過 planner + architect 建立完整實作計畫，輸出至 plans/active/<slug>.md 供使用者確認後才進入實作。
+description: 開發設計 — 自動盤點 ECC 資源，透過 planner 建立完整實作計畫，輸出至 plans/active/<slug>.md 供使用者確認後才進入實作。
 allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, EnterPlanMode, TaskCreate, TaskUpdate, TaskList
 argument-hint: <功能描述或需求>
 ---
 
 # /design — 開發設計
 
-接收功能需求，自動盤點可用的 ECC 資源（agents/skills/commands），建立完整實作計畫並輸出至 plans/active/<slug>.md。**不會自動執行實作，必須等使用者確認。**
+接收功能需求，自動盤點可用的 ECC 資源（agents/skills/commands），透過 planner 建立完整實作計畫並輸出至 plans/active/<slug>.md。**不會自動執行實作，必須等使用者確認。**
 
 ## Step 0: 任務追蹤（條件式 HITL）
 
@@ -49,7 +49,7 @@ argument-hint: <功能描述或需求>
 
 **掃描方式：**
 
-1. 列出所有可用的 agent types（從 Agent tool 的 subagent_type 列表），重點關注：`planner`、`architect`、`tdd-guide`、`code-reviewer`、`security-reviewer`、`build-error-resolver`、`harness-optimizer`、`loop-operator`、`docs-lookup`（Context7 文件查詢）、`typescript-reviewer`
+1. 列出所有可用的 agent types（從 Agent tool 的 subagent_type 列表），重點關注：`planner`、`tdd-guide`、`code-reviewer`、`security-reviewer`、`build-error-resolver`、`harness-optimizer`、`loop-operator`、`docs-lookup`（Context7 文件查詢）、`typescript-reviewer`
 2. 列出所有可用的 skills（從 system-reminder 中的 skill 列表）
 3. 列出所有可用的 commands（從 `~/.claude/commands/` 和 plugin commands），重點關注：`/harness-audit`、`/quality-gate`、`/loop-start`、`/docs`（Context7 文件查詢）、`/aside`（側問不丟失 context）、`/skill-health`（skill portfolio 健康儀表板）、`/prompt-optimize`、`/blueprint`（多 session 建構計畫）、`/context-budget`（context window 稽核）、`/save-session`、`/resume-session`
 4. 根據使用者的需求（`$ARGUMENTS`），篩選出**相關的資源**
@@ -62,8 +62,8 @@ argument-hint: <功能描述或需求>
 
 | 複雜度 | 判斷標準 | 執行路徑 |
 |--------|---------|---------|
-| **低** | 單一檔案、不涉及架構變更（例：更新 README、加 badge、改設定） | 跳過 Step 4（architect），直接 Step 3 → Step 5 |
-| **中等以上** | 跨檔案或有架構影響 | 完整流程 Step 3 → Step 4 → Step 5 |
+| **低** | 單一檔案、不涉及架構變更（例：更新 README、加 badge、改設定） | Step 3 → Step 4 |
+| **中等以上** | 跨檔案或有架構影響 | 完整流程 Step 3 → Step 4 |
 | **多 session** | 需跨 session 持續推進的大型計畫（遷移框架、多天重架構） | 先執行 `/blueprint` 建立多 session 建構計畫，再從 Phase 1 進入標準流程 |
 
 如果需求過於模糊無法判斷複雜度，使用 AskUserQuestion 請使用者補充具體資訊。
@@ -102,33 +102,11 @@ Agent(subagent_type="everything-claude-code:planner")
 6. **風險評估** — 潛在的技術風險和對策
 7. **驗收標準** — 怎樣算完成
 
-## Step 4: architect — 架構設計審查
+## Step 4: 品質檢查與 Plan Mode 呈現
 
-> **若啟用 task tracking：** TaskCreate(subject: "architect 架構審查", activeForm: "architect agent 審查中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID]) → 完成後 TaskUpdate(status: "completed")
+> **若啟用 task tracking：** TaskCreate(subject: "品質檢查與 Plan Mode 呈現", activeForm: "品質檢查與輸出中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID]) → 完成後 TaskUpdate(status: "completed")
 
-使用 **architect** agent 審查 Step 3 的計畫。
-
-```
-Agent(subagent_type="everything-claude-code:architect")
-```
-
-**審查重點：**
-
-- 架構是否合理、可擴展
-- 是否有更簡單的替代方案
-- 與現有程式碼的相容性
-- 效能和安全性考量
-- **業界/學術參照的可靠性** — 引用的標準是否適用於當前情境、是否為最新版本、有無更好的標準化方案被遺漏
-- ECC 資源的選用是否恰當 — **須對照 Step 1 盤點結果，確認所選 agent/skill 在當前 session 可用**
-- 文件影響評估：實作後需要新增或更新哪些文件（README、API docs、CODEMAPS），列入 plan 待辦
-
-**如果有重大架構建議：** 回饋給 planner 調整計畫（最多迭代 2 次）。
-
-## Step 5: 品質檢查與 Plan Mode 呈現
-
-> **若啟用 task tracking：** TaskCreate(subject: "品質檢查與 Plan Mode 呈現", activeForm: "品質檢查與輸出中...") → 完成後 TaskUpdate(status: "completed")
-
-### Step 5a: 品質檢查
+### Step 4a: 品質檢查
 
 將最終計畫寫入檔案前，先對照以下檢查清單確認計畫品質：
 
@@ -146,7 +124,7 @@ Agent(subagent_type="everything-claude-code:architect")
 
 如果發現問題，直接修正計畫內容。
 
-### Step 5b: EnterPlanMode 呈現計畫
+### Step 4b: EnterPlanMode 呈現計畫
 
 品質檢查通過後，使用 `EnterPlanMode` 將完整計畫內容呈現給使用者。
 
@@ -154,9 +132,9 @@ Agent(subagent_type="everything-claude-code:architect")
 
 **呈現內容：** 將完整 plan（依照下方格式）作為 Plan Mode 的輸出。Plan Mode 中不可使用 Write/Edit，所以**只呈現，不寫檔**。
 
-**使用者 accept 後：** ExitPlanMode 觸發 session auto-naming，接著進入 Step 6 寫檔。
+**使用者 accept 後：** ExitPlanMode 觸發 session auto-naming，接著進入 Step 5 寫檔。
 
-## Step 6: 生成 Slug 並寫入 plan 檔案
+## Step 5: 生成 Slug 並寫入 plan 檔案
 
 使用者在 Plan Mode 中 accept 後（ExitPlanMode），將計畫寫入檔案。
 
@@ -225,7 +203,7 @@ Agent(subagent_type="everything-claude-code:architect")
 - [ ] 或手動執行 /update-docs + /update-codemaps
 
 ## Architecture Notes
-<!-- architect 的審查結果（含文件影響評估）-->
+<!-- 架構相關備註 -->
 
 ## Risks & Mitigations
 <!-- 風險評估 -->
@@ -243,7 +221,7 @@ Agent(subagent_type="everything-claude-code:architect")
 > `plans/active/<slug>.md` 已寫入。
 > 可以開始實作；實作完成後執行 `/plan-archive` 歸檔。
 
-## Step 7: Worktree 隔離開發（可選）
+## Step 6: Worktree 隔離開發（可選）
 
 plan 寫入後，使用 AskUserQuestion 詢問使用者：
 

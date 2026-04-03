@@ -96,6 +96,21 @@ Agent(subagent_type="everything-claude-code:refactor-cleaner")
 
 > 若 Step 2 未發現可自動修正的問題，跳過此步驟。
 
+## Step 2c: Plan 歸檔檢查
+
+**在 commit 之前**，檢查是否有已完成的 plan 需要歸檔：
+
+1. 掃描 `plans/active/*.md`，比對本次對話涉及的 plan
+2. 若 plan 的 Status 包含 `COMPLETED`、`完成`、或所有 Phase/Step 都標記 `[x]`/`✅`，歸檔到 `plans/completed/`：
+   ```bash
+   mkdir -p plans/completed
+   mv plans/active/<filename>.md plans/completed/<filename>.md
+   ```
+3. 若有多個候選 plan，用 AskUserQuestion 確認哪些要歸檔
+4. 若沒有已完成的 plan，跳過
+
+> 也可手動呼叫 `/plan-archive` 執行更詳細的歸檔流程（含驗證結果補充）。
+
 ## Step 3: Commit 當前變更
 
 1. 如果有未 commit 的變更，根據變更內容撰寫 commit message

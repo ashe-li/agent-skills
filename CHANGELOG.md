@@ -2,6 +2,12 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.18.1] - 2026-04-04
+
+### Added
+- `rules/worktree-prompt.md`: 新增 Worktree 路徑慣例 — 禁止 `.claude/worktrees/`（EnterWorktree 預設路徑），改為 sibling 目錄格式 `<project>-<slug>/`
+- `rules/refactor/remove-architect-pipeline.md`: 新增 architect agent 禁用規則，基於消融實驗結果，列出 planner 等替代方案
+
 ## [v1.18.0] - 2026-04-01
 
 ### Changed

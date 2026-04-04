@@ -136,11 +136,11 @@ ls -la
 
 | 偵測到的情境 | 選擇的 Pipeline | 說明 |
 |---|---|---|
-| 有明確的新功能需求 | planner（含業界/學術方案調研 + 架構決策）-> tdd-guide -> code-reviewer -> /simplify | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐，並輸出架構決策（替代方案、相容性、效能/安全影響） |
+| 有明確的新功能需求 | planner（含業界/學術方案調研 + 社群共識/反面意見 + 架構決策）-> tdd-guide -> code-reviewer -> /simplify | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐，納入社群共識與已知反面意見/陷阱，並輸出架構決策（替代方案、相容性、效能/安全影響） |
 | 有 bug 描述或錯誤訊息 | planner -> tdd-guide -> code-reviewer -> /simplify | bug 修復流程 |
 | 有未 commit 變更需 review | code-reviewer -> /simplify -> security-reviewer | 快速品質審查；先修正再安全審查 |
 | build 失敗 | build-error-resolver | 直接修復 build |
-| 需要重構（使用者明確要求或偵測到 code smell） | planner（含架構決策）-> refactor-cleaner -> code-reviewer | 安全重構流程；planner 須輸出架構決策（已有 refactor-cleaner，不加 /simplify 避免重複） |
+| 需要重構（使用者明確要求或偵測到 code smell） | planner（含架構決策 + 社群共識/反面意見）-> refactor-cleaner -> code-reviewer | 安全重構流程；planner 須輸出架構決策和社群共識/反面意見（已有 refactor-cleaner，不加 /simplify 避免重複） |
 | 需要寫文件 | doc-updater -> code-reviewer | 文件更新流程（文件審查不適用程式碼簡化） |
 | Go 專案 | 在 pipeline 中加入 go-reviewer | 自動附加語言專用 reviewer |
 | Python 專案 | 在 pipeline 中加入 python-reviewer | 自動附加語言專用 reviewer |
@@ -216,6 +216,9 @@ ls -la
 
 ### Industry & Standards Referenced
 <!-- 本階段引用的業界標準或學術依據 -->
+
+### Community Consensus & Dissenting Views
+<!-- 社群主流看法和已知反面意見/陷阱（GitHub discussions、SO、Reddit） -->
 
 ### Files Modified
 <!-- 被修改的檔案清單 -->

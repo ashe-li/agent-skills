@@ -2,16 +2,18 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
-## [v1.18.1] - 2026-04-04
-
-### Added
-- `rules/worktree-prompt.md`: 新增 Worktree 路徑慣例 — 禁止 `.claude/worktrees/`（EnterWorktree 預設路徑），改為 sibling 目錄格式 `<project>-<slug>/`
-- `rules/refactor/remove-architect-pipeline.md`: 新增 architect agent 禁用規則，基於消融實驗結果，列出 planner 等替代方案
+## [v1.18.2] - 2026-04-05
 
 ### Changed
 - `/design`: Step 3 planner 要求新增「社群共識」和「反面意見與已知陷阱」；Step 4a 品質檢查新增對應維度；plan 模板新增 Community Consensus & Dissenting Views 表格
 - `/assist`: 新功能和重構 pipeline 的 planner 標記含社群共識/反面意見；handoff protocol 新增 Community Consensus section
 - `/pr`: Step 1b 對話脈絡分析新增「社群共識與反面意見」提取項；PR description Context 模板新增社群共識範例
+
+## [v1.18.1] - 2026-04-04
+
+### Added
+- `rules/worktree-prompt.md`: 新增 Worktree 路徑慣例 — 禁止 `.claude/worktrees/`（EnterWorktree 預設路徑），改為 sibling 目錄格式 `<project>-<slug>/`
+- `rules/refactor/remove-architect-pipeline.md`: 新增 architect agent 禁用規則，基於消融實驗結果，列出 planner 等替代方案
 
 ## [v1.18.0] - 2026-04-01
 

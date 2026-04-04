@@ -70,7 +70,9 @@ npx skills add ashe-li/agent-skills --global
 <summary>Features & 串接細節</summary>
 
 - Git 分析 + 對話脈絡雙重分析，PR description 涵蓋 what 和 why
+- 對話脈絡提取社群共識與反面意見，納入 PR description Context
 - 自動 code review（安全性、正確性、debug code、TypeScript 型別）
+- Step 2c 自動檢查已完成的 plan 並歸檔至 `plans/completed/`
 - 自動偵測是否已有 open PR，決定建立或更新
 - PR description 包含 Summary、Context、Changes、Test plan
 
@@ -108,13 +110,13 @@ npx skills add ashe-li/agent-skills --global
 <details>
 <summary>Features</summary>
 
-**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner（含架構決策）→ 品質與架構審查 → plan
+**Pipeline:** ECC 資源盤點 → 複雜度評估 → planner（含架構決策 + 社群共識/反面意見）→ 品質與架構審查（subagent 隔離）→ plan
 
 - 自動盤點 agents/skills/commands，資源分配須經盤點確認
-- planner 含業界實踐與標準化方案參照（RFC、OWASP、12-Factor 等）
-- 中等以上複雜度：planner 輸出架構決策（替代方案、相容性、效能/安全影響、文件影響評估）
-- 品質與架構審查檢查表（完整性、可執行性、依賴正確性、業界支撐 + 架構審查），問題可回饋修正（最多 2 次迭代）
-- plan 含 Industry & Standards Reference 表格和品質保障步驟
+- planner 含業界實踐與標準化方案參照（RFC、OWASP、12-Factor 等）、社群共識與反面意見揭露
+- 中等以上複雜度：planner 輸出架構決策（替代方案、相容性、可擴展性、效能/安全影響、文件影響評估）
+- 品質審查使用 general-purpose subagent 隔離執行（不使用 architect agent），含社群共識與反面意見驗證維度，問題可回饋修正（最多 2 次迭代）
+- plan 含 Community Consensus & Dissenting Views 表格和品質保障步驟
 - Step 0 條件式 HITL：評估複雜度後詢問是否啟用 TaskCreate/TaskUpdate
 - Step 6 可選進入 worktree 隔離開發
 - 不自動執行實作，使用者確認後才開始
@@ -130,11 +132,11 @@ npx skills add ashe-li/agent-skills --global
 
 | 情境 | Pipeline |
 |------|----------|
-| 新功能需求 | planner（含架構決策）→ tdd-guide → code-reviewer → /simplify |
+| 新功能需求 | planner（含架構決策 + 社群共識/反面意見）→ tdd-guide → code-reviewer → /simplify |
 | Bug 修復 | planner → tdd-guide → code-reviewer → /simplify |
 | 未 commit 變更需 review | code-reviewer → /simplify → security-reviewer |
 | Build 失敗 | build-error-resolver |
-| 重構 | planner（含架構決策）→ refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
+| 重構 | planner（含架構決策 + 社群共識/反面意見）→ refactor-cleaner → code-reviewer（已有 refactor-cleaner，不加 /simplify） |
 | 文件更新 | doc-updater → code-reviewer（文件審查不適用） |
 | Harness 設定優化 | harness-optimizer |
 | 自主迴圈任務 | loop-operator |

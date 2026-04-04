@@ -95,6 +95,8 @@ Agent(subagent_type="everything-claude-code:planner")
    - 是否有業界標準或慣例（RFC、W3C、OWASP、12-Factor 等）
    - 是否有學術研究支撐（論文、benchmarks）
    - 是否有成熟的標準化解決方案（官方 SDK、知名 library 的 canonical pattern）
+   - **社群共識** — 主流社群（GitHub discussions、Stack Overflow、官方 forum、Reddit）對此做法的主流看法
+   - **反面意見與已知陷阱** — 針對此方案已知的批評、替代觀點、踩坑經驗或 trade-offs（即使最終仍採用，也須揭露）
    - 若無直接標準，說明為何採用自訂方案，並引述最接近的參考
 4. **架構決策**（中等以上複雜度必填）— 每個涉及架構的技術選擇須包含：
    - 選擇的方案及理由
@@ -129,7 +131,9 @@ Agent(subagent_type="general-purpose", model="sonnet")
 - Step 2 判定的複雜度等級
 - 下方的審查檢查清單
 
-**subagent 須逐項檢查並回報結果（PASS/FAIL + 說明）。對於「業界支撐」相關維度，subagent 應主動驗證：每個技術方案的做法是否有業界支撐（RFC、W3C、OWASP、12-Factor、官方文件、知名 library 的 canonical pattern），若計畫中缺少引述或引述有誤，標記為 FAIL。**
+**subagent 須逐項檢查並回報結果（PASS/FAIL + 說明）。對於「業界支撐」和「社群共識」相關維度，subagent 應主動驗證：**
+1. **業界支撐** — 每個技術方案的做法是否有業界支撐（RFC、W3C、OWASP、12-Factor、官方文件、知名 library 的 canonical pattern），若計畫中缺少引述或引述有誤，標記為 FAIL
+2. **社群共識與反面意見** — 每個技術方案是否納入社群主流看法和已知反面意見（GitHub discussions、Stack Overflow、Reddit、官方 forum 的討論），若計畫中完全未提及社群觀點或已知陷阱，標記為 FAIL
 
 **基礎品質（所有複雜度）：**
 
@@ -142,6 +146,7 @@ Agent(subagent_type="general-purpose", model="sonnet")
 | ECC 資源合理 | 每個 agent/skill 在其設計用途內使用，且對照 Step 1 盤點結果確認可用 |
 | 驗收可測 | 每個驗收標準都可客觀驗證 |
 | 業界/學術支撐 | 每個技術方案都有明確的業界標準、學術研究或標準化方案參照 |
+| 社群共識與反面意見 | 每個技術方案都納入社群主流看法，並揭露已知的反面意見、批評或陷阱 |
 | 實作後工具 | plan 的步驟中包含實作後的品質保障（code-reviewer、/simplify、/update、/verify 等） |
 | Eval 基線 | 若涉及行為變更，計畫中包含 eval 基線建立與回歸驗證步驟（參考 `/quality-gate`） |
 
@@ -222,6 +227,11 @@ Agent(subagent_type="general-purpose", model="sonnet")
 | 技術決策 | 參照依據 | 類型 | 來源 |
 |----------|---------|------|------|
 | ... | ... | 業界標準/學術研究/標準化方案/最佳實踐 | ... |
+
+## Community Consensus & Dissenting Views
+| 技術決策 | 社群共識 | 反面意見/已知陷阱 | 來源 |
+|----------|---------|------------------|------|
+| ... | ... | ... | GitHub/SO/Reddit/... |
 
 ## Implementation Steps
 

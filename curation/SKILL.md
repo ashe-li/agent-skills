@@ -40,6 +40,17 @@ Learned Skills 掃描結果：
 - 評分格式分布：表格 XX / 單行 XX / 無 XX
 ```
 
+**建立問題 manifest（依據：DAMA-DMBOK Completeness）：**
+
+掃描結束後，將每個有問題的檔案登錄至記憶體中的 manifest，格式如下：
+
+| 檔案 slug | 問題類型 | 預期修正動作 | 狀態 |
+|-----------|---------|------------|------|
+| xxx.md | fmt-missing-frontmatter | 插入推斷的 frontmatter | PENDING |
+| yyy.md | fmt-score-inconsistent | 轉換評分表格 | PENDING |
+
+Manifest 為後續 Step 4 驗證的基準，**總問題數 = manifest 列數**。
+
 ## Step 2: 分類問題
 
 將掃描結果分為四類：
@@ -106,6 +117,18 @@ Learned Skills 品質掃描結果：
 - 使用者確認後刪除 .md 檔案
 - 同步更新索引檔案（移除 strikethrough 條目）
 
+**修正後驗證（依據：ITIL CMDB Reconciliation）：**
+
+每個修正動作執行後，立即執行確定性驗證：
+
+- `fmt-missing-frontmatter` 修正後：`grep -c "^---" <file>` 確認 ≥ 2（開頭與結尾各一個 `---`）
+- `fmt-incomplete-frontmatter` 修正後：`grep -E "^(name|description|user-invocable|origin):" <file>` 確認 4 個欄位全部存在
+- `fmt-score-inconsistent` 修正後：`grep -c "| specificity |" <file>` 確認 ≥ 1（表格列存在）
+
+每個驗證完成後更新 manifest 的「狀態」欄：
+- 驗證通過 → `DONE`
+- 驗證失敗 → `FAILED`（保留在 manifest 中，不標記為完成）
+
 ## Step 5: 輸出報告
 
 ```markdown
@@ -124,6 +147,15 @@ Learned Skills 品質掃描結果：
 | yyy.md | 評分格式 | 已轉換為表格 |
 | zzz.md | 已廢棄 | 已刪除 |
 
+### Manifest 比對結果（依據：DAMA-DMBOK Completeness）
+- Manifest 總問題數：XX 個
+- 已修正（DONE）：XX 個
+- 修正失敗（FAILED）：XX 個
+- 使用者跳過：XX 個
+- 完成率：XX / XX = XX%
+
+<!-- 完成率 < 100% 時，列出未完成項目及原因 -->
+
 ### 剩餘問題
-<!-- 若有使用者跳過的項目 -->
+<!-- 若有使用者跳過或 FAILED 的項目，列出 manifest 中狀態非 DONE 的列 -->
 ```

@@ -136,7 +136,7 @@ ls -la
 
 | 偵測到的情境 | 選擇的 Pipeline | 說明 |
 |---|---|---|
-| 有明確的新功能需求 | planner（含業界/學術方案調研 + 社群共識/反面意見 + 架構決策）-> tdd-guide -> code-reviewer -> /simplify | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐，納入社群共識與已知反面意見/陷阱，並輸出架構決策（替代方案、相容性、效能/安全影響） |
+| 有明確的新功能需求 | planner（含業界/學術方案調研 + 社群共識/反面意見 + 架構決策 + 需求追蹤矩陣）-> tdd-guide -> code-reviewer -> /simplify | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐，納入社群共識與已知反面意見/陷阱，並輸出架構決策（替代方案、相容性、效能/安全影響），以及需求追蹤矩陣（REQ-N → 實作步驟映射，依據：DAMA-DMBOK Completeness） |
 | 有 bug 描述或錯誤訊息 | planner -> tdd-guide -> code-reviewer -> /simplify | bug 修復流程 |
 | 有未 commit 變更需 review | code-reviewer -> /simplify -> security-reviewer | 快速品質審查；先修正再安全審查 |
 | build 失敗 | build-error-resolver | 直接修復 build |
@@ -216,9 +216,18 @@ ls -la
 
 ### Industry & Standards Referenced
 <!-- 本階段引用的業界標準或學術依據 -->
+<!-- ⚠️ 必填，不可留空——若本階段無引用，明確寫「本階段未引用業界標準」（依據：OpenAI Developer Community 共識：checklist-driven > free-form） -->
 
 ### Community Consensus & Dissenting Views
 <!-- 社群主流看法和已知反面意見/陷阱（GitHub discussions、SO、Reddit） -->
+<!-- ⚠️ 必填，不可留空——若無相關社群討論，明確寫「無相關社群共識資料」 -->
+
+### Completeness Declaration（完整性聲明）
+<!-- 依據：DAMA-DMBOK Completeness -->
+<!-- 格式：「本步驟處理了 K/N 個預期項目，差集 = N-K（遺漏項：列出）」 -->
+<!-- 範例：本步驟處理了 3/3 個預期項目，差集 = 0（無遺漏）-->
+<!-- 範例：本步驟處理了 2/3 個預期項目，差集 = 1（遺漏：REQ-2 未完成）-->
+<!-- ⚠️ 必填，不可留空——使下游 agent 能執行 set difference 比對，不依賴語意判斷 -->
 
 ### Files Modified
 <!-- 被修改的檔案清單 -->
@@ -255,6 +264,7 @@ ls -la
 - 狀態: 完成 / 有問題
 - 摘要: [1-2 句話]
 - 重要發現: [列表]
+- 完整性聲明: 本步驟處理了 K/N 個預期項目，差集 = [列出遺漏項或「0（無遺漏）」]
 
 #### 2. [Agent 名稱]
 - ...
@@ -263,6 +273,14 @@ ls -la
 | 檔案 | 動作 | 說明 |
 |------|------|------|
 | ... | 新增/修改/刪除 | ... |
+
+### Manifest 比對結果（依據：DAMA-DMBOK Completeness）
+<!-- 若 pipeline 包含 planner（新功能需求），列出需求追蹤矩陣的比對結果 -->
+| 需求 | 有對應步驟？ | 最終狀態 |
+|------|------------|---------|
+| REQ-1: xxx | Step N ✅ | 已完成 |
+| REQ-2: yyy | —— | ❌ 未完成 |
+| **計數** | N 個需求 | K 個已完成，差集 = N-K |
 
 ### 未解決的問題
 <!-- 如果有的話 -->

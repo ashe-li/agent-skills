@@ -2,6 +2,23 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.21.0] - 2026-04-06
+
+### Changed
+- 全 12 個 skill 導入 manifest-driven 完整性驗證（依據：DAMA-DMBOK Completeness、ITIL CMDB Reconciliation、arXiv:2509.18970）
+- `/update`: Step 1 新增「變更 Manifest」；Step 2 改為逐條 set difference 比對；Step 3 新增「知識寫入 Manifest」；Step 5 改為 manifest-driven + grep/glob 確定性驗證
+- `/design`: Step 3 新增需求追蹤矩陣（Requirements Traceability Matrix）；Step 4a 新增「需求覆蓋率」審查維度
+- `/assist`: Handoff Protocol 新增 Completeness Declaration 欄位；Industry/Community 欄位升級為強制填寫
+- `/pr`: Step 1b 新增 Context Manifest；Changes 新增 commits 計數驗證；Context 新增逐條比對
+- `/curation`: Step 1 新增問題 manifest；Step 4 新增修正後驗證（grep -c）；Step 5 新增完成率
+- `/learn-eval-deep`: Step 3 新增 Bridge 輸出完整性檢查；Step 4 新增資料來源覆蓋率標註
+- `/triage`: Step 2 新增退役前影響分析（grep 依賴搜尋）；新增 Step 5 退役後驗證
+- `/plan-archive`: Step 2 新增步驟完成 manifest；Step 3 改為逐條 PASS/FAIL + 完成率閾值
+- `/worktree`: status 新增一致性檢查（orphan 偵測）；cleanup 新增操作後驗證
+- `/notion-plan`: Step 2d 新增擷取完整性檢查；Step 4 改為 4 條 checklist PASS/FAIL
+- `/ecc-skill-defer`: 核心 skill 保護升級為 HITL Guard；apply/restore 新增操作驗證
+- `/playwright-human-in-the-loop`: Step 3 新增強制 snapshot checklist；Step 4 改為 manifest-driven 報告
+
 ## [v1.20.0] - 2026-04-06
 
 ### Added

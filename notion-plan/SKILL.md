@@ -140,6 +140,21 @@ playwright-cli -s=notion eval '() => { const title = document.querySelector(".no
 > **注意：** `eval innerText` 為主要擷取方式，已足夠取得頁面文字內容。
 > 若使用者的需求提及 Status、負責人、截止日期等屬性欄位，或頁面預期含有留言討論，則在完成 2d 後額外執行 Step 2f。
 
+### 2d-verify. 擷取完整性檢查（依據：arXiv:2509.18970 — 結構性驗證優先於語意驗證）
+
+在繼續前，對照 snapshot YAML 驗證擷取完整性：
+
+1. 取得 snapshot 中的 block 數量（以 `data-block-id` 計數）：
+   ```bash
+   playwright-cli -s=notion snapshot
+   # 讀取最新 snapshot 檔案，計算含 data-block-id 的行數作為 block_count
+   ```
+2. 計算 `innerText` 回傳內容的行數（`line_count`）
+3. 判斷閾值：若 `line_count < block_count * 0.5`（行數低於 block 數量的 50%），視為擷取不完整，**強制觸發 Step 2e 捲動**
+4. 若 `line_count >= block_count * 0.5`，記錄比值供 Step 4 品質確認使用，繼續執行
+
+> 此檢查使用 grep/count 確定性工具，不依賴 LLM 語意判斷。
+
 ### 2e. 處理長頁面
 
 若頁面內容需要捲動才能載入完全：
@@ -225,14 +240,25 @@ playwright-cli -s=notion close
 
 ---
 
-## Step 4：內容品質確認
+## Step 4：內容品質確認（依據：OpenAI Developer Community 共識 — Checklist-driven > Free-form）
 
-檢查整理後的 Markdown 是否包含有效需求內容：
+對整理後的 Markdown 執行逐條 checklist 驗證，每條回答 PASS 或 FAIL：
 
-- 有實質內容（標題 + 至少一段文字或清單）→ 進入 Step 5
-- 內容為空、僅有標題、或明顯不完整 → 使用 AskUserQuestion 詢問使用者：
+| # | 驗證項目 | 判斷方式 | 結果 |
+|---|----------|----------|------|
+| 1 | 有標題（非空、非 "Untitled"） | 檢查 Markdown 第一行是否為非空 `#` 標題 | PASS / FAIL |
+| 2 | 有段落文字（>50 字） | 計算非標題、非清單行的字符總數 | PASS / FAIL |
+| 3 | （若 URL 含 `?v=` database 參數）有表格資料 | 檢查 Markdown 是否含 `\|` table 結構 | PASS / FAIL / N/A |
+| 4 | 內容長度與預期相符 | Step 2d-verify 的 `line_count / block_count` 比值 ≥ 0.5 | PASS / FAIL |
 
-> 擷取到的內容似乎不完整。請確認：
+**判定規則：**
+- 全部 PASS（或 N/A）→ 進入 Step 5
+- 任何 FAIL → 使用 AskUserQuestion 詢問使用者，顯示失敗的條目：
+
+> 擷取到的內容品質驗證未通過：
+> - [列出 FAIL 條目]
+>
+> 請確認：
 > 1. 頁面是否需要登入？
 > 2. 是否要手動貼上需求內容？
 

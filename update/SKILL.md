@@ -54,6 +54,30 @@ Agent(subagent_type="everything-claude-code:doc-updater")
 
 **交接資訊：** 記錄更新了哪些文件檔案、變更摘要，作為下一步 code-reviewer 的輸入。
 
+**Step 1 結束時建立「變更 Manifest」（依據：DAMA-DMBOK Completeness）：**
+
+doc-updater 完成後，必須輸出以下格式的 manifest，供 Step 2 逐條比對使用：
+
+```markdown
+## 變更 Manifest（Step 1 → Step 2 交接）
+
+### 變更檔案清單（來源：git diff --name-only HEAD）
+- [ ] src/foo.ts — 新增 X 功能
+- [ ] src/bar.ts — 修改 Y 邏輯
+- [ ] ...（共 N 個檔案）
+
+### 預期應更新的文件（含更新原因）
+- [ ] docs/api.md — 因 src/foo.ts 新增了 X API
+- [ ] README.md — 因功能 Y 有用法變動
+- [ ] ...（共 M 份文件）
+
+### 實際已更新的文件
+- [x] docs/api.md — ✅ 已更新
+- [ ] README.md — ⏳ 待 Step 2 確認
+```
+
+expected_count（預期更新）= M；actual_count（已更新）待 Step 2 核實。
+
 ## Step 2: code-reviewer — 交叉比對 + 審查文件品質
 
 使用 **code-reviewer** agent 審查 Step 1 更新的文件，並交叉比對變更是否完整正確。
@@ -69,12 +93,24 @@ Agent(subagent_type="everything-claude-code:code-reviewer")
 - 格式和結構是否符合專案慣例
 - 是否有遺漏的重要資訊
 
-**交叉比對（Cross-check）：**
+**Manifest-driven 交叉比對（依據：DAMA-DMBOK Completeness + ITIL CMDB Reconciliation）：**
 
-1. 對照 `git diff` 的實際變更，逐一確認每份更新的文件是否涵蓋所有重要變更
-2. 確認沒有「應該更新但漏掉的文件」
-3. 確認沒有「不應該更新但錯誤修改的文件」
-4. 若發現遺漏或錯誤，標示在輸出報告中
+接收 Step 1 的「變更 Manifest」，**逐條執行 set difference 比對**（不可用語意判斷代替計數驗證）：
+
+1. 對照 manifest 的「預期應更新文件清單」（M 份），逐條勾選每份文件是否已更新
+2. 計數驗證：`expected_count（M）- actual_count（已確認更新數） = 差集`
+3. 差集 > 0 → 標記為「應更新但漏掉的文件」，列在輸出報告中
+4. 確認沒有「不在 manifest 但被錯誤修改的文件」（即 manifest 外的意外變更）
+5. 若發現遺漏或錯誤，標示在輸出報告中
+
+**逐條比對輸出格式（必填）：**
+
+| # | 預期更新文件 | 狀態 | 說明 |
+|---|------------|------|------|
+| 1 | docs/api.md | ✅ PASS | 已正確反映 X API 新增 |
+| 2 | README.md | ❌ FAIL | 缺少 Y 功能用法說明 |
+| ... | ... | ... | ... |
+| **計數** | 預期 M 份 | 已確認 K 份 | 差集 = M-K 份遺漏 |
 
 **輸出格式：**
 
@@ -130,6 +166,23 @@ Agent(subagent_type="everything-claude-code:code-reviewer")
 
 若對話中無有價值的 context 可提取，直接進入 Step 4。
 
+**Step 3 結束時建立「知識寫入 Manifest」（依據：DAMA-DMBOK Completeness）：**
+
+context 整理完成、使用者確認後，必須輸出以下格式的 manifest，供 Step 5 最終比對使用：
+
+```markdown
+## 知識寫入 Manifest（Step 3 初版）
+
+| # | 項目摘要 | 目標知識庫 | 狀態 |
+|---|---------|-----------|------|
+| 1 | [決策] 選 A 不選 B 的原因 | docs/decisions/ | 待寫入 |
+| 2 | [研究] 3 個框架比較結果 | research/ | 待寫入 |
+| 3 | [feedback] 使用者偏好修正 | MEMORY.md | 待寫入 |
+| 4 | [pattern] 跨專案可重用模式 | 交給 Step 4 learn-eval | 待提取 |
+
+expected_count（Step 3 識別項目）= N
+```
+
 **交接資訊：** 將「跨專案可重用的技術 pattern」清單傳遞給 Step 4 learn-eval 處理。
 
 ## Step 4: learn-eval — 提取可復用模式
@@ -150,6 +203,24 @@ Skill(skill="everything-claude-code:learn-eval")
 - 標準化方案選型（standardized solution selections）
 
 > Step 3 已將「專案特定 context」分流到知識庫，learn-eval 聚焦在跨專案可重用的 patterns。
+
+**Step 4 結束時更新「知識寫入 Manifest」：**
+
+learn-eval 完成後，將提取到的 patterns 回寫至 manifest（新增條目或更新狀態）：
+
+```markdown
+## 知識寫入 Manifest（Step 4 更新版）
+
+| # | 項目摘要 | 目標知識庫 | 狀態 |
+|---|---------|-----------|------|
+| 1 | [決策] 選 A 不選 B 的原因 | docs/decisions/ | 已寫入 ✅ |
+| 2 | [研究] 3 個框架比較結果 | research/ | 已寫入 ✅ |
+| 3 | [feedback] 使用者偏好修正 | MEMORY.md | 已寫入 ✅ |
+| 4 | [pattern] 跨專案可重用模式 | ~/.claude/skills/learned/ | 已提取 ✅ |
+| 5 | [pattern] learn-eval 新發現模式（如有） | ~/.claude/skills/learned/ | 待 Step 5 驗證 |
+
+expected_count（更新後）= N'
+```
 
 **品質評估：** learn-eval 會自動進行 5 維度評分，至少達 3 分才會保存。
 
@@ -178,9 +249,11 @@ origin: auto-extracted
 
 > 既有 learned skills 的格式修復 → `/curation`（批量 remediation）。
 
-## Step 5: 知識庫交叉比對（主動寫入 + HITL 確認）
+## Step 5: 知識庫交叉比對（Manifest-driven 驗證 + 主動寫入）
 
-learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正確更新。**偵測到遺漏時主動起草修正內容。**
+（依據：DAMA-DMBOK Completeness + arXiv:2509.18970 結構性驗證優先於語意驗證）
+
+learn-eval 完成後，執行 **manifest-driven** 最終驗證，確認所有知識庫都已正確更新。**不依賴 LLM 語意判斷「應該沒有遺漏」，必須使用 grep/glob/count 等確定性工具逐條驗證。**
 
 **盤點本次 session 涉及的知識庫位置：**
 
@@ -192,31 +265,44 @@ learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正
 | 專案知識庫 | Step 3 確認的目錄 | 專案特定的決策/研究紀錄 |
 | 專案文件 | `docs/`、`research/`、`README.md` | 專案說明文件 |
 
-**交叉比對步驟：**
+**Manifest-driven 驗證步驟（依據：DAMA-DMBOK Completeness）：**
 
-1. 讀取上述各知識庫的實際內容
-2. 對照本次 session 的工作內容，逐一確認：
-   - 有做但未記錄的決策或模式
-   - 記錄的內容是否與實際一致（無錯誤描述）
-   - 本次引用的業界標準或學術依據是否已記錄到適當的知識庫
-   - 是否有跨知識庫的不一致（例如 MEMORY.md 與 learned skill 矛盾）
-   - Step 3 識別的 context 是否都已寫入知識庫
-3. 若發現遺漏，**為每個遺漏項起草修正內容**（而非僅列出差異）
+接收 Step 3/4 的「知識寫入 Manifest」（expected_count = N'），執行以下確定性驗證（不可用自由語意判斷代替）：
 
-**主動寫入流程：** 偵測到遺漏時：
+1. **逐條枚舉 manifest 所有項目**——列出所有 N' 個預期寫入項目
+2. **對每個項目使用 grep/glob 驗證是否已寫入對應知識庫：**
+   - 決策/研究類 → `Grep(pattern="<關鍵詞>", path="<目標目錄>")`
+   - learned skill → `Glob(pattern="~/.claude/skills/learned/*.md")` + 讀取確認內容
+   - MEMORY.md feedback → `Grep(pattern="<偏好關鍵詞>", path="<MEMORY.md 路徑>")`
+3. **計數比對：** `expected_count（N'）- actual_verified_count（grep 確認存在數）= 差集`
+4. **差集 = 遺漏項**，為每個遺漏項主動起草修正內容（不只列出差異）
+5. 交叉檢查：是否有跨知識庫的不一致（例如 MEMORY.md 與 learned skill 矛盾）
+
+**Manifest 逐條驗證輸出格式（必填）：**
+
+| # | 項目摘要 | 目標知識庫 | 驗證方法 | 結果 |
+|---|---------|-----------|---------|------|
+| 1 | [決策] 選 A 不選 B | docs/decisions/xxx.md | grep "選 A" | ✅ PASS（第 12 行） |
+| 2 | [pattern] debugging pattern | ~/.claude/skills/learned/ | glob + 讀取 | ❌ FAIL（未找到） |
+| 3 | [feedback] 偏好修正 | MEMORY.md | grep "偏好" | ✅ PASS |
+| **計數** | 預期 N' 項 | — | — | 已驗證 K 項，差集 = N'-K |
+
+**主動寫入流程：** 差集 > 0 時：
 
 1. 列出「有做但未記錄的決策/知識」
 2. 為每個遺漏項**起草修正內容**
 3. HITL 確認：
 
 ```
-知識庫交叉比對發現以下遺漏：
+知識庫交叉比對發現以下遺漏（Manifest 差集）：
 
 1. [MEMORY.md project] 本次選擇 X 架構的決策未記錄
+   驗證方法：grep "X 架構" → 0 結果
    起草內容（memory file `project_architecture_xxx.md`）：
    選擇 X 架構而非 Y，因為...（含 trade-offs 和 rationale）
 
 2. [learned skill] 本次發現的 debugging pattern 未提取
+   驗證方法：glob ~/.claude/skills/learned/*.md → 無匹配
    起草內容：...
 
 [確認寫入] / [調整後寫入] / [跳過]
@@ -234,10 +320,12 @@ learn-eval 完成後，執行最終交叉比對，確認所有知識庫都已正
 **無遺漏時的 HITL 確認：**
 
 ```
-知識庫交叉比對結果：
-✅ MEMORY.md — 已正確記錄 xxx
-✅ learned/yyy.md — 內容與實作一致
-✅ 專案知識庫 — Step 3 識別的 context 已全部寫入
+知識庫交叉比對結果（Manifest-driven 驗證）：
+✅ MEMORY.md — grep 確認已記錄 xxx（第 N 行）
+✅ learned/yyy.md — glob + 讀取確認，內容與實作一致
+✅ 專案知識庫 — Step 3 識別的 N' 個項目全部 grep 驗證通過
+
+計數比對：expected_count = N'，verified_count = N'，差集 = 0
 
 [確認無誤，結束]
 ```

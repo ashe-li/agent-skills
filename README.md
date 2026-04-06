@@ -91,7 +91,7 @@ npx skills add ashe-li/agent-skills --global
 - code-reviewer 審查文件品質，確保文件與程式碼一致
 - **對話 context 整理**：提取決策脈絡、研究成果、使用者偏好，HITL 確認後寫入知識庫
 - learn-eval 提取可復用 patterns，強制 frontmatter + 5 維度評分表格
-- **知識庫交叉比對強化**：偵測遺漏時主動起草修正內容並寫入（非僅報告差異）
+- **Manifest-driven 知識庫驗證**：工作前建立期望清單，完成後用 grep/glob/count 做 set difference 驗證，不依賴 LLM 語意判斷
 - **Pipeline 串接**：`/update /pr` 一條指令完成知識沉澱 + PR 交付，自動去重
 
 **`/update /pr` 資源去重：**

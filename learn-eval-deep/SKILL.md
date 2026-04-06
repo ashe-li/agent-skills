@@ -48,6 +48,24 @@ python3 ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py \
 如果 bridge 不存在，提示：
 > Bridge 尚未安裝。請先 clone: `~/Documents/skills-ecosystem-eval/`
 
+**Bridge 輸出完整性檢查（依據：arXiv:2509.18970 結構性驗證優先）：**
+
+Bridge 執行後，在呈現分數前，用確定性工具驗證輸出包含所有預期欄位：
+
+| 模式 | 必要欄位 | 驗證方式 |
+|------|---------|---------|
+| structural | `s3_score`, `code_score`, `density`, `section_score`, `redundancy_penalty` | 檢查 bridge stdout/JSON 鍵值存在 |
+| trigger | + `s1_score`, `description_quality` | 同上 |
+| full | + `s2_delta`, `with_skill_score`, `without_skill_score` | 同上 |
+
+若任何必要欄位缺失，**停止計算並警告**：
+```
+[警告] Bridge 輸出缺少欄位：{缺失欄位列表}
+分數計算不完整，映射結果不可靠。請確認 bridge 版本是否相容。
+```
+
+缺失欄位的對應維度分數標記為 `N/A`，不以 0 代入計算。
+
 ## Step 4: 呈現結果
 
 ### 三系統分數
@@ -76,23 +94,46 @@ Coverage         X.X/5      ≥ 3 ✓/✗
 總分             XX.X/25    Gate: PASS/FAIL
 ```
 
+### 資料來源覆蓋率標註（依據：OpenAI Developer Community 共識 — Checklist-driven）
+
+每個維度分數旁標註資料來源的可靠度：
+
+| 維度 | 分數 | 資料覆蓋率說明 |
+|------|------|--------------|
+| Specificity | X.X/5 | S3 結構分析（確定性，1 次掃描）|
+| Actionability | X.X/5 | S2 delta 基於 1 case × 1 run — 統計力有限，僅供 sanity check |
+| Scope Fit | X.X/5 | S1 描述品質分析（LLM 語意判斷，補充性）|
+| Non-redundancy | X.X/5 | S3 結構分析（確定性）|
+| Coverage | X.X/5 | S3 結構分析（確定性）|
+
+覆蓋率等級：
+- **高**：確定性工具（grep/glob/AST），結果可重現
+- **中**：LLM 語意判斷，結果可能因 prompt 變化而浮動
+- **低**：單一 case 消融實驗，統計力不足以做強結論
+
 ### 標註重點
 
 - 任何維度 < 3.0：明確標為 **[FAIL]** 並說明原因
 - 冗餘度高：列出重疊的 skills 名稱
 - 沒有程式碼範例：特別標註（最常見的扣分原因）
+- 覆蓋率「低」的維度：加上 `[低統計力]` 標記，避免誤判
 
 ## Step 5: 建議動作
 
 根據結果給出具體建議：
 
-| 結果 | 建議 |
-|------|------|
-| Gate PASS + 無 issue | 品質確認，無需動作 |
-| Gate PASS + 有 issue | 列出改善項（如：加 code example） |
-| Gate FAIL | 列出必要修正，問使用者是否要現在修 |
-| 冗餘度高 | 建議合併或差異化，列出重疊 skill |
-| delta ≤ 0 (full 模式) | skill 可能沒有實際幫助，建議檢視內容是否已被模型的 parametric knowledge 覆蓋 |
+| 結果 | 建議 | 驗證信心度 |
+|------|------|-----------|
+| Gate PASS + 無 issue | 品質確認，無需動作 | 取決於使用的模式（structural 最低，full 最高）|
+| Gate PASS + 有 issue | 列出改善項（如：加 code example） | 中（LLM 語意判斷補充）|
+| Gate FAIL | 列出必要修正，問使用者是否要現在修 | 高（結構性驗證）|
+| 冗餘度高 | 建議合併或差異化，列出重疊 skill | 高（grep 確定性搜尋）|
+| delta ≤ 0 (full 模式) | skill 可能沒有實際幫助，建議檢視內容是否已被模型的 parametric knowledge 覆蓋 | 低 [低統計力] — 1 case 消融僅供方向參考，不宜直接退役 |
+
+**驗證信心度摘要（依據：arXiv:2509.18970）：**
+- structural 模式：高（純結構分析，可重現）
+- trigger 模式：中（LLM 語意判斷，需人工確認）
+- full 模式：中低（消融 1 case，需多次重跑才有統計意義）
 
 **如果使用者同意修改：** 直接讀取 skill 檔案，根據建議進行修改（加 code examples、改 description 等），修改後重跑 bridge 驗證。
 

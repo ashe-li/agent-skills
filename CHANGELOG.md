@@ -19,6 +19,9 @@
 - `/ecc-skill-defer`: 核心 skill 保護升級為 HITL Guard；apply/restore 新增操作驗證
 - `/playwright-human-in-the-loop`: Step 3 新增強制 snapshot checklist；Step 4 改為 manifest-driven 報告
 
+### Fixed
+- `/pr`: Step 1a 修正 stale local branch 陷阱 — 所有 `git log/diff <base-branch>..HEAD` 改為 `origin/<base-branch>..HEAD`，新增 `git fetch origin` 前置步驟與 `gh pr diff` 交叉驗證機制
+
 ## [v1.20.0] - 2026-04-06
 
 ### Added

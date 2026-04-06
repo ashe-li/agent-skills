@@ -2,6 +2,12 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.20.0] - 2026-04-06
+
+### Added
+- `/evidence-check`: 新增獨立證據查驗 skill — 四維度並行調查(D1 學術研究、D2 業界標準、D3 最佳實踐、D4 社群共識+反面意見)，2 個 haiku subagent 並行，跨來源衝突偵測(AGREE/PARTIAL/CONFLICT/NO-DATA)，5 級 verdict，輸出與 /design plan 格式相容
+- `README.md`: 新增 `/evidence-check` 至 Usage、Skills 總覽、決策樹
+
 ## [v1.19.0] - 2026-04-05
 
 ### Changed

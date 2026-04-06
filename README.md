@@ -40,6 +40,7 @@ npx skills add ashe-li/agent-skills --global
 /plan-archive              # 歸檔已完成的 plan
 /ecc-skill-defer apply     # Defer 不常用的 skills
 /playwright-human-in-the-loop  # 安全的瀏覽器自動化
+/evidence-check <技術決策>     # 四維度獨立證據查驗
 ```
 
 ## Skills 總覽
@@ -58,6 +59,7 @@ npx skills add ashe-li/agent-skills --global
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | Defer/restore skills 減少 init tokens |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
+| [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
@@ -264,6 +266,24 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
+### `/evidence-check` — 獨立證據查驗
+
+對單一技術主張從 4 個維度(學術研究、業界標準、最佳實踐、社群共識)做獨立原始研究。
+
+<details>
+<summary>Features</summary>
+
+- 2 個並行 subagent(haiku)分組調查：Formal Sources(D1 學術 + D2 業界) / Practitioner Sources(D3 實踐 + D4 社群)
+- 跨維度衝突偵測：AGREE / PARTIAL / CONFLICT / NO-DATA 判定
+- 整體 Verdict：WELL-SUPPORTED / CONDITIONALLY-SUPPORTED / WEAKLY-SUPPORTED / CONFLICTED / INSUFFICIENT-EVIDENCE
+- 輸出格式與 `/design` plan 相容(Industry & Standards Reference + Community Consensus 表格)，可直接貼入
+- Step 0 HITL：執行前告知預估 token 消耗(~16K-30K)，使用者確認後才啟動
+- 與 `/design` 互補：/design 做 inline 驗證(驗證計畫中已有引述)，/evidence-check 做獨立深度調查
+
+**方法論依據：** EBSE 四類證據分類(Kitchenham et al., 2004)、ITIL CMDB Reconciliation、DAMA-DMBOK Completeness
+
+</details>
+
 ### `/playwright-human-in-the-loop` — 瀏覽器操作
 
 透過 Playwright MCP 操作瀏覽器，重大操作前暫停等待人類確認。
@@ -354,6 +374,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ Worktree 要清理 ─→ /worktree cleanup
 ├─ 有 Notion ticket ─→ /notion-plan <URL>
 ├─ Learned skills 要分流 → /triage
+├─ 技術決策需要深度查驗 → /evidence-check <做法>
 ├─ Skill 品質要深度驗證 → /learn-eval-deep <skill>
 └─ 優化 init tokens ─→ /ecc-skill-defer apply
 ```

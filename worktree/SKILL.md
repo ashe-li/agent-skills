@@ -53,6 +53,14 @@ REPO_NAME=$(basename "$REPO_ROOT")
      - `/tmp/` 或 `/private/tmp/` → `[non-standard]`
      - 其他 → `[non-standard]`
 
+4. **一致性檢查**（依據：DAMA-DMBOK Completeness — manifest vs. actual set difference）：
+   - 對每個 `git worktree list` 回傳的路徑，執行 `test -d <path>` 確認目錄實際存在
+   - 若路徑在 git 清單中但目錄不存在 → 標記 `[orphan]`，並在輸出最後顯示警告：
+     ```
+     警告：偵測到 N 個孤立 worktree metadata（目錄已不存在但 git 仍有紀錄）
+     執行 `/worktree prune` 清理孤立 metadata。
+     ```
+
 **輸出格式：**
 
 ```
@@ -115,7 +123,10 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 
 1. `git worktree list --porcelain` 列出所有非 main worktree
 2. 對每個 worktree 判斷是否符合清理條件：
-   - PR 狀態為 MERGED 或 CLOSED
+   - 先執行 `gh pr list --head <branch> --state all --json number,state,mergedAt --limit 1` 查詢 PR 狀態
+   - 若 `gh` 指令失敗（非零 exit code）或回傳空結果 → PR 狀態標記為 `[unknown]`，**不靜默跳過**，仍列入清理候選並在表格中顯示 `[unknown]`（依據：ITIL CMDB Reconciliation — 查詢失敗需明確標記，不得隱式忽略）
+   - PR 狀態為 MERGED 或 CLOSED → 符合清理條件
+   - PR 狀態為 `[unknown]` → 列入清理候選，表格標記 `[unknown]`，讓使用者自行判斷
    - 或無 PR 且分支已 merged into base（`git branch --merged <base> | grep <branch>`）
 3. 對符合條件的 worktree，檢查髒目錄：
    - `git -C <path> status --porcelain` 若有輸出 → 標記 `[dirty]` 並警告
@@ -141,9 +152,19 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
    git worktree remove <path>
    git branch -d <branch>  # 若分支已 merged
    ```
-7. 報告結果：
+7. **操作驗證**（依據：DAMA-DMBOK Completeness — expected vs. actual count）：
+   - 刪除後重新執行 `git worktree list --porcelain`，確認已刪除的路徑不再出現於列表
+   - 逐條對照清理清單（manifest）：
+
+     | Path | 預期結果 | 實際結果 |
+     |------|----------|----------|
+     | ~/Documents/<repo>-<name> | 已移除 | PASS / FAIL |
+
+   - 若任何路徑仍在列表中 → 輸出 `[FAIL]` 並提示手動執行 `git worktree prune`
+8. 報告結果：
    ```
    已清理 N 個 worktree，回收 X 磁碟空間。
+   驗證：N/N 個 worktree 已從 git 列表移除。
    ```
 
 ---
@@ -168,3 +189,5 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 - **確認閘門**：cleanup/create 前都用 AskUserQuestion 等待確認
 - **髒目錄保護**：cleanup 預設跳過有未 commit 變更的 worktree
 - **Legacy 標記**：status 輸出標記非標準路徑，鼓勵遷移至標準路徑
+- **Manifest-driven 驗證**：cleanup 後必須重新 list 比對（expected set ≡ actual set）；status 交叉驗證 git metadata 與實際目錄（依據：DAMA-DMBOK Completeness）
+- **Fail-explicit**：`gh` 查詢失敗時標記 `[unknown]`，不靜默跳過（依據：ITIL CMDB Reconciliation）

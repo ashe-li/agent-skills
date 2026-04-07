@@ -17,10 +17,16 @@ argument-hint: [PR 號碼或留空建立新 PR]
 
 1. 執行 `git status` 和 `git diff`（staged + unstaged）了解**未 commit 的變更**
 2. 執行 `git log` 查看近期 commit 風格
-3. **關鍵步驟 — 確認 PR 完整範圍：**
-   - 執行 `git log --oneline <base-branch>..HEAD` 查看 PR 包含的**所有 commits**
+3. **關鍵步驟 — 同步遠端並確認 PR 完整範圍：**
+   - **先執行 `git fetch origin`** — 確保本地的遠端 refs 是最新的
+   - 執行 `git log --oneline origin/<base-branch>..HEAD` 查看 PR 包含的**所有 commits**
    - 執行 `gh pr diff <PR-number> --name-only` 查看 PR 涉及的**所有檔案**
    - 如果已有 open PR，執行 `gh pr view <PR-number> --json body` 讀取現有 description
+   - **交叉驗證：** 比對 `git log` 結果與 `gh pr diff` 結果，若差異過大（例如 git log 顯示 50+ commits 但 gh pr diff 僅 1-2 files），以 `gh pr diff` 為準並重新檢視
+
+> ⚠️ **Stale Local Branch 陷阱：** 本地的 `master`/`main`/`hotfix` 可能落後遠端數十個 commits。
+> **永遠使用 `origin/<base-branch>` 比較，不要用本地 `<base-branch>`。**
+> 若忘記 fetch，會把已經 merge 的 commits 算進 PR 範圍，導致 description 嚴重失準。
 
 ### 1b. 對話脈絡分析
 
@@ -39,6 +45,26 @@ argument-hint: [PR 號碼或留空建立新 PR]
 > - 只看 `git diff` 會遺漏 PR 中其他 commits 的內容
 > - **只看 diff 不看對話**會遺漏「為什麼這樣做」的決策脈絡
 > - PR description 必須同時反映 **what changed（diff）** 和 **why it changed（對話 context）**
+
+**Step 1b 結束時建立「Context Manifest」（依據：DAMA-DMBOK Completeness）：**
+
+對話脈絡分析完成後，必須輸出以下格式的 manifest，供 Step 5 PR Description 撰寫時逐條比對：
+
+```markdown
+## Context Manifest（Step 1b → Step 5 交接）
+
+| # | Context 類型 | 摘要 | 已寫入 PR Description？ |
+|---|------------|------|------------------------|
+| 1 | 動機 | 使用者原始需求 xxx | 待比對 |
+| 2 | 放棄的方案 | 考慮過 A 但因 B 放棄 | 待比對 |
+| 3 | 決策依據 | 選 X 不選 Y，因為 Z | 待比對 |
+| 4 | 業界/學術依據 | 採用 RFC 6749 因為... | 待比對 |
+| 5 | 社群共識與反面意見 | SO 社群建議 X，但已知陷阱... | 待比對 |
+| 6 | 隱含知識 | 調查了 4 個框架，數據顯示... | 待比對 |
+| ... | ... | ... | 待比對 |
+
+expected_count = N（對話中識別的 context 項目總數）
+```
 
 ### 1c. 總結
 
@@ -156,7 +182,7 @@ gh pr create --base master ...
 1. 確認專案根目錄是否有 `CHANGELOG.md`
 2. 如果有，檢查最新條目是否涵蓋本次 PR 的變更：
    - 讀取 CHANGELOG.md 最新版本區塊
-   - 比對 `git log <base-branch>..HEAD --oneline` 的 commits
+   - 比對 `git log origin/<base-branch>..HEAD --oneline` 的 commits
    - 如果有 commits 未被記錄在 CHANGELOG 中 → 使用 AskUserQuestion 提醒：
      > CHANGELOG.md 尚未包含以下變更：
      > - `<未記錄的 commit 摘要>`
@@ -225,9 +251,13 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 ## Changes
 
 <!-- 按主題分類列出變更，涵蓋 PR 的所有 commits（不只是當次對話的工作） -->
-<!-- 用 git log <base-branch>..HEAD 確認完整範圍 -->
-<!-- 用 git diff <base-branch>..HEAD --diff-filter=D --name-only 確認刪除的檔案 -->
+<!-- 用 git log origin/<base-branch>..HEAD 確認完整範圍（必須先 git fetch origin） -->
+<!-- 用 git diff origin/<base-branch>..HEAD --diff-filter=D --name-only 確認刪除的檔案 -->
 <!-- 每個主題明確標示：新增了什麼、刪除了什麼、修改了什麼 -->
+<!-- ⚠️ 計數驗證（依據：DAMA-DMBOK Completeness）：-->
+<!--    commits 總數（git log --oneline <base>..HEAD | wc -l）= C -->
+<!--    Changes 中提到的 commit 主題數 = K -->
+<!--    若 K < C，差集 commits 可能未被反映，應補充或說明合併分類的原因 -->
 
 ## Test plan
 
@@ -259,6 +289,20 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 - 「審計發現 145+ 個檔案受影響，所以分 4 個 phase」
 - 「考慮過全面導入但太重，改為選擇性採用」
 - 「這個工具只有 111 stars，太早期所以自己寫」
+
+**Manifest 逐條比對（依據：DAMA-DMBOK Completeness + arXiv:2509.18970 結構性驗證）：**
+
+撰寫 Context 區塊時，必須逐條比對 Step 1b 的「Context Manifest」，確保每個 context 項目都已反映在 PR description 中：
+
+| # | Context Manifest 項目 | 已寫入 PR Description？ |
+|---|---------------------|------------------------|
+| 1 | 動機：xxx | ✅ 出現在 Summary 或 Context |
+| 2 | 放棄的方案：考慮過 A... | ✅ 出現在 Context 第 X 段 |
+| 3 | 業界依據：RFC 6749 | ❌ 尚未寫入，需補充 |
+| ... | ... | ... |
+| **計數** | expected_count = N | actual_written = K，差集 = N-K |
+
+差集 > 0 的項目必須補充至 PR description，不可遺漏。
 
 **目標：** reviewer 不需要問「為什麼這樣做？」就能從 PR description 找到答案
 

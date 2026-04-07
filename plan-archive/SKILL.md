@@ -35,6 +35,24 @@ ls plans/active/*.md 2>/dev/null
 - 是否有 `## 驗證` 或 `## Verification` 段落
 - 是否有 `## Industry & Standards Reference` 段落
 
+**建立步驟完成 manifest（依據：DAMA-DMBOK Completeness）：**
+
+讀取完畢後，枚舉 plan 中每個 Phase/Step，建立 manifest：
+
+| # | Phase/Step 標題 | 完成狀態 | 備註 |
+|---|----------------|---------|------|
+| 1 | Phase 1: ... | PENDING | |
+| 2 | Step 2.1: ... | PENDING | |
+
+- 每個 `## Phase X` 或 `### Step X.Y` 標題都登錄為一列
+- 若 plan 有 `## Industry & Standards Reference` 表格，額外建立「參照落實 manifest」：
+
+| # | 參照項目 | 預期應用方式 | 落實狀態 |
+|---|---------|------------|---------|
+| 1 | DAMA-DMBOK ... | ... | PENDING |
+
+Manifest 總數 = 後續完成率計算的分母。
+
 ---
 
 ## Step 3：補充驗證結果
@@ -46,11 +64,41 @@ ls plans/active/*.md 2>/dev/null
 
 ```
 
-再追加或更新 `## 驗證結果` 段落，填入：
-- 測試通過數（若有）
-- 實際執行結果（對照 plan 中的「預期」）
-- 業界/學術參照落實情況 — 對照 plan 的 Industry & Standards Reference，確認各項參照是否已實際應用
-- 任何偏差或補充說明
+再追加或更新 `## 驗證結果` 段落，使用 **manifest-driven 逐條驗證**（依據：OpenAI Developer Community 共識 — Checklist-driven > Free-form）：
+
+**步驟完成度驗證（逐條比對 manifest）：**
+
+| # | Phase/Step | 預期結果 | 實際結果 | 狀態 |
+|---|-----------|---------|---------|------|
+| 1 | Phase 1: ... | ... | ... | PASS/FAIL |
+| 2 | Step 2.1: ... | ... | ... | PASS/FAIL |
+
+- 每個 manifest 項目逐一填入實際結果並標記 PASS/FAIL
+- FAIL 項目必須附說明（是否為可接受的偏差或待處理問題）
+
+**業界/學術參照落實驗證（依據：ITIL CMDB Reconciliation）：**
+
+若 plan 有 `## Industry & Standards Reference`，逐條對照確認落實情況：
+
+| # | 參照項目 | 預期應用方式 | 實際落實情況 | 落實狀態 |
+|---|---------|------------|------------|---------|
+| 1 | DAMA-DMBOK ... | ... | ... | APPLIED/PARTIAL/NOT_APPLIED |
+
+- `APPLIED`：已在實作中具體應用
+- `PARTIAL`：部分應用，說明未覆蓋的部分
+- `NOT_APPLIED`：未應用，說明原因（環境限制 / 決策變更 / 遺漏）
+
+**完成率計算（依據：DAMA-DMBOK Completeness）：**
+
+```
+步驟完成率 = PASS 步驟數 / Manifest 總步驟數
+參照落實率 = APPLIED 數 / Manifest 總參照數
+```
+
+- 步驟完成率 < 100%：**警告** — 有未完成步驟，確認是否為已知的可接受偏差
+- 步驟完成率 < 80%：**阻止歸檔** — 需告知使用者，要求確認是否仍要歸檔
+
+其他內容（測試通過數、任何偏差或補充說明）保留於此段落。
 
 ---
 

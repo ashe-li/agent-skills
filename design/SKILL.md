@@ -105,12 +105,22 @@ Agent(subagent_type="everything-claude-code:planner")
    - 可擴展性評估 — 能否應對合理範圍的需求增長
    - 效能和安全性影響評估
    - 實作後需要新增或更新的文件（README、API docs、CODEMAPS）
-5. **ECC 資源整合** — 明確指出每個步驟應使用哪個 agent/skill/command。**ECC 資源分配須經盤點確認** — 不可假設資源可用，須回溯 Step 1 的盤點結果
+5. **需求追蹤矩陣（Requirements Traceability Matrix）**（依據：DAMA-DMBOK Completeness）— 每個需求必須映射到至少一個實作步驟，格式如下：
+
+   | 需求 ID | 需求描述（來自 $ARGUMENTS） | 對應實作步驟 | 驗收標準 |
+   |--------|--------------------------|------------|---------|
+   | REQ-1 | 使用者描述的需求 A | Step 2: xxx | 可客觀驗證的標準 |
+   | REQ-2 | 使用者描述的需求 B | Step 3, Step 5 | ... |
+   | ... | ... | ... | ... |
+
+   此矩陣用於 Step 4a 需求覆蓋率審查的輸入（set difference 比對）。
+
+6. **ECC 資源整合** — 明確指出每個步驟應使用哪個 agent/skill/command。**ECC 資源分配須經盤點確認** — 不可假設資源可用，須回溯 Step 1 的盤點結果
    - 例：「Step 3: 使用 tdd-guide agent 撰寫測試」
    - 例：「Step 5: 使用 /code-review 進行品質審查」
-6. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
-7. **風險評估** — 潛在的技術風險和對策
-8. **驗收標準** — 怎樣算完成
+7. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
+8. **風險評估** — 潛在的技術風險和對策
+9. **驗收標準** — 怎樣算完成
 
 ## Step 4: 品質檢查與 Plan Mode 呈現
 
@@ -139,6 +149,7 @@ Agent(subagent_type="general-purpose", model="sonnet")
 
 | 維度 | 通過標準 |
 |------|---------|
+| 需求覆蓋率 | 需求追蹤矩陣的每個 REQ-N 都有對應實作步驟（set difference = 0）（依據：DAMA-DMBOK Completeness） |
 | 完整性 | 每個需求都有對應的實作步驟 |
 | 可執行性 | 每個步驟有明確的檔案路徑和具體動作 |
 | 依賴正確性 | 步驟間依賴無環且順序合理 |
@@ -149,6 +160,21 @@ Agent(subagent_type="general-purpose", model="sonnet")
 | 社群共識與反面意見 | 每個技術方案都納入社群主流看法，並揭露已知的反面意見、批評或陷阱 |
 | 實作後工具 | plan 的步驟中包含實作後的品質保障（code-reviewer、/simplify、/update、/verify 等） |
 | Eval 基線 | 若涉及行為變更，計畫中包含 eval 基線建立與回歸驗證步驟（參考 `/quality-gate`） |
+
+**需求覆蓋率驗證方法（依據：DAMA-DMBOK Completeness + arXiv:2509.18970）：**
+
+subagent 必須基於需求追蹤矩陣執行 set difference 比對，不可用語意判斷代替計數驗證：
+
+1. 從 $ARGUMENTS 和對話脈絡中，枚舉所有明確需求（REQ-1, REQ-2, ...），總計 N 個
+2. 檢查需求追蹤矩陣：每個 REQ-N 是否有對應的實作步驟
+3. 計數比對：`total_requirements（N）- requirements_with_steps（K）= uncovered（差集）`
+4. 差集 > 0 → 需求覆蓋率 FAIL，列出未覆蓋的需求
+
+| 需求 | 有對應步驟？ | 判定 |
+|------|------------|------|
+| REQ-1: xxx | Step 2 ✅ | PASS |
+| REQ-2: yyy | ——（無） | FAIL |
+| **計數** | N 個需求，K 個已覆蓋 | 差集 = N-K |
 
 **架構審查（中等以上複雜度才執行）：**
 

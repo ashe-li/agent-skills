@@ -2,6 +2,14 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.21.1] - 2026-04-16
+
+### Changed
+- `/ecc-skill-defer`: conf 依 ECC 1.10.0 `install-modules.json` 結構更新；新增 operator-workflows 模組區塊；defer 60 → 71（+11）
+- 新增 defer：`manim-video`、`remotion-video-creation`（media-generation）、`brand-voice`、`social-graph-ranker`（business-content）、`nestjs-patterns`、`laravel-plugin-discovery`（framework-language）、`connections-optimizer`、`customer-billing-ops`、`google-workspace-ops`、`project-flow-ops`、`workspace-surface-audit`（operator-workflows）
+- `DEFER_REFERENCE.md`: 同步新增 skills 與 operator-workflows 模組
+- `README.md`: defer 數量 61 → 71，結構版本標示 1.9.0 → 1.10.0
+
 ## [v1.21.0] - 2026-04-06
 
 ### Changed

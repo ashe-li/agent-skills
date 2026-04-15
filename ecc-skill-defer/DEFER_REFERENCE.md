@@ -1,6 +1,6 @@
 # ECC Skill Defer 參考表
 
-> 依 ECC 1.9.0 `install-modules.json` 模組結構組織。
+> 依 ECC 1.10.0 `install-modules.json` 模組結構組織。
 > 執行 `ecc-skill-defer.sh restore <name>` 可隨時恢復。
 
 ## Whole Modules — 整個模組跳過
@@ -18,13 +18,17 @@
 | **media-generation** | video-editing | 影片剪輯工作流 | 未使用影片功能 |
 | | videodb | 影音索引/搜尋/編輯 | 未使用影片功能 |
 | | fal-ai-media | fal.ai 圖片/影片/音訊生成 | 未使用 AI 媒體生成 |
+| | manim-video | Manim 技術概念影片 | 未使用影片功能 |
+| | remotion-video-creation | Remotion React 影片 | 未使用影片功能 |
 | **social-distribution** | crosspost | 多平台社群發佈 | 未使用社群功能 |
 | | x-api | X/Twitter API 整合 | 未使用 X API |
 | **business-content** | article-writing | 文章撰寫 | 非開發用途 |
+| | brand-voice | 寫作風格 profile | 非開發用途 |
 | | content-engine | 內容生產引擎 | 非開發用途 |
 | | investor-materials | 投資者簡報/文件製作 | 非開發用途 |
 | | investor-outreach | 投資者接觸策略 | 非開發用途 |
 | | market-research | 市場調研分析 | 非開發用途 |
+| | social-graph-ranker | 社交圖譜排序 | 非開發用途 |
 | **document-processing** | nutrient-document-processing | Nutrient SDK 文件處理 | 未使用該 SDK |
 | | visa-doc-translate | 簽證文件翻譯 | 非開發用途 |
 | **swift-apple** | foundation-models-on-device | Apple FoundationModels on-device LLM | 未使用 Swift |
@@ -53,8 +57,10 @@
 | | kotlin-patterns | Kotlin 慣用模式 | 未使用 Kotlin |
 | | kotlin-testing | Kotlin Kotest TDD | 未使用 Kotlin |
 | | laravel-patterns | Laravel 架構模式 | 未使用 Laravel |
+| | laravel-plugin-discovery | Laravel 套件探索 | 未使用 Laravel |
 | | laravel-tdd | Laravel TDD | 未使用 Laravel |
 | | laravel-verification | Laravel 驗證迴圈 | 未使用 Laravel |
+| | nestjs-patterns | NestJS 架構模式 | 未使用 NestJS |
 | | perl-patterns | Perl 5.36+ 慣用模式 | 未使用 Perl |
 | | perl-testing | Perl 測試模式 | 未使用 Perl |
 | | rust-patterns | Rust 慣用模式 | 未使用 Rust |
@@ -73,6 +79,11 @@
 | | project-guidelines-example | 專案指南範例模板 | 範例檔，非實際功能 |
 | **agentic-patterns** | autonomous-loops | 自主迴圈控制 | 被 continuous-agent-loop 取代 |
 | | data-scraper-agent | 自動化資料採集 agent | 未使用爬蟲功能 |
+| **operator-workflows** | connections-optimizer | X/LinkedIn 網絡整理 | 非開發用途 |
+| *(保留: github-ops,* | customer-billing-ops | 客戶計費工作流 | 非開發用途 |
+| *jira-integration,* | google-workspace-ops | Google Drive/Docs/Sheets | 非開發用途 |
+| *terminal-ops, knowledge-ops,* | project-flow-ops | GitHub/Linear 執行流 | 非開發用途 |
+| *dashboard-builder)* | workspace-surface-audit | 工作空間/MCP 審計 | 非開發用途 |
 
 ## Agent Types — 語言專用 agents
 

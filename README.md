@@ -42,6 +42,7 @@ npx skills add ashe-li/agent-skills --global
 /playwright-human-in-the-loop  # 安全的瀏覽器自動化
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
+/handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
 ```
 
 ## Skills 總覽
@@ -62,6 +63,7 @@ npx skills add ashe-li/agent-skills --global
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
+| [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
 | [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
@@ -312,6 +314,28 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 | Ship-critical / 合規 / 高保證 | `/verify-evidence-loop`（~40-80k tokens，3-6x 成本） |
 | 通用產出品質審（非證據） | `/santa-method`（plugin） |
 | 已知 tradeoff，需 go/no-go | 人工裁決 / `/evidence-check` |
+
+</details>
+
+### `/handoff` — 跨 context 接手 prompt
+
+當你要切換 context（開新對話 / 即將 `/compact` / 換機器繼續 / 隔天再戰），自動萃取本次對話脈絡，產出**自包含的接手 prompt**，貼到任何新 context 都能無縫接手。
+
+<details>
+<summary>Features</summary>
+
+- **單一 skill 涵蓋兩種情境**（本質都是缺對話記憶）：新 context 接手、`/compact` 前準備
+- **7 區塊 manifest**：任務目標 / 當前進度 / 決策脈絡 / 環境快照 / 重要 context / 待辦項目 / 立即可執行的下一步（對齊 v1.21.0 DAMA-DMBOK Completeness 慣例）
+- **環境快照「相關性標註」**：stash、`plans/active/*.md`、其他 untracked 檔案逐項標註相關 vs 不相關，避免接手者誤判（誤 pop stash、誤碰其他任務的 plan）
+- **HITL 三選項輸出**：直接顯示 / 寫入 `.claude/handoff/<timestamp>.md` / 兩者皆要
+- **完整率閘門**：< 70% 阻止輸出，要求補充對話資訊後重跑
+- **與既有方案差異**：純文字 prompt（vs `everything-claude-code:save-session` 的 JSON），跨環境/跨機器/跨 LLM 通用，不需特定 runtime 載入
+
+**觸發語句範例：**
+- 「給我新 context 完整需要的 prompt」
+- 「我要準備 compact 了，給我 compact 之後可以用的 prompt」
+- 「幫我整理 handoff」
+- 「我要換機器繼續，給我接手用的 prompt」
 
 </details>
 

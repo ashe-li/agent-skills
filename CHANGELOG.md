@@ -2,6 +2,17 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.23.0] - 2026-04-18
+
+### Added
+- `/handoff`: 新增跨 context 接手 prompt skill — 萃取本次對話的目標、進度、決策、未完成項目，輸出可直接貼到新 session 或 `/compact` 之後使用的自包含 prompt。單一 skill 同時涵蓋「新 context 接手」和「compact 前準備」兩種情境（本質都是缺對話記憶）
+  - 7 區塊 manifest：任務目標 / 當前進度 / 決策脈絡 / 環境快照 / 重要 context / 待辦項目 / 立即可執行的下一步（對齊 v1.21.0 DAMA-DMBOK Completeness 慣例）
+  - HITL 三選項輸出：直接顯示 / 寫入 `.claude/handoff/handoff-<timestamp>.md` / 兩者皆要
+  - 完整率驗證：< 70% 阻止輸出，要求補充對話資訊後重跑
+  - 環境快照「相關性標註」：stash、`plans/active/*.md`、其他 untracked 檔案逐項標註相關 vs 不相關，避免接手者誤判（誤 pop stash、誤碰其他任務的 plan）
+  - 與既有方案差異：純文字 prompt 載體（vs `everything-claude-code:save-session` 的 JSON），跨環境/跨機器/跨 LLM 通用，不需特定 runtime
+- `README.md`: 新增 `/handoff` 至 Usage 與 Skills 總覽
+
 ## [v1.22.0] - 2026-04-18
 
 ### Added

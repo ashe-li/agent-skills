@@ -40,7 +40,8 @@ npx skills add ashe-li/agent-skills --global
 /plan-archive              # 歸檔已完成的 plan
 /ecc-skill-defer apply     # Defer 不常用的 skills
 /playwright-human-in-the-loop  # 安全的瀏覽器自動化
-/evidence-check <技術決策>     # 四維度獨立證據查驗
+/evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
+/verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 ```
 
 ## Skills 總覽
@@ -60,6 +61,7 @@ npx skills add ashe-li/agent-skills --global
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
+| [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
 | [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
@@ -284,6 +286,35 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
+### `/verify-evidence-loop` — 迭代式證據驗證
+
+比 `/evidence-check` 更嚴格的迭代版本：4 維證據蒐集 × 最多 3 輪 iteration × dual independent reviewer 收斂。適合高風險決策（ship-critical、合規、不可逆技術選擇）。
+
+<details>
+<summary>Features</summary>
+
+- **組合既有 primitive，不重造**：`evidence-check`（Generator）+ `santa-method`（Dual Reviewer gate）+ iterative-retrieval pattern + `/council`（escalation）
+- **4 維蒐集**（Haiku × 2 並行）：D1 學術 + D2 業界標準 / D3 最佳實踐 + D4 社群共識 + **Strong Dissent** sub-probe
+- **Dual Reviewer**（Sonnet × 2 並行，fresh per iteration）：R1 學術 / R2 標準 / R3 實踐 / R4 社群多元 / R5 Strong Dissent 五項獨立 rubric，B ∧ C 必須同時 PASS 才 NICE
+- **Strong dissent 為一等公民**：要求 source_url + verbatim_quote + argument ≥2 句；無 dissent 必須明確聲明 `NO-STRONG-DISSENT-FOUND`，禁用 WEAK 充數
+- **Hard cap = 3 iterations**（METR 2025 agent degradation 實證 >3 輪 drift）；耗盡後 escalate to `/council`
+- **Budget guard**：soft 60k / hard 120k token，pre-flight 檢查（不在 Phase A 啟動後才發現爆預算）
+- **Prompt injection 結構性防禦**：CLAIM 用 `---CLAIM-START---` 非 XML 分隔 + 確定性剝 `<`/`>`；WebSearch 結果顯式標不可信；evidence bundle 包 `<evidence>` tag 且禁 `##` heading 污染 reviewer prompt
+- **Verdict 區分**：STRONG dissent 存在 ≠ `CONFLICTED`；只有**跨維度對主張本身互斥**才 CONFLICTED
+
+**方法論依據：** Self-Refine (arXiv:2303.17651)、Reflexion (arXiv:2303.11366)、Multi-agent debate (arXiv:2305.14325)、LLM-as-Judge (arXiv:2306.05685)、IEEE 1012-2016 V&V、NIST SP 800-160、Anthropic "Building Effective Agents" (2024)。反面：Huang et al. (arXiv:2310.01798)、Dziri et al. (arXiv:2305.18654)、METR 2025 agent degradation。
+
+**何時用**：
+
+| 情境 | Skill |
+|---|---|
+| 日常查驗、時間/成本敏感 | `/evidence-check`（single-shot，~16-30k tokens） |
+| Ship-critical / 合規 / 高保證 | `/verify-evidence-loop`（~40-80k tokens，3-6x 成本） |
+| 通用產出品質審（非證據） | `/santa-method`（plugin） |
+| 已知 tradeoff，需 go/no-go | `/council`（plugin） |
+
+</details>
+
 ### `/playwright-human-in-the-loop` — 瀏覽器操作
 
 透過 Playwright MCP 操作瀏覽器，重大操作前暫停等待人類確認。
@@ -375,6 +406,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 有 Notion ticket ─→ /notion-plan <URL>
 ├─ Learned skills 要分流 → /triage
 ├─ 技術決策需要深度查驗 → /evidence-check <做法>
+├─ 高風險決策需迭代驗證 → /verify-evidence-loop <主張>
 ├─ Skill 品質要深度驗證 → /learn-eval-deep <skill>
 └─ 優化 init tokens ─→ /ecc-skill-defer apply
 ```

@@ -2,6 +2,24 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.22.0] - 2026-04-18
+
+### Added
+- `/verify-evidence-loop`: 新增迭代式證據驗證 skill — 組合既有 primitive（evidence-check Generator + santa-method Dual Reviewer + iterative-retrieval gap refinement），不重造。4 維蒐集 × 最多 3 輪 iteration × dual Sonnet reviewer 收斂迴圈，適合高風險決策。
+  - Haiku × 2 並行蒐證（D1 學術 + D2 標準 / D3 實踐 + D4 社群 + Strong Dissent probe），Sonnet × 2 並行獨立判讀（fresh per iteration），B ∧ C 必須同時 PASS 才 NICE
+  - Strong Dissent 為一等公民：要求 source_url + verbatim_quote + argument ≥2 句；reviewer 獨立判定 strength 不信任 subagent 自評標籤；無 dissent 必須明確 `NO-STRONG-DISSENT-FOUND`
+  - Hard cap=3（METR 2025 agent degradation 實證），耗盡後輸出 partial report 並要求人工裁決
+  - Budget guard：soft 60k / hard 120k，**pre-flight 檢查**（不在 Phase A 啟動後才發現超預算）
+  - Prompt injection 結構性防禦：CLAIM 用非 XML `---CLAIM-START---` / `---CLAIM-END---` 分隔 + 確定性剝 `<`/`>`；WebSearch 結果顯式不可信；evidence bundle 包 `<evidence>` tag 且禁 `##` heading 污染 reviewer prompt；耗盡迭代時只輸出 summary-only partial report
+  - Verdict 區分：STRONG dissent 存在 ≠ `CONFLICTED`；只有跨維度對主張本身互斥才 CONFLICTED
+- `README.md`: 新增 `/verify-evidence-loop` 至 Usage、Skills 總覽、決策樹
+
+### 方法論依據
+- Self-Refine (arXiv:2303.17651)、Reflexion (arXiv:2303.11366)、Multi-agent debate (arXiv:2305.14325)、LLM-as-Judge (arXiv:2306.05685)
+- IEEE 1012-2016 V&V、NIST SP 800-160、DAMA-DMBOK Completeness
+- Anthropic "Building Effective Agents" (2024)
+- 反面：Huang et al. (arXiv:2310.01798, LLMs cannot self-correct)、Dziri et al. (arXiv:2305.18654, Faith & Fate)、METR 2025 agent degradation
+
 ## [v1.21.1] - 2026-04-16
 
 ### Changed

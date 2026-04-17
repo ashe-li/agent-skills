@@ -293,13 +293,13 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 <details>
 <summary>Features</summary>
 
-- **組合既有 primitive，不重造**：`evidence-check`（Generator）+ `santa-method`（Dual Reviewer gate）+ iterative-retrieval pattern + `/council`（escalation）
+- **組合既有 primitive，不重造**：`evidence-check`（Generator）+ `santa-method`（Dual Reviewer gate）+ iterative-retrieval pattern；超過迭代上限時輸出 partial report 並要求人工裁決，不依賴不存在的 escalation skill
 - **4 維蒐集**（Haiku × 2 並行）：D1 學術 + D2 業界標準 / D3 最佳實踐 + D4 社群共識 + **Strong Dissent** sub-probe
 - **Dual Reviewer**（Sonnet × 2 並行，fresh per iteration）：R1 學術 / R2 標準 / R3 實踐 / R4 社群多元 / R5 Strong Dissent 五項獨立 rubric，B ∧ C 必須同時 PASS 才 NICE
 - **Strong dissent 為一等公民**：要求 source_url + verbatim_quote + argument ≥2 句；無 dissent 必須明確聲明 `NO-STRONG-DISSENT-FOUND`，禁用 WEAK 充數
-- **Hard cap = 3 iterations**（METR 2025 agent degradation 實證 >3 輪 drift）；耗盡後 escalate to `/council`
+- **Hard cap = 3 iterations**（METR 2025 agent degradation 實證 >3 輪 drift）；耗盡後輸出 partial report 並要求人工裁決
 - **Budget guard**：soft 60k / hard 120k token，pre-flight 檢查（不在 Phase A 啟動後才發現爆預算）
-- **Prompt injection 結構性防禦**：CLAIM 用 `---CLAIM-START---` 非 XML 分隔 + 確定性剝 `<`/`>`；WebSearch 結果顯式標不可信；evidence bundle 包 `<evidence>` tag 且禁 `##` heading 污染 reviewer prompt
+- **Prompt injection 結構性防禦**：CLAIM 用 `---CLAIM-START---` / `---CLAIM-END---` 非 XML 分隔 + 確定性剝 `<`/`>`；WebSearch 結果顯式標不可信；evidence bundle 包 `<evidence>` tag 且禁 `##` heading 污染 reviewer prompt
 - **Verdict 區分**：STRONG dissent 存在 ≠ `CONFLICTED`；只有**跨維度對主張本身互斥**才 CONFLICTED
 
 **方法論依據：** Self-Refine (arXiv:2303.17651)、Reflexion (arXiv:2303.11366)、Multi-agent debate (arXiv:2305.14325)、LLM-as-Judge (arXiv:2306.05685)、IEEE 1012-2016 V&V、NIST SP 800-160、Anthropic "Building Effective Agents" (2024)。反面：Huang et al. (arXiv:2310.01798)、Dziri et al. (arXiv:2305.18654)、METR 2025 agent degradation。
@@ -311,7 +311,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 | 日常查驗、時間/成本敏感 | `/evidence-check`（single-shot，~16-30k tokens） |
 | Ship-critical / 合規 / 高保證 | `/verify-evidence-loop`（~40-80k tokens，3-6x 成本） |
 | 通用產出品質審（非證據） | `/santa-method`（plugin） |
-| 已知 tradeoff，需 go/no-go | `/council`（plugin） |
+| 已知 tradeoff，需 go/no-go | 人工裁決 / `/evidence-check` |
 
 </details>
 

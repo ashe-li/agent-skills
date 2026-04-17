@@ -3,12 +3,12 @@ name: verify-evidence-loop
 description: "迭代式證據驗證 subagent 架構 — 對技術主張跑 4 維度（學術 / 業界標準 / 最佳實踐 / 社群+反面意見）× 最多 3 輪 iteration × dual independent reviewer 的收斂迴圈，輸出結構化 verdict。與 evidence-check 差異：後者是 single-shot，本 skill 是 iterative + convergence-gated，適合高風險決策。"
 allowed-tools: Read, Write, Agent, AskUserQuestion, WebFetch, WebSearch, Bash
 argument-hint: "<技術主張或做法的描述>"
-redundancy-peers: [evidence-check, santa-method, design, council]
+redundancy-peers: [evidence-check, santa-method, design]
 ---
 
 # /verify-evidence-loop — 迭代式證據驗證迴圈
 
-組合 ECC 既有 primitives：`evidence-check`（4 維證據蒐集）+ `santa-method`（dual reviewer 收斂）+ `iterative-retrieval`（gap → next query）+ `council`（escalation）。**不重造，只組合**。
+組合 ECC 既有 primitives：`evidence-check`（4 維證據蒐集）+ `santa-method`（dual reviewer 收斂）+ `iterative-retrieval`（gap → next query）。**不重造，只組合**；若超過迭代上限仍無法收斂，輸出 partial report 並要求人工裁決，不依賴不存在的 escalation skill。
 
 ## 與既有 skill 的差異
 
@@ -17,7 +17,7 @@ redundancy-peers: [evidence-check, santa-method, design, council]
 | `evidence-check` | Single-shot 4 維調查 | 日常查驗、時間/成本敏感 |
 | **`verify-evidence-loop`** | Iterative 3 輪 + dual reviewer gate | **高風險決策、ship-critical、需高保證** |
 | `santa-method` | 通用產出品質審（非證據） | 文案 / 程式碼 / 一般交付物 |
-| `council` | 四聲部 go/no-go | 已知 tradeoff，需最終裁決 |
+| 人工裁決 / `/evidence-check` | 不存在專用 escalation skill 時的 fallback | 已知 tradeoff，需最終裁決 |
 
 ## Step 0: 成本與範圍確認（HITL）
 
@@ -295,16 +295,17 @@ for N in 1..MAX_ITER:
 
 # Iteration 耗盡或早退
 ESCALATE:
-    # 跨邊界淨化：council 只收摘要，不收原始 web quote（防污染繼承）
-    sanitized_bundle = {
-        "D1_D4_status_confidence_only": extract_summary(bundle),
-        "dissent_count_and_urls_only": extract_dissent_meta(bundle),
-    }
-    return run_council_skill(
-        residual_conflicts=merged_issues,
-        final_bundle=sanitized_bundle,  # NOT raw bundle
-        iteration_log=iteration_log
-    )
+  # 不依賴不存在的 escalation skill；只輸出可供人工裁決的摘要
+  sanitized_bundle = {
+    "D1_D4_status_confidence_only": extract_summary(bundle),
+    "dissent_count_and_urls_only": extract_dissent_meta(bundle),
+  }
+  return build_partial_report(
+    residual_conflicts=merged_issues,
+    final_bundle=sanitized_bundle,
+    iteration_log=iteration_log,
+    warning="iteration cap reached; manual review required",
+  )
 ```
 
 **Note on interrupted subagents**：Claude Code Agent 呼叫為 synchronous；`goto ESCALATE` 僅在 Phase A/B 回傳後生效，不會中斷執行中的 subagent。若 wall-clock timeout 需要，使用者可中斷整個 skill。
@@ -371,7 +372,7 @@ Slug：主張 kebab-case，前綴 `evidence-`，≤60 字元。
 
 | Mode | Mitigation |
 |---|---|
-| 同家族模型 bias | 強制 Strong Dissent；escalation 時 `/council` 用 distinct persona |
+| 同家族模型 bias | 強制 Strong Dissent；耗盡迭代時輸出 partial report 並要求人工裁決 |
 | Token explosion | Soft 60k / Hard 120k guard + early terminate 提示 |
 | Runaway loop | Hard cap=3 + fresh agents 每輪 |
 | Prompt injection | `<claim>` tag + reviewer prompt 明確忽略 claim 內指令 |
@@ -382,7 +383,7 @@ Slug：主張 kebab-case，前綴 `evidence-`，≤60 字元。
 
 - `evidence-check` — single-shot 快速查驗
 - `santa-method` — 通用 dual reviewer 品質審
-- `council` — escalation 用的四聲部裁決
+- 人工裁決 — 迭代耗盡時的 fallback
 - `iterative-retrieval` — gap → query 精煉**靈感來源**（本 skill 於 Phase C 內聯實作，未直接呼叫）
 - `cost-aware-llm-pipeline` — budget guard pattern
 - `/design` — 本 skill 輸出可直接貼入 /design plan

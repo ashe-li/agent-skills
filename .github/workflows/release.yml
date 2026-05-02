@@ -1,0 +1,59 @@
+name: Auto Release from CHANGELOG
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - CHANGELOG.md
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse latest version from CHANGELOG.md
+        id: parse
+        run: |
+          # 取第一個 ## [vX.Y.Z] 區塊的版本號
+          VERSION=$(grep -m1 '^## \[v' CHANGELOG.md | sed 's/## \[\(v[^]]*\)\].*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "No version found in CHANGELOG.md, skipping."
+            exit 0
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # 確認該 tag 是否已存在
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists, skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract release notes for this version
+        id: notes
+        if: steps.parse.outputs.skip == 'false'
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          # 擷取該版本區塊的內容（從該 ## 到下一個 ## 之間）
+          NOTES=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+          # 儲存到暫存檔（避免多行輸出問題）
+          echo "$NOTES" > /tmp/release_notes.md
+          echo "notes_file=/tmp/release_notes.md" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: steps.parse.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file /tmp/release_notes.md

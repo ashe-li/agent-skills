@@ -1,0 +1,24 @@
+# Playwright CLI runtime artifacts
+.playwright-cli/
+.playwright-mcp/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Local Claude Code config (install-environment-specific)
+.claude/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies / caches
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log

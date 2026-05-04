@@ -2,6 +2,29 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.24.0] - 2026-05-04
+
+### Added
+- `/verify-fix-loop`: 新增 verify→fix 迭代迴圈 skill — 透過 local Playwright MCP（headed 模式）執行「驗證 → 診斷 → 修正 → 重新驗證」迴圈，每輪以 snapshot + console + network 為證據；**完成 2 輪後（Round 3 起每輪，HITL_AFTER=2）強制 HITL 詢問是否繼續**，避免盲目迭代。
+  - **Headed 模式必要**：MCP server 須以 `--headed` 啟動，Step 0a 檢查；使用者同步觀察、HITL 時可視覺確認、debug 體驗大幅優於 headless
+  - **PASS 條件 DSL**：`url:` / `element:` / `not-element:` / `text:` / `console: no-error` / `network: no-5xx` / `eval:` 7 種型別機械對照，與 Phase A 驗證項表格一一對應；自由文字輸入會自動轉為 DSL 並回讀使用者確認
+  - **每輪 4 階段**：Verify (checklist) → Diagnose（snapshot + console + network 證據三聯）→ Fix（限 allowed_paths 硬邊界）→ Wait reload
+  - **HITL Gate**：完成 2 輪後（Round 3 起每輪，`HITL_AFTER=2`，`if n > HITL_AFTER`）`AskUserQuestion`，提供繼續 / 停止 / 改策略 / 轉 `/design` 四選項
+  - **Hard cap = 5 rounds**：依 METR 2025 agent degradation 證據；達上限即使選「繼續」也強制停止
+  - **Dev server 預設不自動啟動**：避免 long-running process 殘留與 token budget 持續佔用；使用者另開 terminal 為預設策略
+  - **持久化 round log**：`.claude/verify-fix-loop/<timestamp>-<slug>.md`，跨 session 接手（搭配 `/handoff`）、PR description 引用、回溯 debug 軌跡
+  - **硬性禁止清單**：改測試 assert 放水、改 PASS 條件本身、catch swallow error、跨範圍改架構、hardcoded 繞過 — 防止「為過而過」非真修復
+  - **與既有 skill 差異**：`playwright-human-in-the-loop` 為單次操作型，本 skill 為迴圈型修復；`verify-evidence-loop` 為技術主張的文獻驗證，本 skill 為程式碼行為驗證
+- `README.md`: 新增 `/verify-fix-loop` 至 Usage、Skills 總覽、決策樹
+
+### 方法論依據
+- Self-Refine (arXiv:2303.17651) — 迭代修正模式
+- Reflexion (arXiv:2303.11366) — 失敗證據回饋下一輪
+- METR 2025 agent degradation — >3 輪 drift 風險，故 hard cap = 5、HITL gate = 2
+- OpenAI dev community — checklist-driven verification > free-form
+- DAMA-DMBOK Completeness — round_log + final report manifest-driven
+- arXiv:2509.18970 — 結構性分類（PASS criteria checklist + DSL）優先於逐案語意判斷
+
 ## [v1.23.0] - 2026-04-18
 
 ### Added

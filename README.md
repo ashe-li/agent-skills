@@ -40,6 +40,7 @@ npx skills add ashe-li/agent-skills --global
 /plan-archive              # 歸檔已完成的 plan
 /ecc-skill-defer apply     # Defer 不常用的 skills
 /playwright-human-in-the-loop  # 安全的瀏覽器自動化
+/verify-fix-loop <目標>        # Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
@@ -60,6 +61,7 @@ npx skills add ashe-li/agent-skills --global
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | Defer/restore skills 減少 init tokens |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
+| [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
@@ -353,6 +355,36 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
+### `/verify-fix-loop` — Verify-Fix 迴圈
+
+透過 local Playwright MCP（headed 模式）執行「驗證 → 診斷 → 修正 → 重新驗證」迭代迴圈。每輪以 snapshot + console + network 為證據；完成 2 輪後（Round 3 起）每輪強制 HITL 詢問是否繼續，避免盲目迭代。
+
+<details>
+<summary>Features</summary>
+
+- **Headed 模式必要**：MCP server 須以 `--headed` 啟動，使用者同步觀察、HITL 時可視覺確認
+- **PASS 條件 DSL**：`url:` / `element:` / `not-element:` / `text:` / `console: no-error` / `network: no-5xx` / `eval:` 機械對照，避免自由文字解讀不確定性
+- **每輪 4 階段**：Verify (checklist) → Diagnose (snapshot+console+network 證據) → Fix（限 allowed_paths）→ Wait reload
+- **HITL Gate**：Round 3 起每輪進入 Phase A 之前詢問（繼續 / 停止 / 改策略 / 轉 /design），HITL_AFTER=2
+- **Hard cap = 5 rounds**：依 METR 2025 agent degradation 證據；超過強制停止並輸出 cap-exceeded 報告
+- **Allowed paths 硬邊界**：Fix 階段超出範圍須回 Step 0b 重新確認
+- **Dev server 預設不自動啟動**：避免 long-running process 殘留與 token budget 持續佔用
+- **持久化 round log**：`.claude/verify-fix-loop/<timestamp>-<slug>.md` 跨 session 接手 / PR 引用 / 回溯 debug
+- **硬性禁止**：改測試 assert 放水、改 PASS 條件、catch swallow error、跨範圍改架構、hardcoded 繞過
+
+**方法論依據：** Self-Refine (arXiv:2303.17651)、Reflexion (arXiv:2303.11366)、METR 2025 agent degradation、OpenAI dev community checklist-driven、DAMA-DMBOK Completeness、arXiv:2509.18970（結構性分類優先於語意判斷）
+
+**何時用：**
+
+| 情境 | Skill |
+|---|---|
+| UI bug 修復、E2E 行為對齊 | `/verify-fix-loop` |
+| 單次操作型瀏覽器自動化 | `/playwright-human-in-the-loop` |
+| 問題超出 fix 範圍需重新規劃架構 | `/design` |
+| 技術主張的證據驗證（非程式碼修正） | `/verify-evidence-loop` |
+
+</details>
+
 <details>
 <summary>Quality Management</summary>
 
@@ -423,6 +455,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 程式碼要簡化 ────→ /simplify
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr
 ├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop
+├─ UI bug 要 verify→fix 迴圈 → /verify-fix-loop <目標>
 ├─ Learned skills 要整理 → /curation
 ├─ Plan 要收尾 ─────→ /plan-archive
 ├─ 需要 worktree ───→ /worktree create <name>

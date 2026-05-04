@@ -35,7 +35,9 @@ while [[ $# -gt 0 ]]; do
     --apply) APPLY=1 ;;
     --force-dirty) FORCE_DIRTY=1 ;;
     --include-unknown) INCLUDE_UNKNOWN=1 ;;
-    --root) ROOT="$2"; shift ;;
+    --root)
+      [[ -z "${2:-}" || "$2" == -* ]] && { echo "--root requires a directory path" >&2; exit 1; }
+      ROOT="$2"; shift ;;
     -h|--help)
       sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
       exit 0

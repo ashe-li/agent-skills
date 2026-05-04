@@ -2,6 +2,19 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.25.0] - 2026-05-04
+
+### Added
+- `scripts/worktree-cleanup.sh`: 跨 repo 批次清理已 merge worktree 的 shell 腳本，補強 `/worktree cleanup` 既有的單一 repo 互動流程
+  - 掃描 `~/Documents`（可 `--root` 覆寫）下所有 sibling worktree（`.git` 為檔案而非目錄者）
+  - 對每個 worktree 透過 `gh pr list --head <branch>` 查詢 PR 狀態，MERGED/CLOSED 列入清理候選
+  - **預設 dry-run**：純列表輸出 ACTION/STATE/PATH/BRANCH/PR/FLAGS，不動任何資源
+  - `--apply`：實際執行 `git worktree remove --force` + 嘗試刪除已 merge 的本地分支
+  - **髒目錄保護**：未 commit 變更的 worktree 預設 `skip-dirty`，需明確 `--force-dirty` 才會清除
+  - **PR 不明處理**：`gh` 查詢失敗或無 PR 時標記 `unknown`/`no-pr`，預設保留，需 `--include-unknown` 才列入清理
+  - `worktree/SKILL.md` 補上 cleanup 區塊指引：單 repo 走 skill 互動流程、跨 repo 批次走 script
+- 實測 2026-05-04 一次清掉 15 個 MERGED worktree（deployment-eks / vocus-trends / vocus-web-ui），跳過 6 個髒目錄與 3 個 OPEN/no-PR
+
 ## [v1.24.0] - 2026-05-04
 
 ### Added

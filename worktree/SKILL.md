@@ -119,6 +119,9 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 
 自動偵測並清理已 merge/closed PR 的 worktree。
 
+**單一 repo（互動式）**：依下列步驟由 skill 執行；
+**跨 repo 批次**：直接呼叫 `scripts/worktree-cleanup.sh`（dry-run 預設，`--apply` 才動作；`--force-dirty` 強制清髒目錄；`--include-unknown` 將 PR 狀態不明者也列入清理；`--root` 覆寫掃描根目錄）。
+
 **步驟：**
 
 1. `git worktree list --porcelain` 列出所有非 main worktree

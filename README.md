@@ -8,6 +8,14 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 npx skills add ashe-li/agent-skills --global
 ```
 
+> ⚠️ **Supply-chain note**: `npx <pkg>` without `@<version>` pulls the latest
+> from the npm registry on every invocation. For higher security, pin the
+> version (`npx skills@<version> add ...`) or install from a known commit
+> (`npx github:<org>/skills#<sha> add ...`). Past incidents in both npm
+> (`event-stream`, `ua-parser-js`) and PyPI (`ctx`, LiteLLM 2026-03) show
+> registry-level compromises can ship malware to anyone running unpinned
+> install commands.
+
 <details>
 <summary>Update / 新增 skill</summary>
 

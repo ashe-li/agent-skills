@@ -101,6 +101,11 @@ def expand_deps(
             continue
         si = step_order.index(start_id)
         ei = step_order.index(end_id)
+        if si > ei:
+            warnings.append(
+                f"{sid}: reversed range {start_id}~{end_id} (start appears after end "
+                f"in plan order) — likely a typo; expanding in forward order anyway"
+            )
         lo, hi = (si, ei) if si <= ei else (ei, si)
         for k in range(lo, hi + 1):
             add(step_order[k])
@@ -267,6 +272,20 @@ def _translate_deps_prose(
     """
     original = value
 
+    forward_refs: list[int] = []
+    for m in re.finditer(
+        r"Phase\s*(\d+)\s*(?:完成|done|complete)\b", value, re.IGNORECASE
+    ):
+        ph = int(m.group(1))
+        if ph not in phase_last_step:
+            forward_refs.append(ph)
+    if forward_refs:
+        warnings.append(
+            f"Dependencies references phase(s) not yet parsed (forward refs): "
+            f"{sorted(set(forward_refs))} — normalize cannot resolve forward "
+            f"phase references; original prose kept"
+        )
+
     for ph, last in phase_last_step.items():
         value = re.sub(
             rf"Phase\s*{ph}\s*(完成|done|complete)\b",
@@ -321,6 +340,7 @@ def normalize_plan_text(text: str) -> tuple[str, list[str]]:
 
     phase_re = re.compile(r"^### Phase (\d+)[:：]")
     step_word_re = re.compile(r"^\*\*Step (\d+)[:：]\s*(.+?)\*\*\s*$")
+    likely_step_re = re.compile(r"^\*\*Step\s+\d+\b")
     field_re = re.compile(
         rf"^- \*\*(?P<key>{'|'.join(_NORMALIZE_FIELD_KEYS)})\*\*\s*[:：]\s*(?P<val>.*)$",
         re.IGNORECASE,
@@ -358,6 +378,12 @@ def normalize_plan_text(text: str) -> tuple[str, list[str]]:
             out.append(f"- [ ] **{step_id}** — {m_step.group(2)}")
             in_step = True
             continue
+
+        if likely_step_re.match(line):
+            warnings.append(
+                f"Line looks like a step header but didn't match `**Step N: title**` "
+                f"(trailing markup or missing closing `**`?): {line!r}"
+            )
 
         if in_step:
             m_field = field_re.match(line)
@@ -1118,8 +1144,10 @@ def cmd_normalize(args: argparse.Namespace) -> int:
             print(f"No changes needed: {plan_path}", file=sys.stderr)
         else:
             backup = plan_path.with_suffix(plan_path.suffix + ".bak")
+            tmp = plan_path.with_suffix(plan_path.suffix + ".tmp")
+            tmp.write_text(normalized, encoding="utf-8")
             backup.write_text(original, encoding="utf-8")
-            plan_path.write_text(normalized, encoding="utf-8")
+            tmp.rename(plan_path)
             print(f"Wrote normalized plan: {plan_path}", file=sys.stderr)
             print(f"Backup at: {backup}", file=sys.stderr)
     elif args.diff:
@@ -1262,11 +1290,12 @@ def main() -> None:
         help="Convert planner-agent output to canonical /plan-run format",
     )
     p_norm.add_argument("plan")
-    p_norm.add_argument(
+    p_norm_mode = p_norm.add_mutually_exclusive_group()
+    p_norm_mode.add_argument(
         "--write", action="store_true",
-        help="Write back to plan file (creates <plan>.bak backup)",
+        help="Write back to plan file (creates <plan>.bak backup, atomic)",
     )
-    p_norm.add_argument(
+    p_norm_mode.add_argument(
         "--diff", action="store_true",
         help="Print unified diff instead of full normalized text",
     )

@@ -242,6 +242,143 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Normalize: planner-agent output → canonical /plan-run format
+# ---------------------------------------------------------------------------
+
+_NORMALIZE_FIELD_KEYS = (
+    "Files", "Action", "Agent", "Skill", "Command",
+    "Agent/Skill", "Dependencies", "Risk", "Why",
+    "Input", "Output", "Test",
+)
+
+
+def _translate_deps_prose(
+    value: str,
+    current_phase: int,
+    phase_last_step: dict[int, str],
+    warnings: list[str],
+) -> str:
+    """Translate free-text dependencies to step ID list.
+
+    Order matters — cross-phase markers (`Phase X Step Y`, `Phase N 完成`)
+    must be resolved BEFORE bare `Step N` to avoid mis-attribution to the
+    current phase.
+    """
+    original = value
+
+    for ph, last in phase_last_step.items():
+        value = re.sub(
+            rf"Phase\s*{ph}\s*(完成|done|complete)\b",
+            last,
+            value,
+            flags=re.IGNORECASE,
+        )
+
+    value = re.sub(r"Phase\s*(\d+)\s*Step\s*(\d+)", r"S\1.\2", value)
+
+    if current_phase > 0:
+        value = re.sub(
+            r"(?<![A-Za-z0-9])Step\s*(\d+)",
+            lambda m: f"S{current_phase}.{m.group(1)}",
+            value,
+        )
+
+    step_ids = re.findall(rf"{STEP_ID_PATTERN}", value)
+    if not step_ids:
+        warnings.append(
+            f"Dependencies prose did not yield step IDs: {original!r}"
+        )
+        return original
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for sid in step_ids:
+        if sid not in seen:
+            seen.add(sid)
+            deduped.append(sid)
+    return ", ".join(deduped)
+
+
+def normalize_plan_text(text: str) -> tuple[str, list[str]]:
+    """Convert planner-agent output to canonical /plan-run format.
+
+    Transformations applied:
+    - `**Step N: title**` → `- [ ] **S<phase>.<N>** — title`
+    - `- **Field**：value` → `  - Field: value` (2-space indent, ASCII colon)
+    - Dependencies prose → step ID list via `_translate_deps_prose`
+
+    Lines already in canonical format pass through unchanged, so this is
+    idempotent and safe to run on mixed-format plans.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    warnings: list[str] = []
+
+    current_phase: int = 0
+    phase_last_step: dict[int, str] = {}
+    in_step = False
+
+    phase_re = re.compile(r"^### Phase (\d+)[:：]")
+    step_word_re = re.compile(r"^\*\*Step (\d+)[:：]\s*(.+?)\*\*\s*$")
+    field_re = re.compile(
+        rf"^- \*\*(?P<key>{'|'.join(_NORMALIZE_FIELD_KEYS)})\*\*\s*[:：]\s*(?P<val>.*)$",
+        re.IGNORECASE,
+    )
+    canonical_step_re = re.compile(
+        rf"^-\s+\[[ x]\]\s+(?:\*\*)?({STEP_ID_PATTERN})"
+    )
+
+    for line in lines:
+        m_phase = phase_re.match(line)
+        if m_phase:
+            current_phase = int(m_phase.group(1))
+            out.append(line)
+            in_step = False
+            continue
+
+        m_canon = canonical_step_re.match(line)
+        if m_canon:
+            sid = m_canon.group(1)
+            if "." in sid:
+                try:
+                    ph = int(sid.lstrip("S").split(".")[0])
+                    phase_last_step[ph] = sid
+                except ValueError:
+                    pass
+            out.append(line)
+            in_step = True
+            continue
+
+        m_step = step_word_re.match(line)
+        if m_step and current_phase > 0:
+            step_num = int(m_step.group(1))
+            step_id = f"S{current_phase}.{step_num}"
+            phase_last_step[current_phase] = step_id
+            out.append(f"- [ ] **{step_id}** — {m_step.group(2)}")
+            in_step = True
+            continue
+
+        if in_step:
+            m_field = field_re.match(line)
+            if m_field:
+                key = m_field.group("key")
+                val = m_field.group("val").strip()
+                if key.lower() == "dependencies":
+                    val = _translate_deps_prose(
+                        val, current_phase, phase_last_step, warnings
+                    )
+                out.append(f"  - {key}: {val}")
+                continue
+
+        if line.startswith("## ") and not line.startswith("### "):
+            in_step = False
+
+        out.append(line)
+
+    return "\n".join(out), warnings
+
+
 def validate_dag(parsed: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     steps = parsed["steps"]
@@ -953,6 +1090,49 @@ def cmd_set_parent(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_normalize(args: argparse.Namespace) -> int:
+    import difflib
+
+    plan_path = Path(args.plan)
+    if not plan_path.exists():
+        emit({"error": f"plan not found: {plan_path}"})
+        return 2
+
+    original = plan_path.read_text(encoding="utf-8")
+    normalized, warnings = normalize_plan_text(original)
+    changed = normalized != original
+
+    if args.write:
+        if not changed:
+            print(f"No changes needed: {plan_path}", file=sys.stderr)
+        else:
+            backup = plan_path.with_suffix(plan_path.suffix + ".bak")
+            backup.write_text(original, encoding="utf-8")
+            plan_path.write_text(normalized, encoding="utf-8")
+            print(f"Wrote normalized plan: {plan_path}", file=sys.stderr)
+            print(f"Backup at: {backup}", file=sys.stderr)
+    elif args.diff:
+        diff = difflib.unified_diff(
+            original.splitlines(),
+            normalized.splitlines(),
+            fromfile=f"{plan_path} (original)",
+            tofile=f"{plan_path} (normalized)",
+            lineterm="",
+        )
+        diff_text = "\n".join(diff)
+        if diff_text:
+            print(diff_text)
+        else:
+            print(f"No changes needed: {plan_path}", file=sys.stderr)
+    else:
+        sys.stdout.write(normalized)
+
+    for w in warnings:
+        print(f"WARN: {w}", file=sys.stderr)
+
+    return 0
+
+
 def cmd_dag(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
@@ -1065,6 +1245,21 @@ def main() -> None:
     p_dag.add_argument("plan")
     p_dag.add_argument("--format", choices=["text", "dot"], default="text")
     p_dag.set_defaults(func=cmd_dag)
+
+    p_norm = sub.add_parser(
+        "normalize",
+        help="Convert planner-agent output to canonical /plan-run format",
+    )
+    p_norm.add_argument("plan")
+    p_norm.add_argument(
+        "--write", action="store_true",
+        help="Write back to plan file (creates <plan>.bak backup)",
+    )
+    p_norm.add_argument(
+        "--diff", action="store_true",
+        help="Print unified diff instead of full normalized text",
+    )
+    p_norm.set_defaults(func=cmd_normalize)
 
     args = parser.parse_args()
     sys.exit(args.func(args))

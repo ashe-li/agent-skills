@@ -22,6 +22,30 @@ redundancy-peers: []
   - `index` — 純 trace（~500 chars），ID + status 一覽，給「驗證 trace 完整性」用
   - 預設 markdown，`--format=json` 給 tooling
 
+## Step 0: 格式檢查 — 若為 planner-agent 輸出先 normalize
+
+若 plan 來自 `/design` 的 planner subagent（典型徵兆：`**Step N: title**` 標頭、`- **Field**：value` 全形冒號、Dependencies 含「Phase N 完成」/ 括號註解等自由文字），跑 `init` 會 `No steps found`。先 normalize：
+
+```bash
+# 1. 預覽 diff
+python3 ~/Documents/agent-skills/scripts/plan_runner.py normalize "$ARGUMENTS" --diff
+
+# 2. diff 合理 → 落地（自動備份至 <plan>.bak）
+python3 ~/Documents/agent-skills/scripts/plan_runner.py normalize "$ARGUMENTS" --write
+```
+
+Normalize 做的事：
+- `**Step N: title**` → `- [ ] **S<phase>.<N>** — title`（依目前 Phase 自動補 S-code）
+- `- **Field**：value` → `  - Field: value`（2 空格縮排 + ASCII 冒號）
+- Dependencies 自由文字翻譯成 step ID list（cross-phase 先於 same-phase，避免誤翻 cycle）：
+  - `Phase N 完成` → 該 Phase 最後一個 step
+  - `Phase X Step Y` → `SX.Y`
+  - 純 `Step N` → `S<current_phase>.N`
+  - 括號註解（`(Step 2 已建立 base)`）丟棄
+- 已 canonical 的行 pass-through，**重複跑 idempotent**
+
+Normalize 後 stderr 會列出 `WARN:` 行，重點看 Dependencies 翻不出 ID 的（保留原文留給 user 修）。
+
 ## Step 1: 初始化 state
 
 ```bash
@@ -32,6 +56,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 - `total_steps`、`phase_order`、`ready_steps`（初始可執行的 step IDs）
 - `warnings`（解析警告，例如 dep 用 `~` range 語法）
 
+若 `init` 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。
 若已存在 state，先看狀態再決定：
 
 ```bash

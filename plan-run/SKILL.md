@@ -137,17 +137,19 @@ state machine 依下列規則解析 `plan.md`：
 | 元素 | 格式 |
 |------|------|
 | Phase 標頭 | `### Phase N：<名稱>` 或 `### Phase N: <名稱>` |
-| Step 標頭 | `- [ ] **<step_id>** — <title>` |
+| Step 標頭 | `- [ ] **<step_id>** — <title>` 或 `- [ ] <step_id> — <title>`（`**` bold 可省略） |
 | Step ID | `S\d+(\.\d+)?[a-z]?`（例：`S0.1`、`S1a`、`S3.1a`、`S12`） |
 | Step 欄位 | `- <key>: <value>`（縮排 2 空格） |
 | 可辨識欄位 | `Files`、`Action`、`Agent`、`Skill`、`Command`、`Agent/Skill`、`Dependencies`、`Risk` |
-| Dependencies 值 | 逗號、斜線、空白分隔的 step ID 清單 |
+| Dependencies 值 | 逗號、斜線、空白分隔的 step ID 清單；支援 range 語法 |
 
-**禁止語法**：
-- `Dependencies: S4.1 ~ S6`（range 不展開，會 warning 並只抓首尾兩個）→ 改為 `Dependencies: S4.1, S4.2, S4.3, S5, S6`
-- `Dependencies: ...`（省略號）→ 顯式列出
+**Range 語法**（自動展開為 plan 內出現順序的完整 ID list）：
+- `Dependencies: S4.1 ~ S6` → `[S4.1, S4.2, S4.3, S5, S6]`（依 plan 中出現順序）
+- 支援 `~`、`...`、`..`、`–`、`—` 五種分隔符
+- 可混用：`Dependencies: S0.1, S1.1 ~ S2, S3` 也合法
+- Range 端點不存在時降級為只保留端點 + 發出 warning
 
-`/design` 產出的 plan 已符合格式。手寫 plan 注意 step id 與 Dependencies 列法。
+`/design` 產出的 plan 已符合格式。手寫 plan 可省略 `**` 並使用 range 簡寫。
 
 ## State 機制
 

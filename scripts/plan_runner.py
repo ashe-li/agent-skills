@@ -62,6 +62,56 @@ def now_iso() -> str:
 # Plan parsing
 # ---------------------------------------------------------------------------
 
+_RANGE_RE = re.compile(
+    rf"({STEP_ID_PATTERN})\s*(?:~|\.\.\.?|–|—)\s*({STEP_ID_PATTERN})"
+)
+
+
+def expand_deps(
+    raw: str,
+    step_order: list[str],
+    sid: str,
+    warnings: list[str],
+) -> list[str]:
+    """Expand range syntax (`S1 ~ S5`, `S1...S5`) into explicit step IDs.
+
+    Range is resolved against `step_order` (textual order in the plan).
+    Standalone IDs outside any range are preserved. Result is de-duplicated
+    while preserving first-occurrence order.
+    """
+    expanded: list[str] = []
+    seen: set[str] = set()
+
+    def add(dep_id: str) -> None:
+        if dep_id not in seen:
+            seen.add(dep_id)
+            expanded.append(dep_id)
+
+    consumed: list[tuple[int, int]] = []
+    for m in _RANGE_RE.finditer(raw):
+        start_id, end_id = m.group(1), m.group(2)
+        consumed.append((m.start(), m.end()))
+        if start_id not in step_order or end_id not in step_order:
+            warnings.append(
+                f"{sid}: range {start_id}~{end_id} references unknown step "
+                f"— kept endpoints only"
+            )
+            add(start_id)
+            add(end_id)
+            continue
+        si = step_order.index(start_id)
+        ei = step_order.index(end_id)
+        lo, hi = (si, ei) if si <= ei else (ei, si)
+        for k in range(lo, hi + 1):
+            add(step_order[k])
+
+    for m in re.finditer(rf"{STEP_ID_PATTERN}", raw):
+        if not any(c[0] <= m.start() < c[1] for c in consumed):
+            add(m.group(0))
+
+    return expanded
+
+
 def parse_plan(plan_path: Path) -> dict[str, Any]:
     """Parse plan.md into step graph."""
     text = plan_path.read_text(encoding="utf-8")
@@ -82,7 +132,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 
     phase_re = re.compile(r"^###\s+(.+)$")
     step_re = re.compile(
-        rf"^-\s+\[[ x]\]\s+\*\*({STEP_ID_PATTERN})\*\*\s*[—\-:：]?\s*(.*)$"
+        rf"^-\s+\[[ x]\]\s+(?:\*\*)?({STEP_ID_PATTERN})(?:\*\*)?\s*[—\-:：]?\s*(.*)$"
     )
     field_re = re.compile(
         rf"^\s+-\s+(?P<key>{'|'.join(FIELD_KEYS)})\s*[:：]\s*(?P<val>.*)$",
@@ -142,13 +192,8 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 key = m_field.group("key").lower()
                 val = m_field.group("val").strip()
                 if key == "dependencies":
-                    deps = re.findall(rf"{STEP_ID_PATTERN}", val)
-                    steps[current_step_id]["deps"] = deps
-                    if "~" in val or "..." in val:
-                        parse_warnings.append(
-                            f"{current_step_id}: range syntax in deps "
-                            f"({val!r}) — only explicit IDs extracted: {deps}"
-                        )
+                    steps[current_step_id]["_deps_raw"] = val
+                    steps[current_step_id]["deps"] = []
                     in_action_block = False
                 elif key == "files":
                     steps[current_step_id]["files"] = val
@@ -181,6 +226,12 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 current_step_id = None
 
     flush_action()
+
+    step_order = list(steps.keys())
+    for sid, step in steps.items():
+        raw = step.pop("_deps_raw", None)
+        if raw:
+            step["deps"] = expand_deps(raw, step_order, sid, parse_warnings)
 
     return {
         "slug": plan_path.stem,

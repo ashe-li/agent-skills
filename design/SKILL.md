@@ -315,4 +315,49 @@ plan 寫入後，使用 AskUserQuestion 詢問使用者：
 2. 呼叫 `EnterWorktree(name: "<slug>")`
 3. 提示使用者：開發完成後執行 `/pr`，worktree 將在 session 結束時自動回收
 
-若使用者選擇「不使用」：跳過，結束 /design 流程。
+若使用者選擇「不使用」：跳過，進入 Step 7。
+
+## Step 7: 推進方式選擇（HITL）
+
+依 Step 2 判定的複雜度推薦推進方式，使用 AskUserQuestion 詢問使用者：
+
+| 複雜度（Step 2 判定）| 推薦選項 |
+|----------------------|---------|
+| 低（1-3 步、無依賴）| LLM 自主推進 |
+| 中等（4-10 步、有依賴）| `/plan-run` 狀態機（推薦） |
+| 高（10+ 步、複雜 DAG、多並行）| `/plan-run` 狀態機（強烈推薦） |
+
+**詢問格式：**
+
+> Plan 已寫入 `plans/active/<slug>.md`。如何推進實作？
+>
+> 1. **使用 `/plan-run` 狀態機**（推薦/中等以上）— Python 狀態機決定 DAG 推進順序、TaskCreate `addBlockedBy` 自動串接、session 中斷可續推、不會跳步
+> 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
+> 3. **暫不開始** — 結束 `/design`，由使用者另行決定時機
+
+**若選 1（`/plan-run`）：**
+
+1. 立即呼叫 `Bash` tool 初始化 state：
+   ```bash
+   python3 ~/Documents/agent-skills/scripts/plan_runner.py init plans/active/<slug>.md
+   ```
+2. 檢查 stdout 的 `warnings` 欄位——若有 range syntax 警告（如 `Dependencies: S4.1 ~ S6`），提示使用者編輯 plan 顯式列出依賴後再開始
+3. 提示使用者：
+   > State 已初始化於 `<state_path>`。
+   > 在 Claude session 中輸入 `/plan-run plans/active/<slug>.md` 啟動狀態機推進；
+   > 或執行 `python3 ~/Documents/agent-skills/scripts/plan_runner.py status plans/active/<slug>.md` 查看目前進度。
+
+**若選 2（LLM 自主推進）：**
+
+直接進入標準 implementation flow（plan 仍可隨時切換 `/plan-run`，state machine `init` 是冪等的，未來呼叫不影響）。
+
+**若選 3（暫不開始）：**
+
+結束 `/design`，告知 plan 路徑與後續啟動方式：
+> Plan 已存於 `plans/active/<slug>.md`。
+> 隨時可執行 `/plan-run plans/active/<slug>.md` 啟動狀態機，或直接在 session 中開始實作。
+
+**跳過 Step 7 的情境：**
+
+- Step 2 判定為「多 session」並執行 `/blueprint`——`/blueprint` 自帶推進機制，不需 `/plan-run`
+- 使用者已在 `$ARGUMENTS` 或對話中明示推進偏好

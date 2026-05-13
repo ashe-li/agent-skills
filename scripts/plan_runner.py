@@ -824,7 +824,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     parsed = parse_plan(plan_path)
     errors = validate_dag(parsed)
     if errors:
-        emit({"error": "DAG validation failed", "details": errors, "warnings": parsed["warnings"]})
+        payload: dict[str, Any] = {
+            "error": "DAG validation failed",
+            "details": errors,
+            "warnings": parsed["warnings"],
+        }
+        if any("No steps found" in e for e in errors):
+            payload["hint"] = (
+                "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
+                f"Try: plan_runner.py normalize {plan_path} --diff "
+                f"→ if diff looks reasonable: --write → re-run init."
+            )
+        emit(payload)
         return 1
     existing = load_state(plan_path)
     if existing and not args.force:

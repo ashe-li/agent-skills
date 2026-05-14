@@ -130,6 +130,29 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py next "$ARGUMENTS"
 - 跑 `plan_runner.py index "$ARGUMENTS"`（~500 chars）看整體 trace
 - 跑 `plan_runner.py next "$ARGUMENTS"` 重新拿完整模板（會 reset delta 追蹤）
 
+### 3f. 自動推進（optional）— `/goal` 包外層
+
+若不想每個 step 完成都手動按 enter，可以用 Claude Code 內建的 `/goal` 把 DAG 跑成自動續跑：
+
+```text
+/goal plan_runner.py status "$ARGUMENTS" 的輸出顯示 all_done=true
+      （即所有 step 都 completed / skipped，無 failed / blocked / in_progress）
+      OR stop after 30 turns
+```
+
+`/goal` 評估者（預設 Haiku）每個 turn 結束讀 transcript 判斷是否達成；未達成自動啟動下一個 turn，達成自動 clear。
+
+**caveat（重要）：**
+
+- Step 3d 的失敗 HITL gate **仍然生效**。`fail` 後評估者會看到「N failed」並判定未達成，但 Claude 仍要在主 turn 內走 `AskUserQuestion`（重試 / 跳過 / 中止）才能繼續 — `/goal` 不會自動跳過失敗
+- 評估者**不呼叫工具**，所以 `plan_runner.py status` 的輸出必須由主 turn 在每輪 surface 出來；最簡單做法是 transition 完跑一次 `plan_runner.py index "$ARGUMENTS"`（~500 chars）
+- 一個 session 只能一個 `/goal`，跑 plan-run 期間不能同時用 `/goal` 做別的事
+
+何時 **不** 用：
+- 對 plan 不確定 / 高風險 step（會自動推進到你還沒準備好的 step）
+- 多個 plan 平行跑（一個 session 只能一個 goal）
+- 想細看每個 step 的 output（自動續跑會壓縮確認時間）
+
 ## Step 4: 完成驗證
 
 `summary.all_done == true` 後：
@@ -154,6 +177,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py dag "$ARGUMENTS" --forma
 | `/plan-run` | 依 plan 推進（本 skill） |
 | `/plan-archive` | 完成後歸檔 |
 | `/verify-fix-loop`、`/code-review`、`/simplify` | 在個別 step 中被引用 |
+| `/goal`（Claude Code 內建） | optional 包外層，讓 DAG 自動推進至 all_done（見 3f） |
 
 ## Plan 格式約束
 

@@ -1,6 +1,6 @@
 ---
 name: figma-verify
-description: UI / 文案 PR ship 前必走的 Figma vs local 對齊流程 — Figma MCP 抓真規格、Playwright headed 抓 local、token + 文案逐項對齊，最後用 /goal 內建 Haiku 評估者做純視覺 gate。觸發：PR 出現 placeholder / follow-up / 待 designer 確認字串，或任何視覺/文案 PR 即將 ship。
+description: Figma 對齊 / 視覺比對 / UI ship gate — 任何提到 figma、Figma 對齊、Figma vs local、Figma vs code、設計稿比對、視覺差異、screenshot diff、UI 對齊、UX 對齊、文案對齊、design token 對齊，或 UI / 文案 PR 即將 ship、code 出現 placeholder / follow-up / 待 designer 確認字串時觸發。流程：Figma MCP 抓真規格 → Playwright MCP headed 抓 local → token + 文案逐項對齊表 → /goal 內建 Haiku 評估者做純視覺 gate（不另起 Agent(model=haiku) subagent）。
 allowed-tools: Read, Bash, AskUserQuestion, mcp__figma__authenticate, mcp__figma__get_design_context, mcp__figma__get_variable_defs, mcp__figma__get_screenshot, mcp__figma__get_metadata, mcp__playwright__browser_navigate, mcp__playwright__browser_resize, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_snapshot, mcp__playwright__browser_close
 argument-hint: <Figma node-id 或 figma.com URL>
 redundancy-peers: [verify-fix-loop]

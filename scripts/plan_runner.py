@@ -527,17 +527,46 @@ def any_dep_failed(state: dict[str, Any], step_id: str) -> bool:
 
 
 def compute_ready_steps(state: dict[str, Any]) -> list[str]:
-    return sorted(
+    return [
         sid for sid, s in state["steps"].items()
         if s["status"] == PENDING and deps_all_completed(state, sid)
-    )
+    ]
 
 
 def compute_blocked_steps(state: dict[str, Any]) -> list[str]:
-    return sorted(
+    return [
         sid for sid, s in state["steps"].items()
         if s["status"] not in (COMPLETED, SKIPPED) and any_dep_failed(state, sid)
-    )
+    ]
+
+
+def compute_next_after_completion(state: dict[str, Any], sid: str) -> list[str]:
+    """Steps that would become ready if `sid` transitioned to COMPLETED.
+
+    Used to pre-emit a "next hint" so callers can TaskCreate downstream
+    task entries as pending hints when starting `sid` — gives the user
+    a sliding-window view (current in_progress + immediate next pending)
+    instead of needing to look up the plan to know what's coming.
+
+    Returns steps that:
+    - are currently PENDING
+    - have `sid` as one of their deps
+    - have all OTHER deps already COMPLETED/SKIPPED
+    """
+    next_ready: list[str] = []
+    for nid, s in state["steps"].items():
+        if s["status"] != PENDING:
+            continue
+        if sid not in s["deps"]:
+            continue
+        other_deps_done = all(
+            state["steps"][d]["status"] in (COMPLETED, SKIPPED)
+            for d in s["deps"]
+            if d != sid and d in state["steps"]
+        )
+        if other_deps_done:
+            next_ready.append(nid)
+    return next_ready
 
 
 def recompute_blocked_status(state: dict[str, Any]) -> None:
@@ -819,12 +848,55 @@ def format_init_md(data: dict[str, Any]) -> str:
 
 def format_transition_md(verb: str, data: dict[str, Any]) -> str:
     """Formatter for start/complete/fail/skip. Embeds full state view so caller
-    can skip the next `next` call—data needed to drive next iteration is here."""
+    can skip the next `next` call—data needed to drive next iteration is here.
+
+    Two task-tracking integration blocks (both best-effort, swallow on failure):
+    - `## Required sync` — when completed/failed/skipped of a step that had
+      a recorded task_id, instruct the caller to TaskUpdate it.
+    - `## Next hints` — when started, list step instructions for steps that
+      would be unblocked by this step's completion, so caller can pre-emit
+      pending TaskCreate entries (sliding-window task list).
+    """
     lines = [f"# {verb}: {data.get('step', '?')}"]
     if data.get("task_id"):
         lines.append(f"Task: {data['task_id']}")
     if data.get("reason"):
         lines.append(f"Reason: {data['reason']}")
+
+    # V2 sync block — emit TaskUpdate instruction when terminal transition
+    # of a tracked task. Caller best-effort applies; failure must not stop
+    # the plan-run loop.
+    if verb in ("completed", "failed", "skipped") and data.get("task_id"):
+        status_map = {"completed": "completed", "failed": "failed", "skipped": "completed"}
+        target_status = status_map[verb]
+        lines.append("")
+        lines.append("## Required sync (best-effort)")
+        lines.append(f"TaskUpdate(task_id={data['task_id']!r}, status={target_status!r})")
+        if verb == "skipped":
+            lines.append("Note: skipped step → mark task completed so downstream not blocked.")
+
+    # Sliding-window next-hint block — emit on `started` so caller can
+    # TaskCreate pending entries for steps that will unblock after this.
+    # Best-effort: if TaskCreate not available, just skip — plan-run loop
+    # continues normally without these hints.
+    hints = data.get("next_hints") or []
+    if verb == "started" and hints:
+        lines.append("")
+        lines.append("## Next hints (best-effort TaskCreate as pending)")
+        lines.append(
+            "These steps will unblock once the current one completes. "
+            "Pre-creating them as pending tasks gives the user a sliding-window "
+            "view of plan progress. addBlockedBy → current task_id."
+        )
+        for hint in hints:
+            lines.append("")
+            lines.append(f"### {hint.get('id', '?')} — {hint.get('title', '?')}")
+            tc = hint.get("task_create", {})
+            if tc:
+                subj = tc.get("subject", "")
+                af = tc.get("activeForm", "")
+                lines.append(f"TaskCreate(subject={subj!r}, activeForm={af!r})  # status=pending")
+
     if "ready_steps" in data or "summary" in data:
         lines.append("")
         lines.extend(_format_state_view_lines(data))
@@ -1002,7 +1074,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         emit({"error": str(e)})
         return 1
     save_state(plan_path, state)
-    payload = {"status": "started", "step": sid, "task_id": args.task_id}
+    next_hints = [
+        step_to_instruction(state, nid)
+        for nid in compute_next_after_completion(state, sid)
+    ]
+    payload = {
+        "status": "started",
+        "step": sid,
+        "task_id": args.task_id,
+        "next_hints": next_hints,
+    }
     emit_formatted(payload, args.format, lambda d: format_transition_md("started", d))
     return 0
 
@@ -1019,9 +1100,10 @@ def cmd_complete(args: argparse.Namespace) -> int:
     except ValueError as e:
         emit({"error": str(e)})
         return 1
+    task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
-    payload = {"status": "completed", "step": sid, **view}
+    payload = {"status": "completed", "step": sid, "task_id": task_id, **view}
     emit_formatted(payload, args.format, lambda d: format_transition_md("completed", d))
     return 0
 
@@ -1038,9 +1120,10 @@ def cmd_fail(args: argparse.Namespace) -> int:
     except ValueError as e:
         emit({"error": str(e)})
         return 1
+    task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
-    payload = {"status": "failed", "step": sid, "reason": args.reason, **view}
+    payload = {"status": "failed", "step": sid, "task_id": task_id, "reason": args.reason, **view}
     emit_formatted(payload, args.format, lambda d: format_transition_md("failed", d))
     return 0
 
@@ -1057,9 +1140,10 @@ def cmd_skip(args: argparse.Namespace) -> int:
     except ValueError as e:
         emit({"error": str(e)})
         return 1
+    task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
-    payload = {"status": "skipped", "step": sid, **view}
+    payload = {"status": "skipped", "step": sid, "task_id": task_id, **view}
     emit_formatted(payload, args.format, lambda d: format_transition_md("skipped", d))
     return 0
 

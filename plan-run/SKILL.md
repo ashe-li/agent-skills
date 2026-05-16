@@ -65,21 +65,25 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py status "$ARGUMENTS"
 
 需重新初始化用 `init --force`。
 
-## Step 2: 建立父 task
+## Step 2: 建立父 task（best-effort）
 
 ```
 TaskCreate(subject="<plan title>", activeForm="<plan title> 推進中")
 ```
 
-把回傳的 task_id 寫回 state（後續 child 不依賴此 id，但用於 audit）：
+成功後把 task_id 寫回 state（給 audit + child task 的 `addBlockedBy` 用）：
 
 ```bash
 python3 ~/Documents/agent-skills/scripts/plan_runner.py set-parent "$ARGUMENTS" --task-id=<parent_task_id>
 ```
 
+**Graceful degrade**：若 `TaskCreate` 不可用（tool deferred、quota 滿、user 沒開 task tracking），記 warning 直接進 Step 3 — plan-run 的 state machine 不依賴 task_id，整個推進流程不會中斷。
+
 ## Step 3: 推進迴圈（delta-driven，不要每次都呼叫 next）
 
 迴圈直到 transition output 顯示 `Progress: N/N — ALL DONE`。
+
+**Task tracking 是 best-effort observability layer**：每處 TaskCreate / TaskUpdate 都允許失敗，失敗就 continue 進下個 step。不要因 task tool 出錯而中止 plan-run loop。
 
 ### 3a. Bootstrap（只在 session 起點 / 失去 context 時呼叫一次）
 
@@ -91,12 +95,17 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py next "$ARGUMENTS"
 
 ### 3b. 對每個 ready step 執行
 
-1. **TaskCreate**（照搬模板裡的 `task_create.subject / activeForm / addBlockedBy`）→ 拿到 task_id
+1. **Reconcile：先檢查 task list 是否已有對應 pending hint task**（先前 step 的 `## Next hints` 可能已 pre-create）
+   - 有 → `TaskUpdate(<hint_task_id>, in_progress)`，不要 TaskCreate 重複
+   - 沒 → `TaskCreate`（照搬模板裡的 `task_create.subject / activeForm / addBlockedBy`）→ 拿到 task_id
 2. **回寫 task_id**：`plan_runner.py start "$ARGUMENTS" <step_id> --task-id=<task_id>`
-3. **執行實際工作**：依 step 的 `agent` / `command` / `skill` 欄位
-4. **回報結果**：
-   - 成功：`TaskUpdate(<task_id>, completed)` + `plan_runner.py complete "$ARGUMENTS" <step_id>`
-   - 失敗：`TaskUpdate(<task_id>, failed)` + `plan_runner.py fail "$ARGUMENTS" <step_id> --reason="<msg>"`
+3. **讀 `start` 的 `## Next hints` 區塊（如有）→ batch TaskCreate 列出的 next step 為 pending**（addBlockedBy = 當前 task_id）
+   - 給 user sliding-window 視覺：task list 永遠看到「已完成 N + 進行中 1 + 下一步 hint」
+   - **best-effort**：TaskCreate 失敗就 skip，不影響下個 step 推進
+4. **執行實際工作**：依 step 的 `agent` / `command` / `skill` 欄位
+5. **回報結果**：
+   - 成功：`plan_runner.py complete "$ARGUMENTS" <step_id>` → output 會自動帶 `## Required sync` 內含 `TaskUpdate(<task_id>, completed)` 指令，跟著做
+   - 失敗：`plan_runner.py fail "$ARGUMENTS" <step_id> --reason="<msg>"` → 同上但 status=failed
 
 ### 3c. 讀 transition output 決定下一步（不要重複呼叫 next）
 
@@ -104,13 +113,20 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py next "$ARGUMENTS"
 
 | 區塊 | 何時出現 | 內容 |
 |------|---------|------|
-| `## Newly unlocked (N)` | 本次解鎖了新 step | 完整 instruction 模板，直接用 |
+| `## Required sync (best-effort)` | 該 step 有 task_id | `TaskUpdate(...)` 完整指令；best-effort 失敗 swallow |
+| `## Newly unlocked (N)` | 本次解鎖了新 step | 完整 instruction 模板，**搭配 3b reconcile 規則**判斷 TaskCreate 還是 TaskUpdate |
 | `## Still ready (M): <ids>` | 之前已 ready 但未啟動 | 只列 ID，先前 output 已給過模板 |
 | `## In progress (N)` | 有 in_progress | 只列 ID + task_id |
 | `## Blocked (N)` | 有 dep 失敗 | 列出 blocking 原因 |
 | 全部空 | done | 顯示 `(no ready / in_progress / blocked steps)` |
 
-讀到 `Newly unlocked` 直接拿模板進入 3b。`Still ready` 是提醒（instructions 在更早的 output 裡，context 還在的話 LLM 應記得）。
+`start` 額外可能含：
+
+| 區塊 | 何時出現 | 內容 |
+|------|---------|------|
+| `## Next hints (best-effort TaskCreate as pending)` | 該 step 完成後會解鎖下一個 pending step | 列出 next-after-completion 的 step instruction；3b step 3 用 |
+
+讀到 `Newly unlocked` 套 3b reconcile rule 進入下個 step。`Still ready` 是提醒（instructions 在更早的 output 裡）。
 
 ### 3d. 失敗處理
 
@@ -129,29 +145,6 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py next "$ARGUMENTS"
 
 - 跑 `plan_runner.py index "$ARGUMENTS"`（~500 chars）看整體 trace
 - 跑 `plan_runner.py next "$ARGUMENTS"` 重新拿完整模板（會 reset delta 追蹤）
-
-### 3f. 自動推進（optional）— `/goal` 包外層
-
-若不想每個 step 完成都手動按 enter，可以用 Claude Code 內建的 `/goal` 把 DAG 跑成自動續跑：
-
-```text
-/goal plan_runner.py status "$ARGUMENTS" 的輸出顯示 all_done=true
-      （即所有 step 都 completed / skipped，無 failed / blocked / in_progress）
-      OR stop after 30 turns
-```
-
-`/goal` 評估者（預設 Haiku）每個 turn 結束讀 transcript 判斷是否達成；未達成自動啟動下一個 turn，達成自動 clear。
-
-**caveat（重要）：**
-
-- Step 3d 的失敗 HITL gate **仍然生效**。`fail` 後評估者會看到「N failed」並判定未達成，但 Claude 仍要在主 turn 內走 `AskUserQuestion`（重試 / 跳過 / 中止）才能繼續 — `/goal` 不會自動跳過失敗
-- 評估者**不呼叫工具**，所以 `plan_runner.py status` 的輸出必須由主 turn 在每輪 surface 出來；最簡單做法是 transition 完跑一次 `plan_runner.py index "$ARGUMENTS"`（~500 chars）
-- 一個 session 只能一個 `/goal`，跑 plan-run 期間不能同時用 `/goal` 做別的事
-
-何時 **不** 用：
-- 對 plan 不確定 / 高風險 step（會自動推進到你還沒準備好的 step）
-- 多個 plan 平行跑（一個 session 只能一個 goal）
-- 想細看每個 step 的 output（自動續跑會壓縮確認時間）
 
 ## Step 4: 完成驗證
 
@@ -177,7 +170,6 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py dag "$ARGUMENTS" --forma
 | `/plan-run` | 依 plan 推進（本 skill） |
 | `/plan-archive` | 完成後歸檔 |
 | `/verify-fix-loop`、`/code-review`、`/simplify` | 在個別 step 中被引用 |
-| `/goal`（Claude Code 內建） | optional 包外層，讓 DAG 自動推進至 all_done（見 3f） |
 
 ## Plan 格式約束
 

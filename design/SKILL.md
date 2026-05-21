@@ -335,18 +335,21 @@ plan 寫入後，使用 AskUserQuestion 詢問使用者：
 | 複雜度（Step 2 判定）| 推薦選項 |
 |----------------------|---------|
 | 低（1-3 步、無依賴）| LLM 自主推進 |
-| 中等（4-10 步、有依賴）| `/plan-run` 狀態機（推薦） |
-| 高（10+ 步、複雜 DAG、多並行）| `/plan-run` 狀態機（強烈推薦） |
+| 中等（4-10 步、有依賴）| `/plan-run` 狀態機（手動 / 推薦） |
+| 高（10+ 步、複雜 DAG、多並行）| `/plan-run` + `/goal` 自動推進（強烈推薦） |
 
 **詢問格式：**
 
 > Plan 已寫入 `plans/active/<slug>.md`。如何推進實作？
 >
-> 1. **使用 `/plan-run` 狀態機**（推薦/中等以上）— Python 狀態機決定 DAG 推進順序、TaskCreate `addBlockedBy` 自動串接、session 中斷可續推、不會跳步
+> 1a. **`/plan-run` 狀態機（手動）** — Python 狀態機決定 DAG 推進順序、TaskCreate `addBlockedBy` 自動串接、session 中斷可續推、不會跳步；每個 step 完成後手動 enter 繼續
+> 1b. **`/plan-run` + `/goal` 自動推進**（強烈推薦於高複雜度）— 同 1a 但用 Claude Code 內建 `/goal` 包外層，狀態機 + evaluator 自動跑到 `all_done=true` 或 N turns；**失敗仍走 Step 3d HITL gate**（不會自動跳過 fail）
 > 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
 > 3. **暫不開始** — 結束 `/design`，由使用者另行決定時機
 
-**若選 1（`/plan-run`）：**
+> **1b 何時不適用：** 對 plan 不確定 / 高風險 step、想細看每個 step 的 output、一個 session 已被另一個 `/goal` 佔用。詳見 `/plan-run` Step 3f。
+
+**若選 1a（`/plan-run` 手動）：**
 
 1. 先跑 normalize 兜底 — 若 planner 輸出非 canonical 格式（`**Step N: title**` / 全形冒號 / 自由文字 Dependencies），自動轉成 /plan-run 可吃的格式。canonical 格式跑下去是 no-op：
    ```bash
@@ -363,6 +366,26 @@ plan 寫入後，使用 AskUserQuestion 詢問使用者：
    > State 已初始化於 `<state_path>`。
    > 在 Claude session 中輸入 `/plan-run plans/active/<slug>.md` 啟動狀態機推進；
    > 或執行 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" status plans/active/<slug>.md` 查看目前進度。
+
+**若選 1b（`/plan-run` + `/goal` 自動推進）：**
+
+執行 1a 的全部步驟（normalize → init → 檢查 warnings），接著提示使用者把以下兩行依序貼入 Claude session：
+
+> State 已初始化於 `<state_path>`。
+>
+> 第 1 行（啟動狀態機）：
+> ```
+> /plan-run plans/active/<slug>.md
+> ```
+>
+> 第 2 行（包外層 /goal，自動推進至 all_done 或 30 turns）：
+> ```
+> /goal plan_runner.py status plans/active/<slug>.md 的輸出顯示 all_done=true
+>       （即所有 step 都 completed / skipped，無 failed / blocked / in_progress）
+>       OR stop after 30 turns
+> ```
+>
+> 失敗時 Step 3d 仍會以 `AskUserQuestion` 詢問重試 / 跳過 / 中止；`/goal` 不自動跳過失敗。詳見 `/plan-run` Step 3f。
 
 **若選 2（LLM 自主推進）：**
 

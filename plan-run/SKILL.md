@@ -3,7 +3,7 @@ name: plan-run
 description: 依 plan.md 的 Dependencies DAG 推進實作 — Python 狀態機決定下一步（非 LLM 判斷），自動串接 TaskCreate/TaskUpdate。觸發：使用者要求依 plan 推進、要求 task tracking 對齊 DAG、或抱怨 LLM 跳步漏步。
 allowed-tools: Bash, Read, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: <plans/active/xxx.md 路徑>
-redundancy-peers: []
+redundancy-peers: [design]
 ---
 
 # /plan-run — Plan DAG 推進器（狀態機 by code）

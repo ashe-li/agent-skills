@@ -2,6 +2,24 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.26.0] - 2026-05-22
+
+### Changed
+- `/design`: Step 7 推進選項拆為 `1a` / `1b` 子選項
+  - `1a`. `/plan-run` 狀態機（手動）— 每 step 完成後手動 enter 繼續
+  - `1b`. `/plan-run` + `/goal` 自動推進（強烈推薦於高複雜度）— 用 Claude Code 內建 `/goal` 包外層，自動跑到 `all_done=true` 或 N turns
+  - 原 option 2（LLM 自主推進）、option 3（暫不開始）位置不變
+- `/design`: 複雜度推薦表第三列改為「`/plan-run` + `/goal` 自動推進（強烈推薦）」對應高複雜度 plan
+- `/design`: Step 7 文案明示「1b 仍走 `/plan-run` Step 3d HITL failure gate」`/goal` 不自動跳過 fail
+
+### Fixed
+- `/plan-run`: 還原 Step 3f「自動推進（optional）— `/goal` 包外層」及「與其他 skill 的關係」表格中的 `/goal` 列
+  - Regression: commit `413fc39`（task_id sync + sliding-window hint + CodeRabbit fixes）誤刪 commit `563b276` 加入的 Step 3f 與 `/goal` 表格列
+  - `/design` Step 7 的 1b 文案引用 `/plan-run` Step 3f，若不還原則為 dead link
+
+### Why
+解決「plan → 執行的自動推進路徑被埋」：`plan-run/SKILL.md` Step 3f 文件化 `/goal` 整合（commit 563b276，本次還原），但 `/design` 的退出選單原本不含此選項，使用者必須自己翻文件才會知道可以這樣用。把 1b 拉到 Step 7 後，`/design` 完成即可直接接 `/plan-run + /goal` 一鍵自動推進。
+
 ## [v1.25.0] - 2026-05-04
 
 ### Added

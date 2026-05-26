@@ -64,6 +64,8 @@ scripts/worktree-cleanup.sh --apply     # 跨 repo 實際清理（skip-dirty）
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | Defer/restore skills 減少 init tokens |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
+| [`/plan-run`](#plan-run--plan-dag-推進器狀態機-by-code) | 依 plan.md DAG 推進實作，Python 狀態機控制順序；可與 `/goal` 複合 |
+| [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
@@ -384,6 +386,61 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 | 單次操作型瀏覽器自動化 | `/playwright-human-in-the-loop` |
 | 問題超出 fix 範圍需重新規劃架構 | `/design` |
 | 技術主張的證據驗證（非程式碼修正） | `/verify-evidence-loop` |
+
+</details>
+
+### `/plan-run` — Plan DAG 推進器（狀態機 by code）
+
+依照 `plan.md` 的 Dependencies DAG，由 Python 狀態機決定下一步該執行哪些 step、TaskCreate 該如何串接，避免 LLM 自主推進造成漏步、亂序、`addBlockedBy` 串錯。
+
+<details>
+<summary>Features</summary>
+
+- **DAG 推進邏輯在 Python**：`scripts/plan_runner.py` 控制 step 順序、依賴檢查、status transition；LLM 不負責「下一步是什麼」的判斷
+- **LLM 只負責執行**：把 transition 回傳的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
+- **TaskCreate 受控**：state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入；避免串錯依賴
+- **Token 策略三層**：
+  - `next` — full bootstrap（~2.8KB），首次拿完整模板
+  - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
+  - `index` — 純 trace（~500 chars），整體狀態一覽
+- **與 `/goal` 複合**：可設 `/goal plan_runner.py status all_done=true` 讓 DAG 自動推進；step 失敗仍由 HITL gate 把關
+
+**何時用：**
+
+| 情境 | Skill |
+|---|---|
+| 多 step 實作計畫需依序推進、避免漏步亂序 | `/plan-run` |
+| 單次 step 執行需人工判斷順序 | LLM 直接呼叫 TaskCreate / agent |
+| Step 內部 bug 修復迴圈 | `/verify-fix-loop` |
+
+</details>
+
+### `/figma-verify` — Figma vs local 對齊與 ship gate
+
+UI / 文案 PR mark ready-for-review、merge、production deploy 之前的最後一道把關。流程結尾用 Claude Code 內建的 `/goal` Haiku 評估者做視覺差異 gate。
+
+<details>
+<summary>Features</summary>
+
+- **設計流程**：Figma MCP 抓規格 → Playwright MCP headed 抓 local → token + 文案逐項對齊表 → `/goal` Haiku visual gate
+- **涵蓋範圍**：visual token / 文案 / icon / spacing / layout 改動的 PR
+- **與 `/verify-fix-loop` 的差異**：post-ship gate（設計規格對齊）vs bug-fix loop（行為對齊）
+- **反模式警告**：不另起 `Agent(model="haiku")` subagent 做視覺比對；`/goal` 評估者已內建 Haiku，重複造輪子浪費 token
+- **流程保障**：
+  - Step 1-3：Figma MCP + Playwright MCP（或 headless fallback）抓設計規格與實機截圖
+  - Step 4：列出 Figma → code 對應表，逐項對齊 token name / 字面值
+  - Step 4.5：Haiku `/goal` 做純視覺對照（不依賴 token name 相符 — 可能有 font weight / spacing render 差）
+  - Step 5：ship 前最後確認
+
+**何時用：**
+
+| 情境 | Skill |
+|---|---|
+| UI / 文案 PR ship 前確保與 Figma 對齊 | `/figma-verify` |
+| 設計規格對齊確認且視覺差異檢測 | `/figma-verify` |
+| Bug fix（z-index、布局壓蓋）但無文案/token 改動 | skip；PR 註記讓設計師看 |
+| 設計系統明許「工程可自行調整 X 範圍」| skip |
 
 </details>
 

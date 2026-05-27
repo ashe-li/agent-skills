@@ -82,6 +82,18 @@ expected_count = N（對話中識別的 context 項目總數）
 - **型別**：TypeScript 型別是否正確、有無 `any` 濫用
 - **樣式**：是否符合專案既有 coding style
 
+### 主動安全審查（委派，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）
+
+判斷變更是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：
+
+- **觸及** → 不只做 inline quick review，**委派** security-reviewer agent 做深度安全審查，以 `~/.claude/claude-security-guidance.md` 為判準（與 plugin 同一份）：
+  ```
+  Agent(subagent_type="everything-claude-code:security-reviewer", model="sonnet")
+  ```
+  findings 併入下方輸出；CRITICAL/HIGH 在「互動確認」中提示先修正
+- **未觸及** → 明示「無安全敏感面，跳過」
+- **若從 `/update` 串接**：Step 2 已含 security-reviewer，此處不重複委派（去重）
+
 ### 輸出格式
 
 用簡潔的表格或清單呈現 review 結果：

@@ -502,6 +502,17 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 ---
 
+## Rules / 整合設定
+
+非 skill、但隨此 repo 版本控管的設定來源：
+
+| 路徑 | 說明 |
+|------|------|
+| [`rules/security-guidance/`](rules/security-guidance/README.md) | `security-guidance` plugin 的擴充檔（guidance + patterns）與省 token 設定記錄；symlink 到 `~/.claude/` 全域生效 |
+| `rules/worktree-prompt.md` / `rules/plan-management.md` | 載入為全域 CLAUDE.md 指令 |
+
+---
+
 ## 選什麼？
 
 ```

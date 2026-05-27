@@ -1,0 +1,19 @@
+{
+  "patterns": [
+    {
+      "rule_name": "hardcoded_secret_prefix",
+      "substrings": ["sk_live_", "sk-ant-", "AKIA", "ghp_", "github_pat_", "xoxb-", "xoxp-", "AIza"],
+      "reminder": "疑似硬編憑證前綴。改從環境變數或 secret manager 載入，勿寫進 source / log / commit。"
+    },
+    {
+      "rule_name": "private_key_block",
+      "substrings": ["-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN EC PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"],
+      "reminder": "原始私鑰不可進 repo。撤換並改用 secret manager。"
+    },
+    {
+      "rule_name": "subprocess_shell_true",
+      "regex": "subprocess\\.(run|call|Popen|check_output)\\([^;]*?shell\\s*=\\s*True",
+      "reminder": "subprocess shell=True 帶外部輸入有 command injection 風險。改傳 list argv 或驗證輸入。"
+    }
+  ]
+}

@@ -2,6 +2,27 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.27.0] - 2026-05-27
+
+### Added
+- `rules/security-guidance/`：官方 `security-guidance@claude-plugins-official` plugin 的整合設定來源
+  - `claude-security-guidance.md`：model-backed review 的威脅模型/檢查清單（secrets 政策 + TS/Python/Go/Swift 規則），symlink 到 `~/.claude/`
+  - `security-patterns.json`：per-edit deterministic patterns（硬編 secret 前綴、PEM 私鑰、`subprocess shell=True`）；用 JSON 不用 YAML 避免缺 PyYAML 時靜默忽略
+  - `README.md`：三層防線說明、省 token env 設定（`ENABLE_STOP_REVIEW=0` + `SG_AGENTIC_MODEL=sonnet`）、symlink 部署與還原指令
+- `README.md`：新增「Rules / 整合設定」段，連向 `rules/security-guidance/`
+- `rules/security-guidance/skill-integration.md`：**主動式安全觸發契約** — 定義觸發閘（security-relevance heuristic）+ 兩種機制（委派 security-reviewer agent + 引用同一份 `claude-security-guidance.md`）
+
+### Changed
+- `/design`、`/update`、`/pr`、`/assist`：主動把安全這層串進流程（不再只靠 plugin 被動 hook）
+  - `/design` Step 3：plan 觸及安全敏感面時必含 Security / Threat Model 章節 + 實作後納入 security-reviewer；Step 4a 品質閘主動驗證安全覆蓋（非只「已評估」打勾）
+  - `/update` Step 2：觸及安全敏感面時與 code-reviewer 並行委派 security-reviewer
+  - `/pr` Step 2：觸及安全敏感面時委派 security-reviewer（非只 inline quick review）；從 `/update` 串接時去重
+  - `/assist` Step 3：路由命中安全敏感面時 pipeline 預設附加 security-reviewer
+  - 共同觸發閘：認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密；都不觸及則明示跳過，不空跑 agent（省 token）
+
+### Why
+此 plugin 是 hook-based、無法經 `npx skills add` 散佈，故 repo 只版本控管「擴充檔 + 設定記錄」，canonical 放 repo 並 symlink 到 `~/.claude/` 達成 config-as-code 與零漂移。plugin 是**被動**事後攔截；主動入口 skill 用**同一份** guidance 在規劃/審查/PR 階段**主動**帶到安全這層，與 plugin 形成 defense-in-depth，不取代。
+
 ## [v1.26.0] - 2026-05-22
 
 ### Changed

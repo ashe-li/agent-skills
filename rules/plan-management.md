@@ -1,5 +1,9 @@
 # Plan File Management
 
-- **禁止在專案根目錄建立 `plan.md`** — 所有 plan 必須使用語意化檔名
-- 輸出路徑：`plans/active/<semantic-slug>.md`
-- 歸檔路徑：`plans/completed/<semantic-slug>.md`（由 `/plan-archive` 處理）
+Scope: Apply when creating any plan markdown file.
+
+- Use a semantic filename — avoid generic `plan.md` at project root
+- Output path: `plans/active/<semantic-slug>.md`
+- Archive path: `plans/completed/<semantic-slug>.md`（由 `/plan-archive` 處理）
+
+Why: semantic slugs make plans discoverable later; generic `plan.md` collides across tasks and gets lost on archive.

@@ -93,6 +93,17 @@ Agent(subagent_type="everything-claude-code:code-reviewer")
 - 格式和結構是否符合專案慣例
 - 是否有遺漏的重要資訊
 
+**主動安全審查（並行委派，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）：**
+
+判斷本次 session 變更是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：
+
+- **觸及** → 與 code-reviewer **並行**委派 security-reviewer，以 `~/.claude/claude-security-guidance.md` 為判準（與 plugin 同一份）：
+  ```
+  Agent(subagent_type="everything-claude-code:security-reviewer", model="sonnet")
+  ```
+  findings 併入 Step 2 輸出表；CRITICAL/HIGH 走既有 AskUserQuestion 處理流程
+- **未觸及** → 明示「無安全敏感面，跳過 security-reviewer」，不空跑
+
 **Manifest-driven 交叉比對（依據：DAMA-DMBOK Completeness + ITIL CMDB Reconciliation）：**
 
 接收 Step 1 的「變更 Manifest」，**逐條執行 set difference 比對**（不可用語意判斷代替計數驗證）：

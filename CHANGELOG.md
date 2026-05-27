@@ -2,6 +2,18 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.27.0] - 2026-05-27
+
+### Added
+- `rules/security-guidance/`：官方 `security-guidance@claude-plugins-official` plugin 的整合設定來源
+  - `claude-security-guidance.md`：model-backed review 的威脅模型/檢查清單（secrets 政策 + TS/Python/Go/Swift 規則），symlink 到 `~/.claude/`
+  - `security-patterns.json`：per-edit deterministic patterns（硬編 secret 前綴、PEM 私鑰、`subprocess shell=True`）；用 JSON 不用 YAML 避免缺 PyYAML 時靜默忽略
+  - `README.md`：三層防線說明、省 token env 設定（`ENABLE_STOP_REVIEW=0` + `SG_AGENTIC_MODEL=sonnet`）、symlink 部署與還原指令
+- `README.md`：新增「Rules / 整合設定」段，連向 `rules/security-guidance/`
+
+### Why
+此 plugin 是 hook-based、無法經 `npx skills add` 散佈，故 repo 只版本控管「擴充檔 + 設定記錄」，canonical 放 repo 並 symlink 到 `~/.claude/` 達成 config-as-code 與零漂移。它補的是「PR 之前」的 in-session 防線，與 `/pr` 的 security-reviewer、Code Review 為 defense-in-depth 關係，不取代。
+
 ## [v1.26.0] - 2026-05-22
 
 ### Changed

@@ -145,6 +145,7 @@ ls -la
 | Go 專案 | 在 pipeline 中加入 go-reviewer | 自動附加語言專用 reviewer |
 | Python 專案 | 在 pipeline 中加入 python-reviewer | 自動附加語言專用 reviewer |
 | 涉及資料庫 schema 或 query | 在 pipeline 中加入 database-reviewer | 自動附加資料庫 reviewer |
+| 觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）| 在 pipeline 中**預設附加** security-reviewer（sonnet），prompt 引用 `~/.claude/claude-security-guidance.md` | 主動安全審查，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 觸發閘；與 plugin 同一份判準；都不觸及則不附加 |
 | 需要優化 agent harness 設定 | harness-optimizer | hooks/evals/routing 設定調優 |
 | 需要執行自主迴圈任務 | loop-operator | 長時間 autonomous loop 監控 |
 | 需要預定義工作流模板 | `/orchestrate` command | 當任務明確符合 feature/bugfix/refactor/security 模板時，委派給 orchestrate 而非手動組裝 pipeline |

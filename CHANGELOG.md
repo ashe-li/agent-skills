@@ -2,6 +2,21 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v1.28.0] - 2026-06-24
+
+### Changed
+- `/notion-plan`：因應 Notion 主網域 `notion.so` → `notion.com` 遷移，更新 URL 辨識與登入
+  - 解析表新增 `notion.com`（新主網域）、`app.notion.com`（含 `/p/<workspace>/` 路徑前綴）；`notion.so` 標為舊網域（301 轉址到 `notion.com`）
+  - 登入改用 `https://www.notion.com/login`（cookie 綁實際落地網域，避免舊 `notion.so` session 轉址後失效）
+  - pageId 抽取（結尾 32 字元 hex）與網域/子網域/路徑前綴無關，核心邏輯不變
+- `README.md`：更新 `/notion-plan` 支援網域清單與 Usage 範例
+
+### Security
+- `/notion-plan` 網域白名單改 dot-boundary 比對（host 等於或以 `.notion.com` / `.notion.so` / `.notion.site` 結尾），擋掉 `evilnotion.com`、`notion.com.attacker.tld` 等同尾巴/同前綴假冒網域；先前「結尾為 notion.com」描述會誤收 `evilnotion.com`
+
+### Why
+Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連結格式；硬編 `notion.so` 的工具會漏接新格式 URL。dot-boundary 比對在放寬任意子網域（`www.`/`app.`/`<workspace>.`）的同時，保留網域邊界的安全性。
+
 ## [v1.27.0] - 2026-05-27
 
 ### Added

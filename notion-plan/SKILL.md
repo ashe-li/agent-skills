@@ -33,12 +33,15 @@ Profile 路徑：`~/.playwright-cli/notion-profile`
 ```bash
 # 先關閉現有 session（避免衝突）
 playwright-cli -s=notion close
-# 以 headed 模式開啟登入頁面
-playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwright-cli/notion-profile --headed
+# 以 headed 模式開啟登入頁面（notion.com 為新主網域，notion.so 會轉址至此）
+playwright-cli -s=notion open "https://www.notion.com/login" --profile ~/.playwright-cli/notion-profile --headed
 ```
 
 開啟後提示使用者：「已開啟瀏覽器，請登入 Notion。完成後告訴我。」
 使用者確認登入後，用同一 session 導航至目標頁面繼續抓取。登入狀態會持久保存，後續不需重複登入。
+
+> **網域遷移注意：** Notion 已將主網域從 `notion.so` 遷移至 `notion.com`，`notion.so` 會 301 轉址到 `notion.com`。
+> 登入 cookie 綁定在實際落地的網域上，因此一律以 `notion.com` 登入，避免舊 `notion.so` profile 的 session 在轉址後失效。
 
 ---
 
@@ -48,15 +51,20 @@ playwright-cli -s=notion open "https://www.notion.so/login" --profile ~/.playwri
 
 | 格式 | 範例 |
 |------|------|
-| notion.so 頁面 | `https://www.notion.so/workspace/Page-Title-abc123` |
+| notion.com 頁面（新主網域） | `https://www.notion.com/workspace/Page-Title-abc123` |
+| app.notion.com 頁面（workspace app 子網域，含 `/p/` 路徑） | `https://app.notion.com/p/<workspace>/Page-Title-abc123` |
+| notion.so 頁面（舊網域，會轉址到 notion.com） | `https://www.notion.so/workspace/Page-Title-abc123` |
 | notion.site 公開頁面 | `https://workspace.notion.site/Page-Title-abc123` |
-| notion.so 資料庫 | `https://www.notion.so/workspace/abc123?v=def456` |
-| 短網址 | `https://notion.so/abc123` |
+| 資料庫（com / so 皆可） | `https://www.notion.com/workspace/abc123?v=def456` |
+| 短網址 | `https://notion.com/abc123`、`https://notion.so/abc123` |
 
-從 URL 提取 `pageId`（最後的 32 字元 hex，可能以 `-` 分隔或連續）。
+從 URL 提取 `pageId`（最後的 32 字元 hex，可能以 `-` 分隔或連續）— 此邏輯與網域、子網域、路徑前綴皆無關，`notion.com` / `app.notion.com` / `notion.so` / `notion.site` 共用；`app.notion.com` 的 `/p/<workspace>/` 路徑前綴不影響抽取結果。
+
+**有效網域白名單（dot-boundary 比對）：** host **等於** `notion.com` / `notion.so` / `notion.site`，**或以** `.notion.com` / `.notion.so` / `.notion.site` 結尾，才視為有效。
+此 dot-boundary 規則自動涵蓋 `www.`、`app.`、`<workspace>.` 等任意子網域，同時擋掉 `evilnotion.com`、`notion.com.attacker.tld` 這類同尾巴或同前綴的假冒網域（避免被導去惡意站點抓內容）。
 
 若 `$ARGUMENTS` 為空，使用 AskUserQuestion 請使用者提供 Notion URL。
-若 URL 不符合 Notion 格式，提示使用者確認。
+若 URL 的 host 不在上述白名單內，提示使用者確認。
 
 ---
 
@@ -285,7 +293,8 @@ Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的
 ## 使用方式
 
 ```bash
-/notion-plan https://www.notion.so/workspace/Page-Title-abc123
+/notion-plan https://www.notion.com/workspace/Page-Title-abc123
+/notion-plan https://www.notion.so/workspace/Page-Title-abc123     # 舊網域，自動轉址至 notion.com
 /notion-plan https://workspace.notion.site/public-page-abc123
 ```
 

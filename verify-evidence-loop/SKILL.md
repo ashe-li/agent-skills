@@ -8,7 +8,7 @@ redundancy-peers: [evidence-check, santa-method, design]
 
 # /verify-evidence-loop — 迭代式證據驗證迴圈
 
-組合 ECC 既有 primitives：`evidence-check`（4 維證據蒐集）+ `santa-method`（dual reviewer 收斂）+ `iterative-retrieval`（gap → next query）。**不重造，只組合**；若超過迭代上限仍無法收斂，輸出 partial report 並要求人工裁決，不依賴不存在的 escalation skill。
+組合既有 primitives：本 repo 的 `evidence-check`（4 維證據蒐集）+ ECC 的 `santa-method`（dual reviewer 收斂）+ `iterative-retrieval`（gap → next query）。**不重造，只組合**；若超過迭代上限仍無法收斂，輸出 partial report 並要求人工裁決，不依賴不存在的 escalation skill。
 
 ## 與既有 skill 的差異
 
@@ -390,12 +390,4 @@ Slug：主張 kebab-case，前綴 `evidence-`，≤60 字元。
 
 ## Methodology Citations
 
-- EBSE 證據分類：Kitchenham, B. "Evidence-based software engineering", ICSE 2004
-- 方法論三角驗證：Denzin, N.K. "The Research Act", 1978
-- Self-Refine：arXiv:2303.17651 (Madaan et al., NeurIPS 2023)
-- Reflexion：arXiv:2303.11366 (Shinn et al., NeurIPS 2023)
-- Multi-agent debate：arXiv:2305.14325 (Du et al., ICML 2024)
-- LLM-as-Judge：arXiv:2306.05685 (Zheng et al., NeurIPS 2023)
-- Anthropic "Building Effective Agents" (2024)
-- IEEE 1012-2016 V&V；NIST SP 800-160；DAMA-DMBOK 2e
-- 反面：arXiv:2310.01798 (Huang, self-correct limits)；arXiv:2305.18654 (Dziri, Faith & Fate)；METR 2025 agent degradation
+方法論借鏡 EBSE 證據分類、Self-Refine/Reflexion/multi-agent debate 迭代收斂、LLM-as-Judge bias 研究（見 E-4 免責聲明的 arXiv:2509.18970）；細節引用不在此重複列出。

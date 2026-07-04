@@ -203,8 +203,8 @@ Agent(subagent_type="general-purpose", model="sonnet")
 - [ ] 執行 /verify 進行全面驗證
 
 ### Phase 3: [文件同步]
-- [ ] 執行 /update 更新知識庫（doc-updater + learn-eval）
-- [ ] 或手動執行 /update-docs + /update-codemaps
+- [ ] 執行 /update 更新知識庫（文件更新 + 審查 + inline 5 維知識沉澱）
+- [ ] 或手動同步相關文件（README、docs/）
 
 ## Architecture Notes
 <!-- 中等以上複雜度必填 -->

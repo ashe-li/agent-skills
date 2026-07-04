@@ -75,7 +75,7 @@ Agent(subagent_type="Plan")
 
 ### Step 4a: 品質審查（subagent 隔離）
 
-啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用 `everything-claude-code:architect`（消融實驗 delta=-0.50），改用通用 agent 搭配明確審查 prompt。
+啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 搭配明確審查 prompt。
 
 ```
 Agent(subagent_type="general-purpose", model="sonnet")

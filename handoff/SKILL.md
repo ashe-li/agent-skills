@@ -12,8 +12,8 @@ argument-hint: [可選：focus 主題或場景描述]
 觸發語句範例：「給我新 context 完整需要的 prompt」「我要準備 compact 了，給我 compact 之後可以用的 prompt」「幫我整理 handoff」「我要換機器繼續，給我接手用的 prompt」。
 
 > **與其他 skill 的差異：**
-> - `everything-claude-code:save-session` 存整份 JSON，需配 `resume-session` 載入；本 skill 只輸出**純文字 prompt**，跨環境通用
-> - `everything-claude-code:strategic-compact` 提示**何時**該 compact；本 skill 解決 compact **之後**怎麼接手
+> - session 快照類工具（如 ECC 的 save-session，存整份 JSON、需配對載入）綁定特定環境；本 skill 只輸出**純文字 prompt**，跨環境通用
+> - compact 提示類工具（如 ECC 的 strategic-compact）解決**何時**該 compact；本 skill 解決 compact **之後**怎麼接手
 > - `/update` 沉澱**長期知識庫**；本 skill 為**短期接手橋樑**
 
 ---

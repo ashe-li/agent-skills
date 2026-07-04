@@ -2,6 +2,29 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [v2.0.0] - 2026-07-04
+
+### Changed
+- **ECC 解耦**：`/design`、`/update`、`/pr`、`/assist` 對 everything-claude-code plugin 的 hard-runtime 依賴（約 46 處）全數移除，改用 Claude Code 內建 primitives
+  - `planner` → 內建 `Plan` agent；`code-reviewer`（審程式碼）→ `/code-review`、（審文件）→ `general-purpose` fresh 驗收 agent；`security-reviewer` → `/security-review`；`refactor-cleaner` → `/simplify`；`doc-updater` → `general-purpose` + 明確 prompt + 主模型 `git diff` 驗證
+  - `/update` Step 4 learn-eval → inline 5 維 rubric（格式契約不變；深度交叉驗證仍可走 `/learn-eval-deep`）
+  - `rules/security-guidance/skill-integration.md` 機制 A 改委派內建 `/security-review`（單點槓桿，design/update/pr/assist 同步生效）
+  - `rules/refactor/remove-architect-pipeline.md` 替代方案表改指內建 `Plan` agent（原表自身仍推薦 ECC planner 的矛盾修正）
+- **4.8+ 模型適配精簡**：18 個 SKILL.md 總行數 4,338 → 2,976（-31%）— 刪自建 manifest 完成率儀式（改原生 task tracking）、單檔重複 3-7 次的規則收斂為單一來源、裝飾性學術引用、與 CLAUDE.md 全域規則重複的段落；parser 契約、DSL 表、DOM 腳本、安全紅線（playwright-hitl 三軸分級）逐字保留
+- `plan-archive` 的 Hook 安裝教學移出執行期文件至 `docs/hooks-setup.md`
+- `README.md` 全面同步解耦後架構；「ECC Agent 退化警告」改寫為歷史決策記錄
+- `plans/active/ecc-190-workflow-integration.md` 作廢歸檔至 `plans/archived/`（依賴 2026-04-01 已禁用的 architect，從未執行）；`plans/active/knowledge-base-quality-optimization.md` 去 ECC 重寫為現況盤點（多數項目已被本次 update/curation 重寫涵蓋）
+
+### Deprecated
+- `/ecc-skill-defer` 標記 deprecated：等 harness 端 ECC plugin 處置定案後移除（gateguard 待辦仍引用它，暫保留）
+
+### Fixed
+- `verify-evidence-loop` L11 將本 repo 自有的 `evidence-check` 誤標為 ECC primitives 的歸屬錯誤
+- `design` 多 session 路徑引用已不存在的 `/blueprint` → 改交 `/plan-run` 跨 session 推進
+
+### Why
+Skill 集建於 Opus 4.5 時代：當時以 ECC agents 補足能力、以過細指令與 manifest 儀式補償模型判斷力。模型升級（Opus 4.8+）後兩者都成負債 — ECC 依賴阻礙 plugin 退場，過細指令浪費 context 且造成僵化。無前綴 agent 名稱（`code-reviewer` 等）經查證同屬 ECC plugin 雙重註冊，故解耦必須改內建 primitives 而非只拿掉前綴。環境事實（路徑/API 怪癖/真實踩坑教訓）與模型強弱無關，全數保留。審計與裁決記錄：knowledge-base `reports/2026-07-04-agent-skills-ecc-decoupling-audit.md`；實作計畫：`plans/active/ecc-decoupling-and-model-adaptation.md`（D1-D5 裁決）。
+
 ## [v1.28.0] - 2026-06-24
 
 ### Changed

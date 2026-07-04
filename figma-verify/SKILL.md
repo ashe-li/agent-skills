@@ -8,7 +8,7 @@ redundancy-peers: [verify-fix-loop]
 
 # /figma-verify — Figma vs local 對齊與 ship gate
 
-UI / 文案 PR 在 mark ready-for-review、merge、production deploy 之前的最後一道把關。流程結尾用 Claude Code 內建的 `/goal` Haiku 評估者做視覺差異 gate，**不另起** `Agent(model="haiku")` subagent。
+UI / 文案 PR 在 mark ready-for-review、merge、production deploy 之前的最後一道把關，Step 4.5 用內建 `/goal` 評估者做視覺 gate（細節見該步驟）。
 
 ## 何時用 / 何時不用
 
@@ -59,9 +59,7 @@ Figma MCP 不可用時：
 | 屬性 | Figma 規格 | 程式碼欄位 | 一致？ |
 |---|---|---|---|
 | bg token | `Color/Success/L-06` (`#eaf5f4`) | `bg-(--Color-Success-L-06)` | ✅ |
-| text token | `Color/Success/Base` (`#2e9a8d`) | `text-(--Color-Success-Base)` | ✅ |
 | label 文字 | `待曝光` | `label: "待曝光"` | ✅ |
-| banner title | `創作者尚未發佈，素材暫時無法使用` | `title="..."` | ✅ |
 
 任何 ❌ 都必須處理 — 不可「先 ship 等 follow-up」。
 
@@ -92,22 +90,13 @@ mcp__playwright__browser_take_screenshot({ fullPage: true })  // 已 resize ≥1
 - 不一致 → 評估者回 reason（例：「Figma 偏粗 vs local 偏細」），自動啟動下一輪修正
 - 一致 → 自動 clear goal，進入 Step 5
 
-### 4.5c — 3 欄診斷表
-
-評估者每輪回的 reason 就是診斷表的「視覺發現」欄位。把多輪 reason 整理成下表貼進 PR description：
+### 4.5c — 3 欄診斷表（評估者每輪 reason 即「視覺發現」欄，整理成下表貼進 PR description）
 
 | 模型 | 視覺發現（評估者 reason） | 推測根因（主 turn diagnose） |
 |---|---|---|
 | haiku（`/goal` 評估者，純視覺比對 2 張 screenshot） | 視覺差異明顯，Figma 偏粗 vs local 偏細 | weight 設定錯誤（推測）+ 字體 fallback |
-| main（token + 字面值對齊） | bg/text token 一致；文案缺「請勿提前轉發」 | unilateral edit |
 
-任一行 ❌ → **不可進入 Step 5**。
-
-### 反模式 ❌
-
-`/goal` 評估者本來就是 Haiku，多開顯式 `Agent(subagent_type="general-purpose", model="haiku")` 做同樣的視覺比對 = 重複造輪子且增加 token：
-- 一次性產出表格 → 走 `/goal`，整理評估者 reason
-- 需要 Haiku 呼叫工具或多路並行 → 才用 `Agent(model="haiku")` subagent
+任一行 ❌ → **不可進入 Step 5**。一次性產出表格走 `/goal`，整理評估者 reason；只有需要 Haiku 呼叫工具或多路並行才用顯式 `Agent(model="haiku")` subagent（`/goal` 評估者本身已是 Haiku，重複開等於重造輪子）。
 
 ## Step 5：ship 前最後一道對齊
 
@@ -138,8 +127,7 @@ gh pr view <num> --json body | grep -iE "placeholder|follow-up|沿用|借"
 
 ## See Also
 
-- `/verify-fix-loop` — Step 4.5 visual gate FAIL 後若想用「次數封頂 + HITL」取代 `/goal` 評估者，改用此 skill
-- `/plan-run` — 大規模 UI 改造的多 step 計畫推進
+- `/verify-fix-loop` — 想用「次數封頂 + HITL」取代 Step 4.5 的 `/goal` 評估者時改用此 skill；`/plan-run` 適合大規模 UI 改造的多 step 計畫推進
 - Claude Code `/goal` 官方文件：https://code.claude.com/docs/en/goal
 
 ## 設計依據

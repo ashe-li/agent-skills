@@ -53,7 +53,7 @@ REPO_NAME=$(basename "$REPO_ROOT")
      - `/tmp/` 或 `/private/tmp/` → `[non-standard]`
      - 其他 → `[non-standard]`
 
-4. **一致性檢查**（依據：DAMA-DMBOK Completeness — manifest vs. actual set difference）：
+4. **一致性檢查**（manifest vs. 實際目錄的 set difference）：
    - 對每個 `git worktree list` 回傳的路徑，執行 `test -d <path>` 確認目錄實際存在
    - 若路徑在 git 清單中但目錄不存在 → 標記 `[orphan]`，並在輸出最後顯示警告：
      ```
@@ -155,7 +155,7 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
    git worktree remove <path>
    git branch -d <branch>  # 若分支已 merged
    ```
-7. **操作驗證**（依據：DAMA-DMBOK Completeness — expected vs. actual count）：
+7. **操作驗證**（expected vs. actual count）：
    - 刪除後重新執行 `git worktree list --porcelain`，確認已刪除的路徑不再出現於列表
    - 逐條對照清理清單（manifest）：
 
@@ -182,15 +182,3 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 2. 若有孤立 metadata，顯示清單
 3. 執行 `git worktree prune`
 4. 報告清理結果
-
----
-
-## 設計原則
-
-- **Repo-agnostic**：用 `git rev-parse` 偵測 repo，不 hardcode
-- **命名慣例**：路徑 `~/Documents/<repo>-<name>`，分支 `worktree-<name>`
-- **確認閘門**：cleanup/create 前都用 AskUserQuestion 等待確認
-- **髒目錄保護**：cleanup 預設跳過有未 commit 變更的 worktree
-- **Legacy 標記**：status 輸出標記非標準路徑，鼓勵遷移至標準路徑
-- **Manifest-driven 驗證**：cleanup 後必須重新 list 比對（expected set ≡ actual set）；status 交叉驗證 git metadata 與實際目錄（依據：DAMA-DMBOK Completeness）
-- **Fail-explicit**：`gh` 查詢失敗時標記 `[unknown]`，不靜默跳過（依據：ITIL CMDB Reconciliation）

@@ -16,20 +16,15 @@ redundancy-peers: [design, assist]
 
 ## Step 0: 成本確認(HITL)
 
-本 skill 啟動 2 個並行 subagent 做深度調查，token 消耗較高。
+本 skill 啟動 2 個並行 subagent 做深度調查，token 消耗較高，用 AskUserQuestion 確認：
 
-使用 AskUserQuestion 詢問：
-
-> 即將啟動 4 維度並行調查(2 subagents)。
-> 預估額外 token 消耗：約 16,000-30,000 tokens。
-> 調查對象：[摘要自 $ARGUMENTS]
->
-> 此工具為獨立深度調查，不同於 /design 和 /assist 中的 inline 驗證。
+> 即將啟動 4 維度並行調查(2 subagents)，預估額外 token 消耗約 16,000-30,000。
+> 調查對象：[摘要自 $ARGUMENTS]（獨立深度調查，不同於 /design、/assist 的 inline 驗證）
 >
 > 1. 繼續 — 啟動調查
 > 2. 取消 — 結束流程
 
-若使用者選擇取消，結束流程。
+選擇取消則結束流程。
 
 ## Step 1: 解析主張與維度 Manifest
 
@@ -39,16 +34,16 @@ redundancy-peers: [design, assist]
 
 > 被驗證主張： [標準化後的技術主張]
 
-### 1b. 建立維度 Manifest
+### 1b. 建立維度追蹤表
 
-在 subagent 啟動前建立期望項目清單(DAMA-DMBOK Completeness pattern)：
+在 subagent 啟動前建立期望項目清單，調查完成後於 Step 4b 回填「狀態／信心度／主要依據」三欄：
 
-| 維度 | 調查範圍 | 狀態 |
-|------|---------|------|
-| D1: 學術研究 | 相關論文、benchmark、實驗數據(arXiv、IEEE、ACM) | PENDING |
-| D2: 業界標準 | RFC、W3C、OWASP、ITIL、NIST 等標準文件 | PENDING |
-| D3: 最佳實踐 | 官方指引、知名 library canonical pattern、生產案例 | PENDING |
-| D4: 社群共識+反面意見 | GitHub discussions、SO、Reddit、官方 forum | PENDING |
+| 維度 | 調查範圍 | 狀態 | 信心度 | 主要依據 |
+|------|---------|------|--------|---------|
+| D1: 學術研究 | 相關論文、benchmark、實驗數據(arXiv、IEEE、ACM) | PENDING | — | — |
+| D2: 業界標準 | RFC、W3C、OWASP、ITIL、NIST 等標準文件 | PENDING | — | — |
+| D3: 最佳實踐 | 官方指引、知名 library canonical pattern、生產案例 | PENDING | — | — |
+| D4: 社群共識+反面意見 | GitHub discussions、SO、Reddit、官方 forum | PENDING | — | — |
 
 ## Step 2: 組裝 Subagent Context
 
@@ -145,14 +140,9 @@ Agent(subagent_type="general-purpose", model="haiku")
 2. 哪個維度的證據較強(根據時效性、引用數、官方地位)
 3. 此衝突是已知辯論還是情境依賴
 
-### 4b. 維度摘要
+### 4b. 補齊維度追蹤表
 
-| 維度 | 覆蓋狀態 | 信心度 | 主要依據 |
-|------|---------|--------|---------|
-| D1 學術研究 | FOUND / NOT-FOUND / PARTIAL | HIGH / MEDIUM / LOW | [top source] |
-| D2 業界標準 | ... | ... | ... |
-| D3 最佳實踐 | ... | ... | ... |
-| D4 社群共識 | ... | ... | ... |
+回填 Step 1b 表格的「狀態」（FOUND / NOT-FOUND / PARTIAL）、「信心度」（HIGH / MEDIUM / LOW）、「主要依據」欄位。
 
 ### 4c. 整體 Verdict
 

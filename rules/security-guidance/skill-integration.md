@@ -20,15 +20,10 @@
 
 ## 兩種機制（都要）
 
-### 機制 A — 委派 security-reviewer agent
+### 機制 A — 委派 `/security-review` skill
 
-```
-Agent(subagent_type="everything-claude-code:security-reviewer", model="sonnet")
-```
-
-審查實際變更（diff / 程式碼），產出 severity 分級 findings（CRITICAL/HIGH/MEDIUM/LOW）。
-model 用 sonnet（符合「安全審查用 sonnet」偏好）。**先確認 agent 可用**（對照各 skill 的 ECC 盤點）；
-若已 defer，提示 restore 或退化為機制 B。
+委派 Claude Code 內建 `/security-review` skill（審查當前 branch 的 pending changes），
+產出 severity 分級 findings（CRITICAL/HIGH/MEDIUM/LOW），判準以 `~/.claude/claude-security-guidance.md` 為準。
 
 ### 機制 B — 引用同一份 guidance 當 checklist
 
@@ -39,12 +34,12 @@ model 用 sonnet（符合「安全審查用 sonnet」偏好）。**先確認 age
 
 ## 各 skill 插入點
 
-| Skill | 何時觸發 | 機制 A（agent） | 機制 B（guidance checklist） |
+| Skill | 何時觸發 | 機制 A（`/security-review`） | 機制 B（guidance checklist） |
 |-------|---------|----------------|------------------------------|
-| `/design` | plan 涉及上述面向 | plan 的實作後步驟須納入 security-reviewer | plan 必含「Security / Threat Model」章節，逐條對照 guidance；Step 4 品質閘**主動驗證**覆蓋（非只「已評估」打勾）|
-| `/update` | session 變更涉及上述面向 | Step 2 在 code-reviewer 之外**並行**跑 security-reviewer | review prompt 附上 guidance 當判準 |
-| `/pr` | 變更涉及上述面向 | Step 2 Quick Review **委派** security-reviewer（非只 inline）| quick review 以 guidance 為 checklist |
-| `/assist` | 路由命中上述面向 | pipeline **預設附加** security-reviewer | 路由與 reviewer prompt 引用 guidance |
+| `/design` | plan 涉及上述面向 | plan 的實作後步驟須納入 `/security-review` | plan 必含「Security / Threat Model」章節，逐條對照 guidance；Step 4 品質閘**主動驗證**覆蓋（非只「已評估」打勾）|
+| `/update` | session 變更涉及上述面向 | Step 2 在 code-reviewer 之外**並行**跑 `/security-review` | review prompt 附上 guidance 當判準 |
+| `/pr` | 變更涉及上述面向 | Step 2 Quick Review **委派** `/security-review`（非只 inline）| quick review 以 guidance 為 checklist |
+| `/assist` | 路由命中上述面向 | pipeline **預設附加** `/security-review` | 路由與 reviewer prompt 引用 guidance |
 
 ## 與 plugin 的關係
 

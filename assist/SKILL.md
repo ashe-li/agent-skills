@@ -1,292 +1,123 @@
 ---
 name: assist
-description: 萬用助手 — 自動分析情境、盤點 ECC 資源、智慧路由至最佳 agent pipeline，一鍵完成複雜工作流。
-allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+description: 萬用助手 — 自動分析情境、盤點可用資源、智慧路由至最佳 agent/skill 組合，一鍵完成複雜工作流。
+allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, Skill, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: [任務描述，留空則自動偵測情境]
 redundancy-peers: [design]
 ---
 
 # /assist — 萬用助手
 
-自動分析當前情境，盤點可用 ECC 資源，智慧選擇最佳 agent pipeline 並執行。適合不確定該用哪個工具時使用。
+自動分析當前情境，盤點可用資源，智慧選擇最佳 agent/skill 組合並執行。適合不確定該用哪個工具時使用。
+
+> 與 `/design` 的分工：`/assist` 是萬用路由入口，涵蓋審查/文件/研究/build 修復等各類情境；`/design` 專注在完整實作計畫的產出。不確定用哪個時先選 `/assist`——判定為需要完整規劃時會委派 `/design`，而非手動重造一套規劃流程。
 
 ## Step 0: 任務追蹤（條件式 HITL）
 
-評估本次任務是否適合啟用 task tracking。
-
-**判斷依據：**
-
-| 建議啟用 | 建議跳過 |
-|----------|----------|
-| 預估 4+ 實作步驟 | 1-3 個簡單步驟 |
-| 有步驟間依賴關係 | 線性無依賴 |
-| 跨多個檔案/模組 | 單一檔案修改 |
-| 預計執行時間較長 | 快速完成的任務 |
-
-**若判斷為「建議啟用」：** 使用 AskUserQuestion 詢問使用者：
-
-> 本次任務較為複雜（[簡述原因]），建議啟用任務追蹤。
->
-> 啟用後會在每個步驟使用 TaskCreate/TaskUpdate 追蹤進度，
-> 支援依賴管理（addBlockedBy）和即時狀態顯示（activeForm）。
-> 預估額外 token 消耗：~500-1,000 tokens。
->
-> 1. **啟用** — 全程追蹤
-> 2. **不啟用** — 直接開始
-
-**若判斷為「建議跳過」：** 不詢問，直接進入 Step 1。
-
-**啟用後的行為：**
-- TaskCreate 父任務（subject: `/assist: [任務摘要]`）
-- 每個 Step 開始前 TaskCreate 子任務（含 activeForm），**保留回傳的 task ID**，完成後 TaskUpdate 為 completed
-- 有依賴的步驟使用 addBlockedBy 標記（填入前序步驟 TaskCreate 回傳的 task ID）
-- 不啟用則完全跳過所有 Task 工具呼叫
+依 CLAUDE.md 全域規則詢問是否啟用 task tracking（複雜任務用 AskUserQuestion 附 token 預估，簡單任務不問逕行）。啟用後於每個 Step 開始前 TaskCreate 子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；不啟用則跳過所有 Task 工具呼叫。
 
 ## Step 1: 情境分析
 
-收集當前工作環境的完整資訊：
+收集判斷路由所需的關鍵事實：
 
-### 1a. Git 狀態
+- **Git 狀態**：`git status`、`git diff --stat`、`git log --oneline -5` — 有無未 commit 變更、變更了哪些檔案、最近 commit 在做什麼
+- **專案偵測**：`ls -la` 判斷語言/框架（package.json/go.mod/requirements.txt 等）、是否有測試/CI 設定
+- **使用者指令**：`$ARGUMENTS` 與對話脈絡中的需求
+- **Build 狀態**：只在偵測到明確 build 設定時才跑一次快速檢查（`npm run build`、`go build` 等）
 
-```bash
-git status
-git diff --stat
-git log --oneline -5
-```
+## Step 2: 盤點可用資源
 
-- 是否有未 commit 的變更？變更了哪些檔案？
-- 最近的 commit 在做什麼？
-- 當前 branch 名稱和狀態
+盤點 Claude Code 內建資源與本 repo 自有 skills 作為路由候選：
 
-### 1b. 專案偵測
-
-```bash
-ls -la
-```
-
-- 專案語言/框架（package.json → Node.js、go.mod → Go、requirements.txt → Python 等）
-- 是否有測試框架設定
-- 是否有 CI/CD 設定
-
-### 1c. 使用者指令
-
-- 分析 `$ARGUMENTS` 中的任務描述
-- 回顧對話脈絡中的需求和上下文
-
-### 1d. Build 狀態
-
-- 如果有相關指令（`npm run build`、`go build`、`python -m py_compile`），快速檢查 build 是否正常
-- 只在偵測到明確的 build 設定時才執行
-
-## Step 2: 盤點 ECC 資源
-
-快速掃描可用的 agents、skills、commands：
-
-**可用 Agents（根據專案類型篩選）：**
+**內建 Agent types：**
 
 | Agent | 適用情境 |
 |-------|----------|
-| planner | 需要規劃的複雜任務 |
-| tdd-guide | 新功能、bug 修復 |
-| code-reviewer | 程式碼品質審查 |
-| security-reviewer | 安全性分析 |
-| build-error-resolver | build 失敗 |
-| e2e-runner | E2E 測試 |
-| refactor-cleaner | 重構、清理 dead code |
-| doc-updater | 文件更新 |
-| go-reviewer | Go 專案專用 |
-| go-build-resolver | Go build 錯誤 |
-| python-reviewer | Python 專案專用 |
-| database-reviewer | 資料庫相關 |
-| harness-optimizer | agent harness 設定優化（hooks/evals/routing） |
-| loop-operator | 自主迴圈運行與監控 |
-| docs-lookup | Context7 文件與 API 查詢 |
-| typescript-reviewer | TypeScript/JavaScript 專案型別安全與 best-practice 審查 |
+| Plan | 需要規劃的複雜任務（見 `/design`） |
+| Explore | 唯讀搜尋定位、快速盤點 |
+| general-purpose | 多步驟研究/審查/文件更新/TDD 引導等，用明確 prompt 取代專用 agent |
 
-**可用 Commands（根據情境篩選）：**
+**內建 Skills：**
 
-| Command | 適用情境 |
-|---------|----------|
-| /orchestrate | 預定義多 agent 工作流（feature/bugfix/refactor/security） |
-| /loop-start | 啟動自主迴圈任務 |
-| /loop-status | 監控進行中的迴圈狀態 |
-| /model-route | 依任務複雜度推薦 model 層級 |
-| /checkpoint | 工作流中建立/驗證進度檢查點 |
-| /quality-gate | 品質閘——測試覆蓋率、lint、安全掃描 |
-| /simplify | code-reviewer 後自動修正（refactor-cleaner：dead code、命名、nesting） |
-| /docs | 需要查詢 Context7 文件或 API 行為 |
-| /aside | 需要暫時切換話題但不丟失當前任務 context |
-| /skill-health | 檢視 skill portfolio 健康狀態與冗餘/缺口分析 |
-| /prompt-optimize | 優化 prompt、SKILL.md 描述、system instructions 品質 |
-| /blueprint | 需跨 session 持續推進的大型建構計畫 |
-| /context-budget | context window 即將超限時稽核用量 |
-| /save-session \| /resume-session | 跨 session 保存/恢復工作進度 |
+| Skill | 適用情境 |
+|-------|----------|
+| `/code-review` | 程式碼品質審查（支援 `--comment`、`--fix`；語言專用審查以 prompt 指定 go/python/ts） |
+| `/security-review` | 安全性分析 |
+| `/simplify` | reuse/簡化/效率清理（dead code、命名、nesting、重複程式碼） |
+| `/verify` | 端對端行為驗證，非只跑測試 |
+| `/review` | 審查 GitHub PR |
+| `deep-research` | 開放式多來源研究，含 fact-check |
 
-### ECC 資源分配原則
+**本 repo 自有 Skills（根據情境篩選相關者）：**
 
-- 盤點結果直接影響 Step 3 路由選擇
-- 路由決策前必須確認所選 pipeline 中的所有 agent 均為可用狀態
-- 若需要的 agent 已被 defer，提示使用者先 restore 或選擇替代 pipeline
+| Skill | 適用情境 |
+|-------|----------|
+| `/design` | 需要完整實作計畫（新功能/架構變更） |
+| `/update` | 知識沉澱（文件更新 + 審查 + context 整理 + pattern 提取） |
+| `/pr` | commit/push/建立或更新 PR |
+| `/plan-run` | 依既有 plan 的 DAG 狀態機推進實作 |
+| `/worktree` | worktree 建立/清理 |
+| `/handoff` | 跨 context/session 交接 |
+| `/evidence-check`、`/verify-evidence-loop` | 技術決策查證；後者為高風險決策的迭代收斂版 |
+
+若需要的資源不可用（例如某 skill 被 defer），提示使用者先 restore 或改選替代組合。
 
 ## Step 3: 智慧路由
 
-根據 Step 1 的情境分析結果，自動選擇最佳 pipeline：
+根據 Step 1 的情境分析，選擇對應的資源組合：
 
-### 路由規則
-
-| 偵測到的情境 | 選擇的 Pipeline | 說明 |
+| 偵測到的情境 | 選擇的組合 | 說明 |
 |---|---|---|
-| 有明確的新功能需求 | planner（含業界/學術方案調研 + 社群共識/反面意見 + 架構決策 + 需求追蹤矩陣）-> tdd-guide -> code-reviewer -> /simplify | 完整功能開發流程；planner 須附上技術方案的業界標準或學術支撐，納入社群共識與已知反面意見/陷阱，並輸出架構決策（替代方案、相容性、效能/安全影響），以及需求追蹤矩陣（REQ-N → 實作步驟映射，依據：DAMA-DMBOK Completeness） |
-| 有 bug 描述或錯誤訊息 | planner -> tdd-guide -> code-reviewer -> /simplify | bug 修復流程 |
-| 有未 commit 變更需 review | code-reviewer -> /simplify -> security-reviewer | 快速品質審查；先修正再安全審查 |
-| build 失敗 | build-error-resolver | 直接修復 build |
-| 需要重構（使用者明確要求或偵測到 code smell） | planner（含架構決策 + 社群共識/反面意見）-> refactor-cleaner -> code-reviewer | 安全重構流程；planner 須輸出架構決策和社群共識/反面意見（已有 refactor-cleaner，不加 /simplify 避免重複） |
-| 需要寫文件 | doc-updater -> code-reviewer | 文件更新流程（文件審查不適用程式碼簡化） |
-| Go 專案 | 在 pipeline 中加入 go-reviewer | 自動附加語言專用 reviewer |
-| Python 專案 | 在 pipeline 中加入 python-reviewer | 自動附加語言專用 reviewer |
-| 涉及資料庫 schema 或 query | 在 pipeline 中加入 database-reviewer | 自動附加資料庫 reviewer |
-| 觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）| 在 pipeline 中**預設附加** security-reviewer（sonnet），prompt 引用 `~/.claude/claude-security-guidance.md` | 主動安全審查，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 觸發閘；與 plugin 同一份判準；都不觸及則不附加 |
-| 需要優化 agent harness 設定 | harness-optimizer | hooks/evals/routing 設定調優 |
-| 需要執行自主迴圈任務 | loop-operator | 長時間 autonomous loop 監控 |
-| 需要預定義工作流模板 | `/orchestrate` command | 當任務明確符合 feature/bugfix/refactor/security 模板時，委派給 orchestrate 而非手動組裝 pipeline |
-| 使用者詢問該用哪個 model | `/model-route` command | 依任務複雜度推薦 Haiku/Sonnet/Opus |
-| 長時間迴圈任務需監控 | loop-operator + `/loop-status` | 啟動迴圈後配合狀態查詢 |
-| 需要多模型協作（ace-tool MCP 可用時） | `multi-*` commands | 條件：偵測到 ace-tool MCP 已設定時才路由 |
-| 需要查詢特定 API 或框架文件 | `/docs` command 或 docs-lookup agent | Context7 MCP 查詢，比 WebFetch 更準確 |
-| TypeScript/JavaScript 專案 | 在 pipeline 中加入 typescript-reviewer | 自動附加語言專用 reviewer |
-| 需要優化 prompt/SKILL.md 描述品質 | `/prompt-optimize` command | advisory only，不執行實際任務 |
-| context 即將超出限制或效能下降 | `/context-budget` command | 稽核各元件用量、建議精簡 |
-| 長時間/跨 session 任務需要保存進度 | `/save-session` → 下次 `/resume-session` | 在適當中斷點儲存狀態 |
-| 不確定 / 多種可能 | 列出建議 pipeline，讓使用者選擇 | 透過 AskUserQuestion 互動 |
+| 新功能需求 / bug 修復 | `/design` → 實作 → `/code-review` → `/simplify` | `/design` 已內建業界標準調研、架構決策、需求追蹤矩陣；委派而非手動重造 |
+| 有未 commit 變更需 review | `/code-review` → `/simplify` | 快速品質審查，先修正再視需要加安全審查 |
+| build 失敗 | general-purpose agent（prompt 要求最小 diff 修復 build，不做架構變更） | 直接修復，優先於其他工作 |
+| 需要重構 | `/design`（含架構決策）→ 實作 → `/simplify` → `/code-review` | 安全重構流程 |
+| 需要寫文件 | general-purpose agent（文件更新 prompt）或直接 `/update` | 文件更新流程；文件審查不適用 `/simplify` |
+| 觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）| 組合中**預設附加** `/security-review` | 依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 觸發閘；都不觸及則不附加 |
+| 需要完整實作計畫 | `/design` | 見上方與本 skill 的分工說明 |
+| 需要依既有 plan 推進 | `/plan-run` | DAG 狀態機推進，不跳步 |
+| 需要 commit/PR | `/pr` | 總結對話脈絡 + commit + push + PR |
+| 需要跨 session/context 交接 | `/handoff` | 產生自包含 prompt |
+| 需要開放式技術研究 | `deep-research` 或 general-purpose + WebSearch | 多來源研究與 fact-check |
+| 需要驗證技術決策 | `/evidence-check`（single-shot）或 `/verify-evidence-loop`（高風險、迭代收斂） | |
+| 不確定 / 多種可能 | 列出建議組合，AskUserQuestion 讓使用者選 | |
 
-### 路由判斷邏輯
+**判斷優先序：** `$ARGUMENTS` 明確指令 > build 失敗（阻塞後續驗證）> 安全問題 > 未 commit 變更 > 對話脈絡推斷意圖。多個情境衝突時，先說明偵測結果，問使用者是否仍按原指令繼續。
 
-1. **優先使用 `$ARGUMENTS`**：如果使用者有明確指令，以指令為準
-2. **其次分析 git 狀態**：未 commit 變更 → review pipeline；build 失敗 → build-fix pipeline
-3. **再看對話脈絡**：從對話中推斷使用者的意圖
-4. **無法判斷時詢問**：使用 AskUserQuestion 提供 2-4 個建議選項
-
-### 多情境衝突處理
-
-當同時偵測到多個情境時，依以下優先順序決定先處理哪個：
-
-1. Build 失敗 — 必須先修復，否則其他工作無法驗證
-2. 安全問題 — 不能延後
-3. 使用者明確指令（$ARGUMENTS）— 使用者意圖優先
-4. Bug 修復 — 修復比新功能重要
-5. 新功能開發 — 標準優先級
-6. 重構/清理 — 較低優先級
-7. 文件更新 — 可延後或與其他工作並行
-
-若偵測到的情境與 `$ARGUMENTS` 衝突（例如使用者要 review 但 build 失敗），先說明偵測結果，詢問使用者是否仍要繼續原指令。
-
-### 不確定時的互動
-
-使用 AskUserQuestion 提供選項：
+**不確定時**，用 AskUserQuestion 呈現選項：
 
 ```
 情境分析結果：[簡述偵測到的狀態]
 
-建議的工作流程：
-1. [Pipeline A] — [適用原因]
-2. [Pipeline B] — [適用原因]
-3. [Pipeline C] — [適用原因]
+建議的組合：
+1. [組合 A] — [適用原因]
+2. [組合 B] — [適用原因]
+3. [組合 C] — [適用原因]
 ```
 
-## Step 4: 執行 Pipeline
+**委派 general-purpose agent 時**（build 失敗、文件更新等無專用 skill 的情境），prompt 需明確界定範圍，例如：
 
-> **若啟用 task tracking：** 每個 agent 執行前 TaskCreate 子任務（含 activeForm，**保留回傳的 task ID**），執行後 TaskUpdate 為 completed。若有 pipeline 依賴順序，使用 addBlockedBy 標記（填入前序 agent TaskCreate 回傳的 task ID）。
-
-按選定的 pipeline 依序執行 agents，使用 handoff protocol 傳遞 context。
-
-### Handoff Protocol
-
-每個 agent 完成後，整理交接資訊傳給下一個 agent：
-
-```markdown
-## HANDOFF: [previous-agent] -> [next-agent]
-
-### Status: [COMPLETED | COMPLETED_WITH_ISSUES | FAILED]
-<!-- COMPLETED = 正常繼續 | COMPLETED_WITH_ISSUES = 繼續但標記 | FAILED = 暫停詢問使用者 -->
-
-### Context
-<!-- 任務背景和目標 -->
-
-### Findings
-<!-- 上一個 agent 的發現和產出 -->
-
-### Industry & Standards Referenced
-<!-- 本階段引用的業界標準或學術依據 -->
-<!-- ⚠️ 必填，不可留空——若本階段無引用，明確寫「本階段未引用業界標準」（依據：OpenAI Developer Community 共識：checklist-driven > free-form） -->
-
-### Community Consensus & Dissenting Views
-<!-- 社群主流看法和已知反面意見/陷阱（GitHub discussions、SO、Reddit） -->
-<!-- ⚠️ 必填，不可留空——若無相關社群討論，明確寫「無相關社群共識資料」 -->
-
-### Completeness Declaration（完整性聲明）
-<!-- 依據：DAMA-DMBOK Completeness -->
-<!-- 格式：「本步驟處理了 K/N 個預期項目，差集 = N-K（遺漏項：列出）」 -->
-<!-- 範例：本步驟處理了 3/3 個預期項目，差集 = 0（無遺漏）-->
-<!-- 範例：本步驟處理了 2/3 個預期項目，差集 = 1（遺漏：REQ-2 未完成）-->
-<!-- ⚠️ 必填，不可留空——使下游 agent 能執行 set difference 比對，不依賴語意判斷 -->
-
-### Files Modified
-<!-- 被修改的檔案清單 -->
-
-### Open Questions
-<!-- 未解決的問題 -->
-
-### Recommendations
-<!-- 給下一個 agent 的建議 -->
 ```
+Agent(subagent_type="general-purpose")
+```
+- build 失敗：只修最小 diff 讓 build 通過，不做架構變更、不新增功能
+- 文件更新：掃描本次變更、更新對應文件（README、API docs、CODEMAPS），格式比照既有文件慣例
 
-### 執行原則
+## Step 4: 執行
 
-- 每個 agent 依序執行，不跳過
-- 如果某個 agent 發現 CRITICAL 問題，暫停 pipeline 並使用 AskUserQuestion 詢問使用者
-- 語言專用 reviewer（go-reviewer、python-reviewer）在 code-reviewer 之後執行
-- database-reviewer 在涉及 DB 變更的步驟之後執行
+> 若啟用 task tracking：每個資源執行前 TaskCreate 子任務（含 activeForm，保留回傳的 task ID），執行後 TaskUpdate 為 completed；有依賴順序用 addBlockedBy 標記前序 task ID。
+
+依序執行選定的 agent/skill。每個完成後，把「做了什麼、關鍵發現、修改的檔案、待解問題」整理成一段交給下一步——交接內容須自包含（下一個執行者看不到上一步的完整過程），不需要固定的必填欄位模板。
+
+若某步驟發現 CRITICAL 問題，暫停 pipeline 並用 AskUserQuestion 詢問使用者是否繼續。
 
 ## Step 5: 輸出報告
 
-所有 agents 執行完畢後，輸出最終報告：
+所有步驟完成後輸出總結，涵蓋以下內容即可，不需固定模板：
 
-```markdown
-## /assist 執行報告
+- 情境分析結果與選擇的組合（含原因）
+- 每步驟的結果摘要與重要發現
+- 變更的檔案
+- 未解決的問題與建議下一步
 
-### 情境分析
-- 專案類型: [語言/框架]
-- 偵測到的情境: [情境描述]
-- 選擇的 Pipeline: [pipeline 名稱]
-
-### Agent 執行結果
-
-#### 1. [Agent 名稱]
-- 狀態: 完成 / 有問題
-- 摘要: [1-2 句話]
-- 重要發現: [列表]
-- 完整性聲明: 本步驟處理了 K/N 個預期項目，差集 = [列出遺漏項或「0（無遺漏）」]
-
-#### 2. [Agent 名稱]
-- ...
-
-### 變更的檔案
-| 檔案 | 動作 | 說明 |
-|------|------|------|
-| ... | 新增/修改/刪除 | ... |
-
-### Manifest 比對結果（依據：DAMA-DMBOK Completeness）
-<!-- 若 pipeline 包含 planner（新功能需求），列出需求追蹤矩陣的比對結果 -->
-| 需求 | 有對應步驟？ | 最終狀態 |
-|------|------------|---------|
-| REQ-1: xxx | Step N ✅ | 已完成 |
-| REQ-2: yyy | —— | ❌ 未完成 |
-| **計數** | N 個需求 | K 個已完成，差集 = N-K |
-
-### 未解決的問題
-<!-- 如果有的話 -->
-
-### 建議下一步
-- [ ] ...
-- [ ] ...
-```
+若啟用 task tracking，TaskList 本身即為完成狀態的來源，不需另建 manifest 表格或完成率計算。

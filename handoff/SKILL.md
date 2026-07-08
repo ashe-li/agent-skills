@@ -7,16 +7,13 @@ argument-hint: [可選：focus 主題或場景描述]
 
 # /handoff — 跨 context 接手 prompt
 
-當你要切換 context（開新對話 / 即將 `/compact` / 換機器繼續 / 隔天再戰），本 skill 會掃描當前狀態與對話脈絡，產出**自包含的接手 prompt**——貼到任何新 context 都能無縫接手，不需要再口頭交代背景。
+當你要切換 context（開新對話 / 即將 `/compact` / 換機器繼續 / 隔天再戰），本 skill 掃描當前狀態與對話脈絡，產出**自包含的接手 prompt**——貼到任何新 context 都能無縫接手，不需要再口頭交代背景。
 
-> **使用情境（共用同一流程）：**
-> 1. **新 context 接手** — 「給我新 context 完整需要的 prompt」
-> 2. **/compact 前準備** — 「我要準備 compact 了，給我 compact 之後可以用的 prompt」
-> 3. **跨機器 / 跨日繼續** — 「幫我整理 handoff」
+觸發語句範例：「給我新 context 完整需要的 prompt」「我要準備 compact 了，給我 compact 之後可以用的 prompt」「幫我整理 handoff」「我要換機器繼續，給我接手用的 prompt」。
 
 > **與其他 skill 的差異：**
-> - `everything-claude-code:save-session` 存整份 JSON，需配 `resume-session` 載入；本 skill 只輸出**純文字 prompt**，跨環境通用
-> - `everything-claude-code:strategic-compact` 提示**何時**該 compact；本 skill 解決 compact **之後**怎麼接手
+> - session 快照類工具（如 ECC 的 save-session，存整份 JSON、需配對載入）綁定特定環境；本 skill 只輸出**純文字 prompt**，跨環境通用
+> - compact 提示類工具（如 ECC 的 strategic-compact）解決**何時**該 compact；本 skill 解決 compact **之後**怎麼接手
 > - `/update` 沉澱**長期知識庫**；本 skill 為**短期接手橋樑**
 
 ---
@@ -37,32 +34,22 @@ pwd                                       # 工作目錄
 - 是否在 worktree：檢查 `.git` 是檔案還是目錄
 - 是否有進行中的 plan：`ls plans/active/*.md 2>/dev/null`
 - 是否有 background process：本對話中尚未結束的 `Bash run_in_background`
-- 是否有 stash：`git stash list`
 
-> **路徑、branch、commit hash、檔名都必須記錄絕對值**——接手者沒有當前對話的記憶，模糊指涉（「那個檔案」「剛剛的 branch」）會直接報廢。
-
-> **⚠️ 相關性標註（必要）：** 並非所有偵測到的環境項目都與本次工作相關。
-> stash、`plans/active/*.md`、background process、其他 untracked 檔案——逐項判斷是否屬於本次任務脈絡：
-> - **相關**：直接列出
-> - **不相關**：在 Step 3 的「環境快照」中**明確標註「不相關於本任務」**（例：`Stash（不相關）：stash@{0}: 舊的 plan-archive 工作`）
->
-> 不標註會讓接手者誤判：以為 stash 是任務遺留 → 嘗試 pop → 污染工作目錄。
+> 路徑、branch、commit hash、檔名都必須記錄絕對值——接手者沒有當前對話的記憶，模糊指涉（「那個檔案」「剛剛的 branch」）會直接報廢。逐項判斷偵測到的環境項目（stash、進行中 plan、其他 untracked 檔案）是否與本次任務相關；不相關的項目要在 Step 3 環境快照中明確標註「不相關於本任務」，否則接手者可能誤判為任務遺留（例如嘗試 pop 不相關的 stash）並污染工作目錄。
 
 ---
 
-## Step 2：對話脈絡萃取（建立 Context Manifest）
+## Step 2：對話脈絡萃取
 
-回顧本次對話，**逐項建立 manifest**（依據：DAMA-DMBOK Completeness）。Manifest 總數 = Step 5 完整率分母：
+回顧本次對話，逐項整理以下七個區塊，作為 Step 5 完整性驗證的基準：
 
-| # | 區塊 | 內容摘要 | 已寫入 prompt？ |
-|---|------|---------|----------------|
-| 1 | 任務目標 | 使用者最初提出什麼需求？ | 待比對 |
-| 2 | 當前進度 | 已完成哪些步驟？已跑過哪些指令？ | 待比對 |
-| 3 | 決策脈絡 | 為什麼選 X 不選 Y？已放棄哪些方案？ | 待比對 |
-| 4 | 環境快照 | branch / worktree / 修改檔案 / 進行中 plan | 待比對 |
-| 5 | 重要 context | 不會反映在 git diff 的隱含資訊（外部討論、效能數據、ticket 編號、社群共識/反面意見） | 待比對 |
-| 6 | 待辦項目 | 還沒做的事，依優先順序排列 | 待比對 |
-| 7 | 立即可執行的下一步 | 接手者第一個 prompt 該下什麼？（必須具體到檔案路徑與動作） | 待比對 |
+1. **任務目標** — 使用者最初提出什麼需求？
+2. **當前進度** — 已完成哪些步驟？已跑過哪些指令？
+3. **決策脈絡** — 為什麼選 X 不選 Y？已放棄哪些方案？
+4. **環境快照** — branch / worktree / 修改檔案 / 進行中 plan
+5. **重要 context** — 不會反映在 git diff 的隱含資訊（外部討論、效能數據、ticket 編號、社群共識/反面意見）
+6. **待辦項目** — 還沒做的事，依優先順序排列
+7. **立即可執行的下一步** — 接手者第一個 prompt 該下什麼？（必須具體到檔案路徑與動作）
 
 **萃取原則：**
 - 只記錄**真正討論/做過**的事，禁止揣測或補白
@@ -73,7 +60,7 @@ pwd                                       # 工作目錄
 
 ## Step 3：產出 Handoff Prompt
 
-依下列模板輸出，所有區塊必須對應 Step 2 manifest 七項：
+依下列模板輸出，所有區塊必須對應 Step 2 七項：
 
 ````markdown
 # Handoff Prompt（產出時間：{{YYYY-MM-DD HH:MM}}）
@@ -132,60 +119,20 @@ pwd                                       # 工作目錄
 
 ## Step 4：輸出方式（HITL）
 
-使用 AskUserQuestion 確認：
+用 AskUserQuestion 確認輸出方式：
+1. **直接顯示** — 印在對話中供你複製
+2. **寫入檔案** — 存到 `.claude/handoff/handoff-{{YYYY-MM-DD-HHMM}}.md`
+3. **兩者皆要** — 顯示 + 存檔（建議：compact 前用此選項，compact 後若 prompt 沒留下還有檔案可救）
 
-> Handoff prompt 已準備好，要怎麼輸出？
->
-> 1. **直接顯示** — 印在對話中供你複製
-> 2. **寫入檔案** — 存到 `.claude/handoff/handoff-{{YYYY-MM-DD-HHMM}}.md`
-> 3. **兩者皆要** — 顯示 + 存檔（建議：compact 前用此選項，compact 後若 prompt 沒留下還有檔案可救）
-
-若選 2 或 3，自動建立目錄：
-
-```bash
-mkdir -p .claude/handoff
-```
+若選 2 或 3，自動建立目錄：`mkdir -p .claude/handoff`
 
 ---
 
-## Step 5：完整性驗證（依據：DAMA-DMBOK Completeness）
+## Step 5：完整性驗證
 
-輸出後逐條比對 Step 2 manifest，產出驗證表：
+輸出後逐條比對 Step 2 的七個區塊，標記每項為 ✅（已涵蓋）/ ⚠️（缺漏，需說明建議補充方向）/ N/A。
 
-| # | 區塊 | 涵蓋狀態 | 備註 |
-|---|------|---------|------|
-| 1 | 任務目標 | ✅ / ⚠️ / N/A | |
-| 2 | 當前進度 | ✅ / ⚠️ / N/A | |
-| 3 | 決策脈絡 | ✅ / ⚠️ / N/A | |
-| 4 | 環境快照 | ✅ / ⚠️ / N/A | |
-| 5 | 重要 context | ✅ / ⚠️ / N/A | |
-| 6 | 待辦項目 | ✅ / ⚠️ / N/A | |
-| 7 | 立即可執行的下一步 | ✅ / ⚠️ / N/A | |
-
-**完整率 = (✅ + N/A) / 7**
-
-- 完整率 = 100%：直接交付
-- 完整率 < 100%：警告使用者哪些區塊缺漏，附建議補充方向
-- 完整率 < 70%：**阻止輸出** — 對話資訊不足，要求使用者補充後重跑
-
----
-
-## 觸發語句範例
-
-下列任一句話應觸發本 skill：
-
-- 「給我新 context 完整需要的 prompt」
-- 「我要準備 compact 了，給我 compact 之後可以用的 prompt」
-- 「幫我整理 handoff」
-- 「這個對話太長了，幫我寫個接手 prompt」
-- 「我要換機器繼續，給我接手用的 prompt」
-
----
-
-## 設計原則
-
-1. **自包含**：接手者不需要看到當前對話，光憑 prompt 就能繼續工作
-2. **絕對路徑**：所有引用都用絕對路徑/branch 名/commit hash，禁止相對指涉
-3. **動作明確**：「立即可執行的下一步」必須是可直接複製貼上的具體指令
-4. **manifest 驗證**：產出後逐條比對，避免遺漏區塊
-5. **不揣測**：對話中沒提到的事一律標 N/A，禁止補白
+**完整率 = (✅ + N/A) / 7**：
+- 100%：直接交付
+- < 100%：警告使用者哪些區塊缺漏
+- < 70%：**阻止輸出** — 對話資訊不足，要求使用者補充後重跑

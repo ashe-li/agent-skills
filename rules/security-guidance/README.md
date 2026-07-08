@@ -14,12 +14,12 @@ plugin 本身靠 hooks 自動跑，無法經 `npx skills add` 散佈，故這裡
 跟既有防線的關係（defense-in-depth，不取代）：
 
 ```
-plugin（in-session，被動）+ skill 主動觸發 → /pr 的 security-reviewer → Code Review（PR）→ CI scanner
+plugin（in-session，被動）+ skill 主動觸發 → /pr 的 /security-review → Code Review（PR）→ CI scanner
 ```
 
 plugin 是 hook **被動**觸發；主動入口 skill（`/design`、`/update`、`/pr`、`/assist`）的**主動**觸發契約見
 [`skill-integration.md`](skill-integration.md)：定義觸發閘（security-relevance heuristic）+ 兩種機制
-（委派 security-reviewer agent + 引用同一份 `claude-security-guidance.md`），確保各階段與 plugin 判準一致。
+（委派 `/security-review` skill + 引用同一份 `claude-security-guidance.md`），確保各階段與 plugin 判準一致。
 
 ## 本機部署狀態（省 token 姿態）
 

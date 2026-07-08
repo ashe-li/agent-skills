@@ -12,12 +12,12 @@
 
 | 場景 | 替代方案 |
 |------|---------|
-| 實作計畫 | `everything-claude-code:planner` agent |
+| 實作計畫 | 內建 `Plan` agent（`Agent(subagent_type="Plan")`） |
 | 快速架構問題 | 直接在 plan 中分析 |
-| 複雜系統設計 | Plan Mode + planner agent |
+| 複雜系統設計 | Plan Mode + 內建 `Plan` agent |
 
 ## 適用範圍
 
-- `/design` skill 的 Step 3 使用 `planner`（非 `architect`）
+- `/design` skill 的 Step 3 使用內建 `Plan` agent（非 `architect`）
 - `/assist` skill 的路由不可導向 `architect`
 - 任何 Agent tool 呼叫不可指定 `subagent_type="everything-claude-code:architect"` 或 `subagent_type="architect"`

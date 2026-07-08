@@ -1,15 +1,13 @@
 ---
 name: pr
 description: 總結當前工作、commit、推送並建立或更新 PR。自動將對話脈絡寫入 PR description，確保 reviewer 能快速理解背景。
-allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion, Agent
+allowed-tools: Bash, Read, Glob, Grep, Edit, Write, AskUserQuestion, Skill
 argument-hint: [PR 號碼或留空建立新 PR]
 ---
 
 # /pr — 總結工作並維護 PR
 
 請依照以下步驟執行：
-
-> **ECC 資源感知：** 若有可用的 code-reviewer 或 security-reviewer agent，Step 2 可委派更深度審查。
 
 ## Step 1: 分析當前工作
 
@@ -18,37 +16,28 @@ argument-hint: [PR 號碼或留空建立新 PR]
 1. 執行 `git status` 和 `git diff`（staged + unstaged）了解**未 commit 的變更**
 2. 執行 `git log` 查看近期 commit 風格
 3. **關鍵步驟 — 同步遠端並確認 PR 完整範圍：**
-   - **先執行 `git fetch origin`** — 確保本地的遠端 refs 是最新的
-   - 執行 `git log --oneline origin/<base-branch>..HEAD` 查看 PR 包含的**所有 commits**
+   - **先執行 `git fetch origin`**（⚠️ Stale Local Branch 陷阱：本地的 `master`/`main`/`hotfix` 可能落後遠端數十個 commits，忘記 fetch 會把已經 merge 的 commits 算進 PR 範圍，導致 description 嚴重失準）
+   - 執行 `git log --oneline origin/<base-branch>..HEAD` 查看 PR 包含的**所有 commits**（永遠用 `origin/<base-branch>` 比較，不要用本地 `<base-branch>`）
    - 執行 `gh pr diff <PR-number> --name-only` 查看 PR 涉及的**所有檔案**
    - 如果已有 open PR，執行 `gh pr view <PR-number> --json body` 讀取現有 description
    - **交叉驗證：** 比對 `git log` 結果與 `gh pr diff` 結果，若差異過大（例如 git log 顯示 50+ commits 但 gh pr diff 僅 1-2 files），以 `gh pr diff` 為準並重新檢視
 
-> ⚠️ **Stale Local Branch 陷阱：** 本地的 `master`/`main`/`hotfix` 可能落後遠端數十個 commits。
-> **永遠使用 `origin/<base-branch>` 比較，不要用本地 `<base-branch>`。**
-> 若忘記 fetch，會把已經 merge 的 commits 算進 PR 範圍，導致 description 嚴重失準。
-
 ### 1b. 對話脈絡分析
 
-**回顧本次對話的完整內容**，提取以下資訊：
+**回顧本次對話的完整內容**，提取以下 context 項目（這份清單是本 skill 唯一權威清單，Step 5 撰寫 PR description 時逐條比對，不重新定義）：
 
-- **動機**：使用者最初提出的問題或需求是什麼？
-- **討論過程**：過程中探索了哪些方案？做了哪些比較或調查？
-- **決策點**：哪些地方有多個選擇？最終為什麼選擇這個方案？
-- **放棄的嘗試**：有沒有試過但放棄的做法？為什麼放棄？
-- **隱含知識**：對話中出現但不會反映在 diff 裡的重要 context（例如：調查數據、外部工具比較、效能考量）
-- **業界/學術依據**：技術決策是否有引用業界標準（RFC、OWASP 等）或學術研究？方案是否基於標準化解決方案？
-- **社群共識與反面意見**：對話中是否討論過社群主流看法？是否有提及已知的反面意見、批評或陷阱？
-- **Ticket 參照**：掃描對話中是否出現 `[A-Z]+-\d+` 編號（如 JIRA-123、TICKET-456）、Notion URL、或「Notion Ticket」字樣，記錄找到的 ticket 編號與票名（供 Step 5 PR 標題使用）
+1. **動機**：使用者最初提出的問題或需求是什麼？
+2. **討論過程**：過程中探索了哪些方案？做了哪些比較或調查？
+3. **決策點**：哪些地方有多個選擇？最終為什麼選擇這個方案？
+4. **放棄的嘗試**：有沒有試過但放棄的做法？為什麼放棄？
+5. **隱含知識**：對話中出現但不會反映在 diff 裡的重要 context（例如：調查數據、外部工具比較、效能考量）
+6. **業界/學術依據**：技術決策是否引用業界標準（RFC、OWASP 等）或學術研究？
+7. **社群共識與反面意見**：對話中是否討論過社群主流看法、已知的反面意見或陷阱？
+8. **Ticket 參照**：掃描對話中是否出現 `[A-Z]+-\d+` 編號（如 JIRA-123）、Notion URL、或「Notion Ticket」字樣，記錄找到的編號與票名（供 Step 5 PR 標題使用）
 
-> ⚠️ **常見錯誤**：
-> - 只看 `git diff` 會遺漏 PR 中其他 commits 的內容
-> - **只看 diff 不看對話**會遺漏「為什麼這樣做」的決策脈絡
-> - PR description 必須同時反映 **what changed（diff）** 和 **why it changed（對話 context）**
+> ⚠️ **常見錯誤**：只看 `git diff` 會遺漏 PR 中其他 commits 的內容；只看 diff 不看對話會遺漏「為什麼這樣做」的決策脈絡。PR description 必須同時反映 **what changed（diff）** 和 **why it changed（對話 context）**。
 
-**Step 1b 結束時建立「Context Manifest」（依據：DAMA-DMBOK Completeness）：**
-
-對話脈絡分析完成後，必須輸出以下格式的 manifest，供 Step 5 PR Description 撰寫時逐條比對：
+**Step 1b 結束時建立「Context Manifest」**，供 Step 5 逐條比對：
 
 ```markdown
 ## Context Manifest（Step 1b → Step 5 交接）
@@ -58,9 +47,6 @@ argument-hint: [PR 號碼或留空建立新 PR]
 | 1 | 動機 | 使用者原始需求 xxx | 待比對 |
 | 2 | 放棄的方案 | 考慮過 A 但因 B 放棄 | 待比對 |
 | 3 | 決策依據 | 選 X 不選 Y，因為 Z | 待比對 |
-| 4 | 業界/學術依據 | 採用 RFC 6749 因為... | 待比對 |
-| 5 | 社群共識與反面意見 | SO 社群建議 X，但已知陷阱... | 待比對 |
-| 6 | 隱含知識 | 調查了 4 個框架，數據顯示... | 待比對 |
 | ... | ... | ... | 待比對 |
 
 expected_count = N（對話中識別的 context 項目總數）
@@ -82,17 +68,13 @@ expected_count = N（對話中識別的 context 項目總數）
 - **型別**：TypeScript 型別是否正確、有無 `any` 濫用
 - **樣式**：是否符合專案既有 coding style
 
-### 主動安全審查（委派，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）
+### 主動安全審查（依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）
 
-判斷變更是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：
+判斷變更是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密，定義見上述文件）：
 
-- **觸及** → 不只做 inline quick review，**委派** security-reviewer agent 做深度安全審查，以 `~/.claude/claude-security-guidance.md` 為判準（與 plugin 同一份）：
-  ```
-  Agent(subagent_type="everything-claude-code:security-reviewer", model="sonnet")
-  ```
-  findings 併入下方輸出；CRITICAL/HIGH 在「互動確認」中提示先修正
+- **觸及** → 委派內建 `/security-review` skill 審查當前 branch 的 pending changes，判準以 `~/.claude/claude-security-guidance.md` 為準；findings 併入下方輸出，CRITICAL/HIGH 在「互動確認」中提示先修正
 - **未觸及** → 明示「無安全敏感面，跳過」
-- **若從 `/update` 串接**：Step 2 已含 security-reviewer，此處不重複委派（去重）
+- **若從 `/update` 串接**：Step 2 已含安全審查，此處不重複委派（去重）
 
 ### 輸出格式
 
@@ -110,58 +92,23 @@ Review 完成後，使用 AskUserQuestion 詢問使用者：
 
 如果使用者選擇「先修正問題」，則根據 review 結果逐一修正，修正完後重新從 Step 1 開始。
 
-## Step 2b: /simplify — 自動修正
+## Step 2b: 自動修正
 
-若 Step 2 發現可自動修正的問題（code quality、style），委派 refactor-cleaner agent 執行自動修正：
-
-```python
-Agent(subagent_type="everything-claude-code:refactor-cleaner")
-```
-
-**修正範圍：**
-
-- Dead code 移除
-- 命名改善（更具語意）
-- Nesting 降低（提前 return、guard clause）
-- 重複程式碼合併
-
-**HITL 確認：**
-
-修正完成後，使用 AskUserQuestion 呈現變更摘要，讓使用者選擇：
-
-1. **套用所有修正** — 接受全部變更
-2. **逐一確認** — 逐項決定
-3. **跳過** — 不套用自動修正
-
-> 若 Step 2 未發現可自動修正的問題，跳過此步驟。
+若 Step 2 發現可自動修正的問題（dead code、命名、nesting、重複程式碼），委派內建 `/simplify` skill 執行；未發現則跳過。
 
 ## Step 2c: Plan 歸檔檢查
 
-**在 commit 之前**，檢查是否有已完成的 plan 需要歸檔：
-
-1. 掃描 `plans/active/*.md`，比對本次對話涉及的 plan
-2. 若 plan 的 Status 包含 `COMPLETED`、`完成`、或所有 Phase/Step 都標記 `[x]`/`✅`，歸檔到 `plans/completed/`：
-   ```bash
-   mkdir -p plans/completed
-   mv plans/active/<filename>.md plans/completed/<filename>.md
-   ```
-3. 若有多個候選 plan，用 AskUserQuestion 確認哪些要歸檔
-4. 若沒有已完成的 plan，跳過
-
-> 也可手動呼叫 `/plan-archive` 執行更詳細的歸檔流程（含驗證結果補充）。
+**在 commit 之前**，若本次對話涉及的 plan 已完成（`plans/active/*.md` 的 Status 為 `COMPLETED`/`完成`，或所有 Phase/Step 皆標記 `[x]`/`✅`），呼叫 `/plan-archive` skill 歸檔至 `plans/completed/`；沒有已完成的 plan 則跳過。
 
 ## Step 3: Commit 當前變更
 
 1. 如果有未 commit 的變更，根據變更內容撰寫 commit message
-2. 使用 conventional commits 格式（feat / fix / chore / refactor / test / docs）
-3. commit message 使用英文
-4. 確保不要 commit 敏感檔案（.env, credentials 等）
+2. 使用 conventional commits 格式（feat / fix / chore / refactor / test / docs），英文撰寫
+3. 確保不要 commit 敏感檔案（.env, credentials 等）
 
 ## Step 4: 推送到遠端
 
-1. 確認當前 branch 是否有對應的 remote tracking branch
-2. 如果沒有，使用 `git push -u origin <branch>` 推送
-3. 如果有，使用 `git push` 推送
+有 remote tracking branch 用 `git push`；沒有則 `git push -u origin <branch>` 建立。
 
 ## Step 5: 建立或更新 PR
 
@@ -241,23 +188,11 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 ```markdown
 ## Summary
 
-<!-- 1-3 句話說明這個 PR 的目的和背景脈絡 -->
-<!-- 重點：讓 reviewer 30 秒內理解「為什麼要做這件事」 -->
+<!-- 1-3 句話說明這個 PR 的目的和背景脈絡，讓 reviewer 30 秒內理解「為什麼要做這件事」 -->
 
 ## Context（對話脈絡）
 
-<!-- 這是最重要的區塊 — 從對話中提取 reviewer 需要知道的 context -->
-<!-- 來源：Step 1b 的對話脈絡分析結果 -->
-<!--
-必須包含：
-- 使用者的原始需求（不只是最終實作，而是「為什麼要做這件事」）
-- 過程中的調查/比較（例如：比較了 3 個框架，選了 X 因為 Y）
-- 關鍵決策點和取捨（例如：選擇性採用而非全面導入，因為...）
-- 放棄的方案和原因（例如：考慮過 Semcheck 但太早期）
-- 不會出現在 diff 中的重要數據（例如：審計發現 145+ 檔案使用 Bootstrap）
-- 技術方案的業界/學術依據（例如：採用 OAuth 2.0 因為 RFC 6749、選擇 bcrypt 因為 OWASP 建議）
-- 社群共識與反面意見（例如：Reddit/SO 社群普遍認為此做法可行，但有人指出 X 陷阱）
--->
+<!-- 最重要的區塊。內容依 Step 1b 的 Context Manifest 逐條寫入，來源優先序：對話脈絡 > git diff > commit messages -->
 <!-- 目標：reviewer 不需要問「為什麼這樣做？」就能從這裡找到答案 -->
 
 ## Changes
@@ -266,10 +201,6 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 <!-- 用 git log origin/<base-branch>..HEAD 確認完整範圍（必須先 git fetch origin） -->
 <!-- 用 git diff origin/<base-branch>..HEAD --diff-filter=D --name-only 確認刪除的檔案 -->
 <!-- 每個主題明確標示：新增了什麼、刪除了什麼、修改了什麼 -->
-<!-- ⚠️ 計數驗證（依據：DAMA-DMBOK Completeness）：-->
-<!--    commits 總數（git log --oneline <base>..HEAD | wc -l）= C -->
-<!--    Changes 中提到的 commit 主題數 = K -->
-<!--    若 K < C，差集 commits 可能未被反映，應補充或說明合併分類的原因 -->
 
 ## Test plan
 
@@ -278,45 +209,7 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-### Context 區塊撰寫要點
-
-**資訊來源（按優先順序）：**
-
-1. **對話脈絡**（Step 1b）— 使用者的原始意圖、討論過程、決策理由
-2. **Git diff** — 實際變更了什麼
-3. **Commit messages** — 每個 commit 的目的
-
-**必須包含：**
-
-- 觸發這次工作的原因（bug report、feature request、tech debt）
-- 過程中的調查和比較結果（數據、框架比較、技術評估）
-- 做過但放棄的嘗試（如果有的話），以及放棄的原因
-- 關鍵決策點（為什麼選 A 不選 B）
-- 最終方案的設計考量
-- 不會出現在 diff 中但 reviewer 需要知道的 context
-
-**常見遺漏（從對話中提取，diff 看不到的）：**
-
-- 「調查了 4 個框架，根據 GitHub stars 和功能比較選了 X」
-- 「審計發現 145+ 個檔案受影響，所以分 4 個 phase」
-- 「考慮過全面導入但太重，改為選擇性採用」
-- 「這個工具只有 111 stars，太早期所以自己寫」
-
-**Manifest 逐條比對（依據：DAMA-DMBOK Completeness + arXiv:2509.18970 結構性驗證）：**
-
-撰寫 Context 區塊時，必須逐條比對 Step 1b 的「Context Manifest」，確保每個 context 項目都已反映在 PR description 中：
-
-| # | Context Manifest 項目 | 已寫入 PR Description？ |
-|---|---------------------|------------------------|
-| 1 | 動機：xxx | ✅ 出現在 Summary 或 Context |
-| 2 | 放棄的方案：考慮過 A... | ✅ 出現在 Context 第 X 段 |
-| 3 | 業界依據：RFC 6749 | ❌ 尚未寫入，需補充 |
-| ... | ... | ... |
-| **計數** | expected_count = N | actual_written = K，差集 = N-K |
-
-差集 > 0 的項目必須補充至 PR description，不可遺漏。
-
-**目標：** reviewer 不需要問「為什麼這樣做？」就能從 PR description 找到答案
+**Manifest 逐條比對：** 撰寫完 Context 區塊後，逐條比對 Step 1b 的 Context Manifest，確保每個項目都已反映；差集（expected_count − actual_written）> 0 的項目必須補齊，不可遺漏。
 
 ## Step 6: 確認結果
 

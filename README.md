@@ -46,6 +46,10 @@ scripts/worktree-cleanup.sh --apply     # 跨 repo 實際清理（skip-dirty）
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
+/plan-run <plan.md>        # 依 plan DAG 由狀態機推進實作（可與 /goal 複合）
+/figma-verify              # Figma vs local 對齊表 + ship gate
+/triage                    # 基於消融數據退役/復原 learned skills
+/learn-eval-deep <skill>   # 單一 learned skill 三系統深度品質驗證
 ```
 
 ## Skills 總覽
@@ -524,6 +528,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 |------|------|
 | [`rules/security-guidance/`](rules/security-guidance/README.md) | `security-guidance` plugin 的擴充檔（guidance + patterns）與省 token 設定記錄；symlink 到 `~/.claude/` 全域生效 |
 | `rules/worktree-prompt.md` / `rules/plan-management.md` | 載入為全域 CLAUDE.md 指令 |
+| [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附 token 預估，比照 Task Tracking），含編隊守則與資源紀律。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
 | [`rules/refactor/remove-architect-pipeline.md`](rules/refactor/remove-architect-pipeline.md) | 禁用規則：不可使用已退化的 `architect` agent，`/design` 一律改用內建 `Plan` agent |
 
 ---
@@ -539,6 +544,8 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 不確定 ──────────→ /assist
 ├─ 程式碼要簡化 ────→ /simplify
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr
+├─ 依既有 plan 推進 ─→ /plan-run <plan.md>
+├─ UI PR ship 前對 Figma → /figma-verify
 ├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop
 ├─ UI bug 要 verify→fix 迴圈 → /verify-fix-loop <目標>
 ├─ Learned skills 要整理 → /curation

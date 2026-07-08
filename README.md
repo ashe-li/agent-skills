@@ -2,6 +2,8 @@
 
 My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
+> 版本策略見 [VERSIONING.md](VERSIONING.md)、變更記錄見 [CHANGELOG.md](CHANGELOG.md)。主線 `v2.x`（ECC 解耦版，只依賴 Claude Code 內建 primitives）；需要 everything-claude-code plugin 的舊版凍結於 `v1.28.0`。
+
 ## Install
 
 ```bash

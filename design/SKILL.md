@@ -37,7 +37,7 @@ redundancy-peers: [assist]
 Agent(subagent_type="general-purpose", model="haiku")
 ```
 
-haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（分診流程、判準表、紅旗皆以該檔為權威版本）；prompt 附上該檔內容或直接引用路徑。**路徑解析**：repo checkout 為 `agents/complexity-triage.md`；skills CLI 安裝環境為 `~/.agents/skills/agents/complexity-triage.md`。
+haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（分診流程、判準表、紅旗皆以該檔為權威版本）；prompt 附上該檔內容或直接引用路徑。路徑解析與呼叫慣例見 `agents/SKILL.md`。
 
 - **輸入**：`$ARGUMENTS` + 對話中的需求脈絡（`/notion-plan` 來源含整理後的 Markdown）+ 專案根目錄路徑
 - **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；輸出契約見 `agents/complexity-triage.md` 的「輸出格式」章節（唯一權威，不在此重複 JSON schema）
@@ -98,9 +98,9 @@ Agent(subagent_type="Plan")
 
 ### Step 4a: 品質審查（subagent 隔離）
 
-> **快速路徑（低複雜度）不派 subagent**：主模型以 6 項精簡清單 self-check——可執行性（每步有檔案路徑+動作）、依賴正確性、驗收可測、實作後品保步驟存在、診斷 gate 存在（票面假設未經 live 驗證時）、安全敏感面判定。任一不過直接改 plan，不進 FAIL 迴圈。以下 subagent 審查僅適用中等以上複雜度。
+> **快速路徑（低複雜度）不派 subagent**：主模型以 7 項精簡清單 self-check——可執行性（每步有檔案路徑+動作）、依賴正確性、驗收可測、實作後品保步驟存在、診斷 gate 存在（票面假設未經 live 驗證時）、安全敏感面判定、測試覆蓋（新增/修改邏輯有對應測試，或明示不需要的理由，可引用 `agents/tdd-guide.md`）。任一不過直接改 plan，不進 FAIL 迴圈。以下 subagent 審查僅適用中等以上複雜度。
 
-啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。**路徑解析**：repo checkout 為 `agents/doc-reviewer.md`；skills CLI 安裝環境為 `~/.agents/skills/agents/doc-reviewer.md`。**禁止 `Agent(subagent_type="doc-reviewer")` 直呼**——環境中可能存在同名 ECC 遺留 agent type，會靜默載入舊定義，一律走下方 `general-purpose` + 定義引用的呼叫慣例。
+啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。路徑解析與呼叫慣例見 `agents/SKILL.md`。
 
 ```
 Agent(subagent_type="general-purpose", model="sonnet")

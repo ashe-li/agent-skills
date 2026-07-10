@@ -31,8 +31,8 @@ model: sonnet
 
 | # | 預期更新文件 | 狀態 | 說明 |
 |---|------------|------|------|
-| 1 | docs/api.md | ✅ 已更新 | 新增 `POST /webhook` 端點說明（對應 src/routes/webhook.ts） |
-| 2 | README.md | ✅ 已更新 | Usage 區塊補上新指令範例（對應 src/cli/commands.ts） |
+| 1 | docs/api.md | ✅ PASS | 新增 `POST /webhook` 端點說明（對應 src/routes/webhook.ts） |
+| 2 | README.md | ✅ PASS | Usage 區塊補上新指令範例（對應 src/cli/commands.ts） |
 
 對應的程式碼變更寫進「說明」欄，不另開獨立欄位。無需更新任何文件時，明確回報「本次變更無需同步文件」+ 理由（例如：純內部重構、測試檔變更、無對外行為變化），不可留空不說明。
 

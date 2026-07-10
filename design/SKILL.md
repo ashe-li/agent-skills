@@ -32,9 +32,11 @@ redundancy-peers: [assist]
 
 | 複雜度 | 判斷標準 | 執行路徑 |
 |--------|---------|---------|
-| **低** | 單一檔案、不涉及架構變更（例：更新 README、加 badge、改設定） | Step 3 → Step 4（跳過架構審查） |
-| **中等以上** | 跨檔案或有架構影響 | Step 3（含架構決策）→ Step 4（含架構審查）|
+| **低（快速路徑）** | 單一 bug fix 或小型變更：≤3 檔、無架構決策、修法方向明確（例：顯示邏輯 bug、更新 README、改設定） | Step 3（精簡計畫，見下）→ Step 4a 改主模型 self-check（不派 subagent）→ Step 4b |
+| **中等以上** | 跨檔案且有架構影響、或修法方向需要取捨 | Step 3（含架構決策）→ Step 4（含架構審查）|
 | **多 session** | 需跨 session 持續推進的大型計畫（遷移框架、多天重架構） | 走標準流程產出 plan，跨 session 推進交給 `/plan-run`（state 持久化於 `plans/active/.plan-state/`） |
+
+> **快速路徑的存在理由**（2026-07-10 PDT-10428 前例）：一個 P2 顯示 bug 走完整儀式，產出業界參照表、社群共識表、RTM、threat model 後，再被 61K-token 審查 agent 以「缺效能評估段落」「缺文件影響章節」等格式官僚項目打回重修——4 個 FAIL 沒有一個改變實作方向。儀式成本要與風險×不可逆性成比例，不與流程完整度成比例。**檔案數不是唯一判準**：bug fix 常跨 2-3 檔（util + 元件 + 測試）但仍是單一決策，屬快速路徑；反之單檔但涉及方案取捨（快取策略、狀態管理選型）走中等。
 
 如果需求過於模糊無法判斷複雜度，使用 AskUserQuestion 請使用者補充具體資訊。
 
@@ -69,11 +71,15 @@ Agent(subagent_type="Plan")
 9. **Security / Threat Model**（主動觸發，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）— 先判斷 plan 是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：**觸及** → 必含「Security / Threat Model」章節，逐條對照 `~/.claude/claude-security-guidance.md`（與 plugin 同一份判準），且實作後步驟須納入 `/security-review`；**未觸及** → 明示「無安全敏感面，跳過」，不空列
 10. **驗收標準** — 怎樣算完成
 
+> **快速路徑（低複雜度）只要求 1、2、7、8、10 + Implementation Steps（S-code 格式不變，維持 /plan-run 相容）**：跳過 3（業界參照/社群共識表）、4（架構決策表）、5（RTM）；9 縮為一句話判定（觸及安全敏感面則自動升級回完整路徑）；token 預算縮為一行總估算（不逐 step 列表）。診斷類 step（live 驗證、payload 擷取）不屬儀式、不可裁剪——票面假設與程式碼矛盾時，診斷 gate 是快速路徑中最有價值的部分。
+
 ## Step 4: 品質檢查與 Plan Mode 呈現
 
 > **若啟用 task tracking：** TaskCreate(subject: "品質檢查與 Plan Mode 呈現", activeForm: "品質檢查與輸出中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID]) → 完成後 TaskUpdate(status: "completed")
 
 ### Step 4a: 品質審查（subagent 隔離）
+
+> **快速路徑（低複雜度）不派 subagent**：主模型以 6 項精簡清單 self-check——可執行性（每步有檔案路徑+動作）、依賴正確性、驗收可測、實作後品保步驟存在、診斷 gate 存在（票面假設未經 live 驗證時）、安全敏感面判定。任一不過直接改 plan，不進 FAIL 迴圈。以下 subagent 審查僅適用中等以上複雜度。
 
 啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 搭配明確審查 prompt。
 

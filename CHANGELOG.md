@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-_目前無未發版變更。_
+### Changed
+- **`/design` 新增低複雜度快速路徑**：單一 bug fix / ≤3 檔 / 無架構決策的任務，計畫只要求需求拆解、技術方案、依賴、風險、驗收（S-code 格式不變，/plan-run 相容）；跳過業界參照表、社群共識表、RTM、逐 step token 預算；Step 4a 改主模型 6 項 self-check、不派 subagent 審查。動機：PDT-10428 前例——P2 顯示 bug 走完整儀式被 61K-token 審查 agent 以格式官僚項目打回，4 個 FAIL 無一改變實作方向。診斷 gate（live 驗證）明文標為不可裁剪。
+- **`/notion-plan` 補 headless session 不穩定止損守則**：第一次 snapshot 撈齊 properties/comments；互動展開重試上限 2 次，失敗標註缺口交 HITL，不無限重試。
 
 ## [v2.0.0] - 2026-07-08
 

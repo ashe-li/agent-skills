@@ -45,7 +45,7 @@ allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, Skill, AskUserQuestio
 Agent(subagent_type="general-purpose")
 ```
 
-依 `agents/doc-updater.md` 的定義執行：prompt 需明確要求依上述 fallback 邏輯掃描本次 session 的檔案變更、更新對應文件、輸出「變更 Manifest」（格式見上，與 `agents/doc-updater.md` 的 Manifest 格式一致）。
+依 `agents/doc-updater.md` 的定義執行（**路徑解析**：repo checkout 為 `agents/doc-updater.md`；skills CLI 安裝環境為 `~/.agents/skills/agents/doc-updater.md`；找不到則視為安裝不完整，沿用本 Step 1 的 inline 流程）：prompt 需明確要求依上述 fallback 邏輯掃描本次 session 的檔案變更、更新對應文件、輸出「變更 Manifest」（格式見上，與 `agents/doc-updater.md` 的 Manifest 格式一致）。**禁止 `Agent(subagent_type="doc-updater")` 直呼**——一律走 `general-purpose` + 定義引用。
 
 **主模型驗證（必做，不可省略）：** agent 回報完成後，主模型必須親眼 `git diff` 逐條比對其宣稱的每一項變更 —— 這類 agent 有編造修改記錄的前科，不能只憑其自述採信。
 
@@ -59,7 +59,7 @@ Step 1 結束時把「變更 Manifest」交給 Step 2。
 Agent(subagent_type="general-purpose")
 ```
 
-依 `agents/doc-reviewer.md` 的定義執行（文件審查檢查清單）：prompt 需要求找碴而非背書：逐條給 PASS/FAIL + 出處，檢查內容是否準確反映程式碼變更、有無過時或不一致描述、格式是否符合專案慣例、有無遺漏的重要資訊；並對照「變更 Manifest」逐條核對 expected vs actual，計算差集。
+依 `agents/doc-reviewer.md` 的定義執行（文件審查檢查清單；**路徑解析**同上：repo checkout 為 `agents/doc-reviewer.md`、skills CLI 安裝環境為 `~/.agents/skills/agents/doc-reviewer.md`；**禁止 `Agent(subagent_type="doc-reviewer")` 直呼**，一律走 `general-purpose` + 定義引用）：prompt 需要求找碴而非背書：逐條給 PASS/FAIL + 出處，檢查內容是否準確反映程式碼變更、有無過時或不一致描述、格式是否符合專案慣例、有無遺漏的重要資訊；並對照「變更 Manifest」逐條核對 expected vs actual，計算差集。
 
 **安全閘門（並行委派，觸發閘依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md)）：**
 

@@ -66,7 +66,7 @@ model: sonnet
 | 可擴展性 | 架構能應對合理範圍的需求增長，不會因規模變化需要重寫 |
 | 相容性 | 與現有程式碼的整合方式明確，無破壞性變更或已標記 migration 步驟 |
 | 效能 | 已評估效能影響 |
-| 安全覆蓋 | 若觸及安全敏感面：必含 Security/Threat Model 章節、逐條對照安全規範、實作後步驟含 `/security-review`；逐項核對存在性，非只看「已評估」打勾；未觸及則標 N/A |
+| 安全覆蓋 | 若觸及安全敏感面：必含 Security/Threat Model 章節、逐條對照 `~/.claude/claude-security-guidance.md`（與 `rules/security-guidance/skill-integration.md` 機制 B 同一份判準）、實作後步驟含 `/security-review`；逐項核對存在性，非只看「已評估」打勾；未觸及則標 N/A |
 | 參照可靠性 | 引用的業界標準適用於當前情境、為最新版本、無更好的標準被遺漏 |
 | 文件影響 | 已列出實作後需新增或更新的文件（README、API docs、CODEMAPS） |
 

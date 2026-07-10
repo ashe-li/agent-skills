@@ -212,6 +212,8 @@ Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的
 ```
 
 > `[SOURCE: /notion-plan]` 為 traceability 標記，僅標示需求來源；`/design` 不做任何 skip 處理（與 `/update → /pr` 的 `[PIPELINE]` 語意不同），而是從對話脈絡中讀取 Notion 內容，零修改 `/design`。
+>
+> 觸發後 `/design` 的 Step 2a 會先派輕量分診 subagent（haiku）判定複雜度再決定走快速路徑或完整流程——測試回報/單一 bug 票通常落在快速路徑，不會為一張 P2 票展開完整儀式。
 
 ---
 

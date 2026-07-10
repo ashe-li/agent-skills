@@ -35,7 +35,7 @@ redundancy-peers: [design]
 |-------|----------|
 | Plan | 需要規劃的複雜任務（見 `/design`） |
 | Explore | 唯讀搜尋定位、快速盤點 |
-| general-purpose | 多步驟研究/審查/文件更新/TDD 引導等，用明確 prompt 取代專用 agent |
+| general-purpose | 多步驟研究/審查/文件更新/TDD 引導等；文件審查/同步/TDD/複雜度分診有自持定義檔（呼叫慣例見 `agents/SKILL.md`），其餘用明確 prompt |
 
 **內建 Skills：**
 
@@ -72,7 +72,7 @@ redundancy-peers: [design]
 | 有未 commit 變更需 review | `/code-review` → `/simplify` | 快速品質審查，先修正再視需要加安全審查 |
 | build 失敗 | general-purpose agent（prompt 要求最小 diff 修復 build，不做架構變更） | 直接修復，優先於其他工作 |
 | 需要重構 | `/design`（含架構決策）→ 實作 → `/simplify` → `/code-review` | 安全重構流程 |
-| 需要寫文件 | general-purpose agent（文件更新 prompt）或直接 `/update` | 文件更新流程；文件審查不適用 `/simplify` |
+| 需要寫文件 | general-purpose agent（依 `agents/doc-updater.md` 定義）或直接 `/update` | 文件更新流程；文件審查不適用 `/simplify` |
 | 觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）| 組合中**預設附加** `/security-review` | 依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 觸發閘；都不觸及則不附加 |
 | 需要完整實作計畫 | `/design` | 見上方與本 skill 的分工說明 |
 | 需要依既有 plan 推進 | `/plan-run` | DAG 狀態機推進，不跳步 |

@@ -22,7 +22,8 @@ redundancy-peers: [assist]
 
 1. **Agent types**：`Plan`（規劃，見 Step 3）、`Explore`（唯讀搜尋定位）、`general-purpose`（多步驟研究/審查，見 Step 4a）
 2. **內建 skills**：`/code-review`（品質審查）、`/security-review`（安全審查）、`/simplify`（reuse/簡化/效率清理）、`/verify`（端對端行為驗證）
-3. 根據使用者需求（`$ARGUMENTS`）篩選出**相關的資源**
+3. **本 repo 自持 `agents/` 定義**（見 `agents/SKILL.md` 索引）：`complexity-triage`（Step 2a 分診）、`doc-reviewer`（Step 4a 審查）、`doc-updater`（供 `/update` 使用）、`tdd-guide`（新功能/bug 修復缺測試覆蓋時，可引用其紅－綠－重構流程）
+4. 根據使用者需求（`$ARGUMENTS`）篩選出**相關的資源**
 
 **輸出：** 一份簡潔的資源清單，標記每個資源與當前需求的關聯程度（高/中/低）。
 
@@ -33,18 +34,13 @@ redundancy-peers: [assist]
 **進入完整流程前，先派一個輕量分診 agent 判定複雜度**——不讓主模型憑印象判斷，也不讓可走快速路徑的任務直接掉進完整儀式（2026-07-10 使用者指示）：
 
 ```
-Agent(subagent_type="general-purpose", model="haiku", effort="low")
+Agent(subagent_type="general-purpose", model="haiku")
 ```
 
-依 `agents/complexity-triage.md` 的定義執行（分診流程、判準表、紅旗皆以該檔為權威版本）；prompt 附上該檔內容或直接引用路徑。
+haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（分診流程、判準表、紅旗皆以該檔為權威版本）；prompt 附上該檔內容或直接引用路徑。**路徑解析**：repo checkout 為 `agents/complexity-triage.md`；skills CLI 安裝環境為 `~/.agents/skills/agents/complexity-triage.md`。
 
 - **輸入**：`$ARGUMENTS` + 對話中的需求脈絡（`/notion-plan` 來源含整理後的 Markdown）+ 專案根目錄路徑
-- **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；回傳固定格式：
-
-```json
-{"complexity": "low | medium | multi-session", "estimated_files": N, "has_architecture_decision": bool, "ambiguous_requirements": bool, "rationale": "一句話"}
-```
-
+- **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；輸出契約見 `agents/complexity-triage.md` 的「輸出格式」章節（唯一權威，不在此重複 JSON schema）
 - **主模型裁決**：對照下表採納或否決——分診結果與主模型判斷衝突時，**取較高複雜度**（分診只准降級失敗、不准升級失敗）；`ambiguous_requirements=true` → 先 AskUserQuestion 補需求再重分診
 - 分診 agent 約 5-15K tokens，換到的是：低複雜度任務跳過 Plan agent 全儀式 + 61K-token 審查 agent 的成本
 
@@ -92,6 +88,7 @@ Agent(subagent_type="Plan")
 8. **風險評估** — 潛在的技術風險和對策
 9. **Security / Threat Model**（主動觸發，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）— 先判斷 plan 是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：**觸及** → 必含「Security / Threat Model」章節，逐條對照 `~/.claude/claude-security-guidance.md`（與 plugin 同一份判準），且實作後步驟須納入 `/security-review`；**未觸及** → 明示「無安全敏感面，跳過」，不空列
 10. **驗收標準** — 怎樣算完成
+11. **測試覆蓋**（新功能/修 bug 且缺測試覆蓋時）— 相關步驟可引用 `agents/tdd-guide.md` 的紅－綠－重構流程，先寫失敗測試再實作，對齊全域 80% 覆蓋率規則
 
 > **快速路徑（低複雜度）只要求 1、2、7、8、10 + Implementation Steps（S-code 格式不變，維持 /plan-run 相容）**：跳過 3（業界參照/社群共識表）、4（架構決策表）、5（RTM）；9 縮為一句話判定（觸及安全敏感面則自動升級回完整路徑）；token 預算縮為一行總估算（不逐 step 列表）。診斷類 step（live 驗證、payload 擷取）不屬儀式、不可裁剪——票面假設與程式碼矛盾時，診斷 gate 是快速路徑中最有價值的部分。
 
@@ -103,7 +100,7 @@ Agent(subagent_type="Plan")
 
 > **快速路徑（低複雜度）不派 subagent**：主模型以 6 項精簡清單 self-check——可執行性（每步有檔案路徑+動作）、依賴正確性、驗收可測、實作後品保步驟存在、診斷 gate 存在（票面假設未經 live 驗證時）、安全敏感面判定。任一不過直接改 plan，不進 FAIL 迴圈。以下 subagent 審查僅適用中等以上複雜度。
 
-啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。
+啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。**路徑解析**：repo checkout 為 `agents/doc-reviewer.md`；skills CLI 安裝環境為 `~/.agents/skills/agents/doc-reviewer.md`。**禁止 `Agent(subagent_type="doc-reviewer")` 直呼**——環境中可能存在同名 ECC 遺留 agent type，會靜默載入舊定義，一律走下方 `general-purpose` + 定義引用的呼叫慣例。
 
 ```
 Agent(subagent_type="general-purpose", model="sonnet")
@@ -117,7 +114,7 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 - Step 1 的資源盤點結果
 - Step 2 判定的複雜度等級
 
-**檢查清單已收斂至 `agents/doc-reviewer.md`（基礎品質 10 維 + 架構審查 8 維，此處為權威副本）**：subagent 須逐項檢查並回報結果（PASS/FAIL + 說明），且對「業界支撐」「社群共識」兩維度主動驗證（計畫缺引述、引述有誤，或完全未提及社群觀點/已知陷阱 → 標記 FAIL）。**若 `agents/` 目錄不存在**，退回沿用 doc-reviewer.md 生效前的 inline 檢查清單版本（git 歷史可查，或請求主模型重建）。
+**檢查清單權威版本在 `agents/doc-reviewer.md`（基礎品質 10 維 + 架構審查 8 維），本段僅保留執行契約摘要**：subagent 須逐項檢查並回報結果（PASS/FAIL + 說明），且對「業界支撐」「社群共識」兩維度主動驗證（計畫缺引述、引述有誤，或完全未提及社群觀點/已知陷阱 → 標記 FAIL）。**若 `agents/` 目錄不存在（安裝不完整）**，從 https://github.com/ashe-li/agent-skills 的 `agents/doc-reviewer.md` 取得，或請使用者重跑 `npx skills update`。
 
 **subagent 回報後的處理：**
 

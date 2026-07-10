@@ -524,14 +524,18 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 ## Agents 目錄
 
-`agents/` 存放本 repo 自持的 agent 定義（一 agent 一檔，ECC 式架構：frontmatter `name`/`description`/`tools`/`model` + 輸入防禦基線 / 職責 / 流程 / 輸出格式 / 判準或檢查清單 / 紅旗）。不依賴 everything-claude-code (ECC) plugin，由 `design/SKILL.md`、`update/SKILL.md` 內的 `general-purpose` subagent 呼叫時引用其定義與檢查清單。
+`agents/` 存放本 repo 自持的 agent 定義（一 agent 一檔，ECC 式架構：frontmatter `name`/`description`/`tools`/`model` + 輸入防禦基線 / 職責 / 流程 / 輸出格式 / 判準或檢查清單 / 紅旗），索引見 `agents/SKILL.md`。不依賴 everything-claude-code (ECC) plugin，由 `design/SKILL.md`、`update/SKILL.md` 內的 `general-purpose` subagent 呼叫時引用其定義與檢查清單。
+
+**路徑解析：** repo checkout 為 `agents/<name>.md`；skills CLI 安裝環境（`npx skills add`）為 `~/.agents/skills/agents/<name>.md`。
+
+**呼叫慣例（避免撞名）：** 一律經 `Agent(subagent_type="general-purpose", model=<定義檔 frontmatter 的 model>)` + prompt 引用定義檔內容執行；**禁止 `Agent(subagent_type="tdd-guide")` 這類直呼**——環境中可能存在同名的 ECC 遺留 agent type，直呼會靜默載入舊定義。
 
 | Agent | 用途 | 被誰引用 |
 |-------|------|---------|
 | `complexity-triage` | 任務複雜度分診（low/medium/multi-session），決定 `/design` 走快速路徑或完整流程 | `/design` Step 2a |
 | `doc-reviewer` | 計畫／文件審查，逐項 PASS/FAIL 找碴 | `/design` Step 4a、`/update` Step 2 |
 | `doc-updater` | 文件同步（README/docs/CODEMAPS），輸出變更 Manifest 供主模型 `git diff` 驗證 | `/update` Step 1 |
-| `tdd-guide` | TDD 紅－綠－重構引導，80% 覆蓋率門檻 | 新功能／bug 修復實作前，依需求手動或由 `/design` plan 步驟引用 |
+| `tdd-guide` | TDD 紅－綠－重構引導，80% 覆蓋率門檻 | `/design` Step 1 資源盤點列出、Step 3 計畫步驟（新功能/修 bug 缺測試覆蓋時）可引用；非任何 Step 自動觸發 |
 
 `planner`（→ 內建 `Plan` agent）、`code-reviewer`（程式碼審查，→ `/code-review`）、`security-reviewer`（→ `/security-review`）、`refactor-cleaner`（→ `/simplify`）、`learn-eval`（→ inline 5 維 rubric）維持 v2.0.0 的內建 primitive 替代，不在 `agents/` 目錄重建。
 

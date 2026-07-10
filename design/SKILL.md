@@ -28,7 +28,27 @@ redundancy-peers: [assist]
 
 ## Step 2: 複雜度評估
 
-根據需求規模，選擇執行路徑：
+### Step 2a: 分診 subagent（先於一切重流程）
+
+**進入完整流程前，先派一個輕量分診 agent 判定複雜度**——不讓主模型憑印象判斷，也不讓可走快速路徑的任務直接掉進完整儀式（2026-07-10 使用者指示）：
+
+```
+Agent(subagent_type="general-purpose", model="haiku", effort="low")
+```
+
+- **輸入**：`$ARGUMENTS` + 對話中的需求脈絡（`/notion-plan` 來源含整理後的 Markdown）+ 專案根目錄路徑
+- **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；回傳固定格式：
+
+```json
+{"complexity": "low | medium | multi-session", "estimated_files": N, "has_architecture_decision": bool, "ambiguous_requirements": bool, "rationale": "一句話"}
+```
+
+- **主模型裁決**：對照下表採納或否決——分診結果與主模型判斷衝突時，**取較高複雜度**（分診只准降級失敗、不准升級失敗）；`ambiguous_requirements=true` → 先 AskUserQuestion 補需求再重分診
+- 分診 agent 約 5-15K tokens，換到的是：低複雜度任務跳過 Plan agent 全儀式 + 61K-token 審查 agent 的成本
+
+### Step 2b: 路徑判定
+
+根據分診結果，選擇執行路徑：
 
 | 複雜度 | 判斷標準 | 執行路徑 |
 |--------|---------|---------|

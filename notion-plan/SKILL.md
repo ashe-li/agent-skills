@@ -72,6 +72,8 @@ playwright-cli -s=notion open "https://www.notion.com/login" --profile ~/.playwr
 
 > **引號規則：** `eval` 指令外層用 **single-quote**，內部 JS 用 **double-quote**，避免 `\"` escape 導致 Playwright serialization 錯誤。
 
+> **不穩定性止損（2026-07-10 實測）：** headless Notion session 會反覆自斷（browser 重啟成 in-memory、execution context destroyed、click ref 失效誤導航到 sidebar 其他頁）。守則：**第一次 snapshot 就把 properties 與 comments 全部撈齊**（accessibility tree 含 `innerText` 拿不到的欄位與留言，一次 Read 完）；後續互動展開（toggle、「Show N replies」）失敗**重試上限 2 次**，仍失敗就在輸出中標註缺口（例：「此留言下有 N 則收合回覆未擷取」）交給下游 HITL 補讀，不值得無限重試——缺口標註本身就是合格產出。
+
 ### 2a. 導航至頁面
 
 ```bash

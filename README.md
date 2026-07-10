@@ -522,6 +522,10 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 ---
 
+## Agents 目錄
+
+`agents/` 存放本 repo 自持的 agent 定義（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`），不依賴 everything-claude-code (ECC) plugin。索引、選用時機、呼叫慣例（含撞名禁令）與路徑解析請見權威文件 [`agents/SKILL.md`](agents/SKILL.md)，本節不重複。`planner`/`code-reviewer`（程式碼）/`security-reviewer`/`refactor-cleaner`/`learn-eval` 維持 v2.0.0 的內建 primitive 替代，不在 `agents/` 目錄重建。
+
 ## Rules / 整合設定
 
 非 skill、但隨此 repo 版本控管的設定來源：

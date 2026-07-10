@@ -26,7 +26,7 @@ user-invocable: false
 一律經 `general-purpose` + 明確 prompt 引用定義檔內容執行，不直呼定義檔的 `name` 當 `subagent_type`：
 
 ```
-Agent(subagent_type="general-purpose", model=<定義檔 frontmatter 的 model 欄位>)
+Agent(subagent_type="general-purpose", model="sonnet")  # model 取自定義檔 frontmatter（doc-reviewer/doc-updater/tdd-guide=sonnet、complexity-triage=haiku）
 ```
 
 prompt 需包含：「依 agents/<name>.md 的定義與檢查清單執行 <任務>」+ 呼叫方傳入的 context。例如審查計畫時：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ Step 3 產出的完整計畫內容。

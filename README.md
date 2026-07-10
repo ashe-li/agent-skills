@@ -522,6 +522,19 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 ---
 
+## Agents 目錄
+
+`agents/` 存放本 repo 自持的 agent 定義（一 agent 一檔，ECC 式架構：frontmatter `name`/`description`/`tools`/`model` + 輸入防禦基線 / 職責 / 流程 / 輸出格式 / 判準或檢查清單 / 紅旗）。不依賴 everything-claude-code (ECC) plugin，由 `design/SKILL.md`、`update/SKILL.md` 內的 `general-purpose` subagent 呼叫時引用其定義與檢查清單。
+
+| Agent | 用途 | 被誰引用 |
+|-------|------|---------|
+| `complexity-triage` | 任務複雜度分診（low/medium/multi-session），決定 `/design` 走快速路徑或完整流程 | `/design` Step 2a |
+| `doc-reviewer` | 計畫／文件審查，逐項 PASS/FAIL 找碴 | `/design` Step 4a、`/update` Step 2 |
+| `doc-updater` | 文件同步（README/docs/CODEMAPS），輸出變更 Manifest 供主模型 `git diff` 驗證 | `/update` Step 1 |
+| `tdd-guide` | TDD 紅－綠－重構引導，80% 覆蓋率門檻 | 新功能／bug 修復實作前，依需求手動或由 `/design` plan 步驟引用 |
+
+`planner`（→ 內建 `Plan` agent）、`code-reviewer`（程式碼審查，→ `/code-review`）、`security-reviewer`（→ `/security-review`）、`refactor-cleaner`（→ `/simplify`）、`learn-eval`（→ inline 5 維 rubric）維持 v2.0.0 的內建 primitive 替代，不在 `agents/` 目錄重建。
+
 ## Rules / 整合設定
 
 非 skill、但隨此 repo 版本控管的設定來源：

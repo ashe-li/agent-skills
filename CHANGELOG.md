@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **自持 `agents/` 目錄**（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`）：收斂 v2.0.0 後散落 `design/SKILL.md`、`update/SKILL.md` 各處的裸 `general-purpose` 審查/更新 prompt 為單一權威定義（frontmatter + 檢查清單 + 紅旗），`design/SKILL.md` Step 4a 與 `update/SKILL.md` Step 1-2 均改為引用；維持 ECC 解耦（定義自持於本 repo、無 plugin runtime 依賴）。`planner` → 內建 `Plan` agent、`code-reviewer`（程式碼）→ `/code-review`、`security-reviewer` → `/security-review`、`refactor-cleaner` → `/simplify`、`learn-eval` → inline 5 維 rubric 維持原生替代不重建；`tdd-guide` 是 v2.0.0 唯一被刪除而無替代的 agent，本次補回。
 - **`/design` Step 2a 複雜度分診 subagent**：進入完整流程前先派 haiku 輕量 agent（Glob/Grep/Read 粗估、固定 JSON 輸出）判定 low/medium/multi-session；主模型保留最終裁決且衝突時取較高複雜度；`/notion-plan` 串接時同樣生效。~5-15K tokens 換掉低複雜度任務誤入完整儀式的成本（2026-07-10 使用者指示）。
 
 ### Changed

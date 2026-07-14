@@ -78,19 +78,31 @@ Agent(subagent_type="Plan")
 
 **計畫須包含：**
 
+計畫分兩組章節：**核心章節（A 組，所有複雜度預設都要）** 與 **研究章節（B 組，僅風險觸發）**。判準是「儀式成本與風險×不可逆性成比例」（見 Step 2b line 57 原則）——複雜度只決定「核心章節的深度」與「Step 4 審查是否派 subagent」，**不決定研究章節是否出現**。
+
+**A 組 — 核心章節（預設全複雜度必含）：**
+
 1. **需求拆解** — 將需求分解為可執行的子任務
 2. **技術方案** — 每個子任務的實作方式
-3. **業界實踐與標準化方案參照** — 每個技術方案須附上依據：業界標準/慣例（RFC、W3C、OWASP、12-Factor 等）、學術研究或成熟標準化方案（官方 SDK、知名 library 的 canonical pattern）、**社群共識**（GitHub discussions、Stack Overflow、官方 forum、Reddit 的主流看法）、**反面意見與已知陷阱**（即使最終仍採用也須揭露）；無直接標準時說明理由並引述最接近的參考
-4. **架構決策**（中等以上複雜度必填）— 每個涉及架構的技術選擇須包含：選擇方案及理由、至少 1 個被排除的替代方案及原因、與現有程式碼的相容性分析、可擴展性評估、效能與安全性影響評估、實作後需新增或更新的文件（README、API docs、CODEMAPS）
-5. **需求追蹤矩陣（Requirements Traceability Matrix）**（依據：DAMA-DMBOK Completeness）— 每個需求（REQ-1、REQ-2...）須映射到至少一個實作步驟與驗收標準，欄位：需求 ID / 需求描述 / 對應實作步驟 / 驗收標準；此矩陣用於 Step 4a 需求覆蓋率審查的輸入（set difference 比對）
+4. **架構決策**（有架構取捨才填，可精簡形式）— 涉及架構的技術選擇須包含：選擇方案及理由、至少 1 個被排除的替代方案及原因、與現有程式碼的相容性、效能與安全性影響；無架構取捨的任務可省略此章節（例：純顯示 bug、文案、設定變更）
 6. **可用資源整合** — 明確指出每個步驟應使用哪個 agent/skill（例：「Step 3: 使用 Plan agent」「Step 5: 使用 /code-review」）。**資源分配須經 Step 1 盤點確認** — 不可假設資源可用
 7. **依賴關係** — 哪些步驟必須按順序執行、哪些可以並行
 8. **風險評估** — 潛在的技術風險和對策
-9. **Security / Threat Model**（主動觸發，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）— 先判斷 plan 是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：**觸及** → 必含「Security / Threat Model」章節，逐條對照 `~/.claude/claude-security-guidance.md`（與 plugin 同一份判準），且實作後步驟須納入 `/security-review`；**未觸及** → 明示「無安全敏感面，跳過」，不空列
+9. **Security / Threat Model**（主動觸發，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）— 先判斷 plan 是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：**觸及** → 必含「Security / Threat Model」章節，逐條對照 `~/.claude/claude-security-guidance.md`（與 plugin 同一份判準），且實作後步驟須納入 `/security-review`；**未觸及** → 一句話「無安全敏感面，跳過」，不空列
 10. **驗收標準** — 怎樣算完成
 11. **測試覆蓋**（新功能/修 bug 且缺測試覆蓋時）— 相關步驟可引用 `agents/tdd-guide.md` 的紅－綠－重構流程，先寫失敗測試再實作，對齊全域 80% 覆蓋率規則
+12. **Token 預算** — 中等以上逐 step 標【預期 agent 數 × 模型層級 × 預估 token】；低複雜度縮為一行總估算
 
-> **快速路徑（低複雜度）只要求 1、2、7、8、10 + Implementation Steps（S-code 格式不變，維持 /plan-run 相容）**：跳過 3（業界參照/社群共識表）、4（架構決策表）、5（RTM）；9 縮為一句話判定（觸及安全敏感面則自動升級回完整路徑）；token 預算縮為一行總估算（不逐 step 列表）。診斷類 step（live 驗證、payload 擷取）不屬儀式、不可裁剪——票面假設與程式碼矛盾時，診斷 gate 是快速路徑中最有價值的部分。
+**B 組 — 研究章節（僅在風險觸發時加入；預設整段省略）：**
+
+3. **業界實踐與標準化方案參照** — 業界標準/慣例（RFC、W3C、OWASP、12-Factor 等）、學術研究或成熟標準化方案、**社群共識**與**反面意見/已知陷阱**的引述
+5. **需求追蹤矩陣（RTM）** — 每個需求（REQ-1、REQ-2...）映射到實作步驟與驗收標準，供 Step 4a 需求覆蓋率 set-difference 比對
+
+> **B 組觸發條件（滿足任一才加入，否則省略）**：①高風險或不可逆（生產資料遷移、破壞性 schema 變更、金流、認證/授權面）；②引入團隊尚未採用的新架構/新框架/新模式（選型本身要說服他人）；③使用者明確要求嚴謹論證或引用依據。**不觸發的預設情境**（含多數實作任務，即使跨 multi-session）：功能開發、既有 pattern 的重構、自包含元件/POC、bug 修復——這些只需 A 組核心章節。
+>
+> **B 組未觸發時 Step 4a 審查對應放寬**：`agents/doc-reviewer.md` 的「業界/學術支撐」「社群共識與反面意見」兩維度僅在 B 組觸發時檢查；未觸發時標 N/A，不因缺研究章節判 FAIL。需求覆蓋率在無 RTM 時改用需求清單直接 set-difference。
+>
+> **低複雜度（快速路徑）額外精簡**：A 組再砍到 1、2、7、8、10 + Implementation Steps（S-code 格式不變，維持 /plan-run 相容）；4 僅在有架構取捨時填；9 縮為一句話判定。診斷類 step（live 驗證、payload 擷取）不屬儀式、不可裁剪——票面假設與程式碼矛盾時，診斷 gate 是快速路徑中最有價值的部分。
 
 ## Step 4: 品質檢查與 Plan Mode 呈現
 
@@ -114,7 +126,7 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 - Step 1 的資源盤點結果
 - Step 2 判定的複雜度等級
 
-**檢查清單權威版本在 `agents/doc-reviewer.md`（基礎品質 10 維 + 架構審查 8 維），本段僅保留執行契約摘要**：subagent 須逐項檢查並回報結果（PASS/FAIL + 說明），且對「業界支撐」「社群共識」兩維度主動驗證（計畫缺引述、引述有誤，或完全未提及社群觀點/已知陷阱 → 標記 FAIL）。**若 `agents/` 目錄不存在（安裝不完整）**，從 https://github.com/ashe-li/agent-skills 的 `agents/doc-reviewer.md` 取得，或請使用者重跑 `npx skills update`。
+**檢查清單權威版本在 `agents/doc-reviewer.md`（基礎品質維度 + 架構審查維度 + 研究支撐維度），本段僅保留執行契約摘要**：subagent 須逐項檢查並回報結果（PASS/FAIL + 說明）。「業界支撐」「社群共識」兩維度**僅在 B 組研究章節觸發時**主動驗證（缺引述/引述有誤/未揭露反面意見 → FAIL）；B 組未觸發的精簡計畫這兩維度標 N/A，不判 FAIL。**若 `agents/` 目錄不存在（安裝不完整）**，從 https://github.com/ashe-li/agent-skills 的 `agents/doc-reviewer.md` 取得，或請使用者重跑 `npx skills update`。
 
 **subagent 回報後的處理：**
 
@@ -165,12 +177,13 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 | /simplify | skill | Phase 2: dead code、命名、nesting、重複程式碼合併 |
 | ... | ... | ... |
 
-## Industry & Standards Reference
+<!-- 以下兩張研究表為 B 組，僅在 Step 3 B 組觸發條件成立時填入；否則整段省略 -->
+## Industry & Standards Reference（B 組，風險觸發才填）
 | 技術決策 | 參照依據 | 類型 | 來源 |
 |----------|---------|------|------|
 | ... | ... | 業界標準/學術研究/標準化方案/最佳實踐 | ... |
 
-## Community Consensus & Dissenting Views
+## Community Consensus & Dissenting Views（B 組，風險觸發才填）
 | 技術決策 | 社群共識 | 反面意見/已知陷阱 | 來源 |
 |----------|---------|------------------|------|
 | ... | ... | ... | GitHub/SO/Reddit/... |

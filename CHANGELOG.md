@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **`rules/debug-triage-order.md`（新規則，預設不 symlink 常駐）**：debug 順序三規則——① prod-first read-only probe（建本地重現環境前先對回報環境做唯讀探測，一次分流環境差異 bug vs 邏輯 bug）；② evidence-first before dispatch（派驗證 agent 前先盤點手上證據，1-2 指令可定案的 inline 跑）；③ verify-via-spec once（regression spec 寫好後驗收＝fresh context 實跑 spec，不散文重推導手動步驟、不疊第三輪驗證）。動機：2026-07-16 vocus 投票 RCA session 複盤，三浪費點合計 ~30-40% session 時間與 3 輪可避免派工。是否 symlink 進 `~/.claude/rules/common/`（常駐載入成本）由使用者 merge 後決定。
 - **自持 `agents/` 目錄**（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`）：收斂 v2.0.0 後散落 `design/SKILL.md`、`update/SKILL.md` 各處的裸 `general-purpose` 審查/更新 prompt 為單一權威定義（frontmatter + 檢查清單 + 紅旗），`design/SKILL.md` Step 4a 與 `update/SKILL.md` Step 1-2 均改為引用；維持 ECC 解耦（定義自持於本 repo、無 plugin runtime 依賴）。`planner` → 內建 `Plan` agent、`code-reviewer`（程式碼）→ `/code-review`、`security-reviewer` → `/security-review`、`refactor-cleaner` → `/simplify`、`learn-eval` → inline 5 維 rubric 維持原生替代不重建；`tdd-guide` 是 v2.0.0 唯一未落地明確替代的 agent，本次補回。
 - **`/design` Step 2a 複雜度分診 subagent**：進入完整流程前先派 haiku 輕量 agent（Glob/Grep/Read 粗估、固定 JSON 輸出）判定 low/medium/multi-session；主模型保留最終裁決且衝突時取較高複雜度；`/notion-plan` 串接時同樣生效。~5-15K tokens 換掉低複雜度任務誤入完整儀式的成本（2026-07-10 使用者指示）。
 

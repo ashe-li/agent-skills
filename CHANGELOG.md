@@ -10,6 +10,7 @@
 - **`/design` Step 2a 複雜度分診 subagent**：進入完整流程前先派 haiku 輕量 agent（Glob/Grep/Read 粗估、固定 JSON 輸出）判定 low/medium/multi-session；主模型保留最終裁決且衝突時取較高複雜度；`/notion-plan` 串接時同樣生效。~5-15K tokens 換掉低複雜度任務誤入完整儀式的成本（2026-07-10 使用者指示）。
 
 ### Changed
+- **`/design` HITL 合併為單一批次詢問**：Task 追蹤（原 Step 0）、Worktree（原 Step 6）、推進方式（原 Step 7）、編隊授權（原全域規則觸發時散問）四題合併成 plan 寫入後的**一次 AskUserQuestion**（工具單次支援 4 題），答案已知的題目自動剔除、全剔除則跳過；批次後不再為這四類決策二次發問，實作中新裁決發問前先派出不依賴答案的工作。另補：plan 呈現與批次詢問前可發 `PushNotification` 提醒（若 harness 支援）。動機：2026-07-16 PDT-10398 session 實測，3.5h 全程 ~85–100 min 為 HITL 等待（~45%），其中 ~40 min 來自 4 個分散 AskUserQuestion 各自 block、43 min 來自使用者不知 plan 已就緒的 approval 空窗——瀏覽器自斷等技術問題僅損 ~5 min，等待才是主要時間浪費。
 - **`/design` 新增低複雜度快速路徑**：單一 bug fix / ≤3 檔 / 無架構決策的任務，計畫只要求需求拆解、技術方案、依賴、風險、驗收（S-code 格式不變，/plan-run 相容）；跳過業界參照表、社群共識表、RTM、逐 step token 預算；Step 4a 改主模型 6 項 self-check、不派 subagent 審查。動機：PDT-10428 前例——P2 顯示 bug 走完整儀式被 61K-token 審查 agent 以格式官僚項目打回，4 個 FAIL 無一改變實作方向。診斷 gate（live 驗證）明文標為不可裁剪。
 - **`/notion-plan` 補 headless session 不穩定止損守則**：第一次 snapshot 撈齊 properties/comments；互動展開重試上限 2 次，失敗標註缺口交 HITL，不無限重試。
 

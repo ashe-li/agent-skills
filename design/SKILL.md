@@ -10,9 +10,11 @@ redundancy-peers: [assist]
 
 接收功能需求，自動盤點可用資源（agents/skills），透過 Plan agent 建立完整實作計畫並輸出至 plans/active/<slug>.md。**不會自動執行實作，必須等使用者確認。**
 
-## Step 0: 任務追蹤（條件式 HITL）
+## Step 0: 任務追蹤（延後至 Step 6 批次詢問，不在此打斷）
 
-依 CLAUDE.md 全域規則詢問是否啟用 task tracking（複雜任務用 AskUserQuestion 附 token 預估，簡單任務不問逕行）。啟用後於每個 Step 開始前 TaskCreate 子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；不啟用則跳過所有 Task 工具呼叫。
+**規劃階段（Step 1–4）不為 task tracking 單獨發 AskUserQuestion**——是否啟用併入 Step 6 的執行模式批次詢問（單次 AskUserQuestion 最多可帶 4 題，見該節）。例外：使用者已在對話中明示啟用 → 逕行啟用，於每個 Step 開始前 TaskCreate 子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；未啟用則跳過所有 Task 工具呼叫。
+
+> **為什麼延後**：HITL 等待是 /design→實作全程 wall-clock 的最大成本。2026-07-16 TICKET-10398 session 實測：3.5h 全程中 ~85–100 min 在等使用者回覆，其中 ~40 min 來自 4 個「分散在流程各處、各自 block」的 AskUserQuestion（Task 追蹤、Worktree、推進方式、編隊授權）。這四題彼此獨立、答案都在「怎麼執行」這一類，合併成 plan 寫入後的一次詢問即可——分散問則每一題都可能撞上使用者離開的空窗。
 
 ## Step 1: 盤點可用資源
 
@@ -144,6 +146,8 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 
 **使用者 accept 後：** ExitPlanMode 觸發 session auto-naming，接著進入 Step 5 寫檔。
 
+> **長等待可通知**：plan 呈現後的 approval 是全流程最長的 HITL 空窗（2026-07-16 實測 43 min——使用者不知道 plan 已就緒就離開了）。呈現 plan 前，若 harness 有 `PushNotification` 工具，發一則「plan 已就緒待審」通知；Step 6 批次詢問前同理。
+
 ## Step 5: 生成 Slug 並寫入 plan 檔案
 
 使用者在 Plan Mode 中 accept 後（ExitPlanMode），將計畫寫入檔案。
@@ -238,15 +242,29 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 > `plans/active/<slug>.md` 已寫入。
 > 可以開始實作；實作完成後執行 `/plan-archive` 歸檔。
 
-## Step 6: Worktree 隔離開發（可選）
+## Step 6: 執行模式批次確認（單次 AskUserQuestion，唯一的執行前 HITL 合併點）
 
-plan 寫入後，依全域規則 `rules/worktree-prompt.md` 判斷是否詢問使用者進入 worktree（跨檔案或架構變更預設詢問，單一檔案小型任務跳過）。
+plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQuestion**（工具單次支援最多 4 題），不分散在流程各處逐一問。批次組成：
 
-若使用者選擇進入 worktree：從 plan slug 推導 worktree 名稱（例：`ticket-1234-url`）、呼叫 `EnterWorktree(name: "<slug>")`，並提示開發完成後執行 `/pr`（worktree 於 session 結束時自動回收）。不使用則直接進入 Step 7。
+| 題目 | 選項（第一選項 = Recommended） | 何時從批次剔除（答案已知就不問） |
+|---|---|---|
+| Task 追蹤 | 啟用 (Recommended)（附 token 預估）/ 不啟用 | 使用者已明示偏好；低複雜度單一 fix 逕行不問 |
+| Worktree | 是，建 sibling worktree (Recommended) / 否，當前目錄 | `rules/worktree-prompt.md` 跳過條件：已表態、已在 worktree、小型任務 |
+| 推進方式 | 依複雜度推薦（下表） | 使用者已在 `$ARGUMENTS` 或對話中明示偏好 |
+| 編隊授權 | 啟用並行 (Recommended)（附 token 預估）/ 單路序列 | plan 的 Dependencies DAG 無可並行分支；或使用者已表態 |
 
-## Step 7: 推進方式選擇（HITL）
+- 全部題目都被剔除 → 整個批次跳過，逕行開工。
+- 批次後**不再為這四類決策發第二次 AskUserQuestion**。實作中新發現的裁決（如 code review 挖出的 scope 問題）仍即時問，但**發問前先把不依賴該答案的工作派出去**（agent 跑著等答案，而不是所有人停著等）。
 
-依 Step 2 判定的複雜度推薦推進方式，使用 AskUserQuestion 詢問使用者：
+**批次答案的執行細節：**
+
+- **Worktree = 是**：依 `rules/worktree-prompt.md` 路徑慣例建 sibling worktree（`git worktree add ~/Documents/<project>-<slug> -b <branch>`），並提示開發完成後執行 `/pr`。
+- **編隊 = 啟用**：依 plan 的 Dependencies DAG 並行派工；未啟用則序列推進。
+- **推進方式**：見下。
+
+### 推進方式選項
+
+依 Step 2 判定的複雜度給推薦：
 
 | 複雜度（Step 2 判定）| 推薦選項 |
 |----------------------|---------|
@@ -254,10 +272,8 @@ plan 寫入後，依全域規則 `rules/worktree-prompt.md` 判斷是否詢問�
 | 中等（4-10 步、有依賴）| `/plan-run` 狀態機（手動 / 推薦） |
 | 高（10+ 步、複雜 DAG、多並行）| `/plan-run` + `/goal` 自動推進（強烈推薦） |
 
-**詢問格式：**
+**選項文案（放進批次詢問的「推進方式」題）：**
 
-> Plan 已寫入 `plans/active/<slug>.md`。如何推進實作？
->
 > 1a. **`/plan-run` 狀態機（手動）** — Python 狀態機決定 DAG 推進順序、TaskCreate `addBlockedBy` 自動串接、session 中斷可續推、不會跳步；每個 step 完成後手動 enter 繼續
 > 1b. **`/plan-run` + `/goal` 自動推進**（強烈推薦於高複雜度）— 同 1a 但用 Claude Code 內建 `/goal` 包外層，狀態機 + evaluator 自動跑到 `all_done=true` 或 N turns；**失敗仍走 Step 3d HITL gate**（不會自動跳過 fail）
 > 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
@@ -278,7 +294,3 @@ plan 寫入後，依全域規則 `rules/worktree-prompt.md` 判斷是否詢問�
 **若選 2（LLM 自主推進）：** 直接進入標準 implementation flow（plan 仍可隨時切換 `/plan-run`，state machine `init` 是冪等的，未來呼叫不影響）。
 
 **若選 3（暫不開始）：** 結束 `/design`，告知：Plan 已存於 `plans/active/<slug>.md`，隨時可執行 `/plan-run plans/active/<slug>.md` 啟動狀態機，或直接在 session 中開始實作。
-
-**跳過 Step 7 的情境：**
-
-- 使用者已在 `$ARGUMENTS` 或對話中明示推進偏好

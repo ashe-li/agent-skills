@@ -38,8 +38,10 @@ npx skills add ashe-li/agent-skills --global
 /worktree                  # 列出所有 worktree 狀態
 /worktree create <name>    # 建立新 worktree
 /worktree cleanup          # 清理已 merge 的 worktree（單 repo 互動）
-scripts/worktree-cleanup.sh             # 跨 repo 批次掃描，dry-run
-scripts/worktree-cleanup.sh --apply     # 跨 repo 實際清理（skip-dirty）
+scripts/ops/worktree-cleanup.sh                 # 跨 repo 批次盤點，dry-run（預設）
+scripts/ops/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目錄、不刪 branch）
+scripts/ops/pr-deploy-trace.sh <PR>             # 這個 PR 現在跑在哪些環境（唯讀）
+scripts/ops/ci-watch.sh <PR>                    # 輪詢 CI 到收斂，紅了摘關鍵 log（唯讀）
 /curation                  # 清理 learned skills 格式問題
 /plan-archive              # 歸檔已完成的 plan
 /ecc-skill-defer apply     # Defer 不常用的 skills

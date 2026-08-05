@@ -200,6 +200,10 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 <!-- 按主題分類列出變更，涵蓋 PR 的所有 commits（不只是當次對話的工作） -->
 <!-- 用 git log origin/<base-branch>..HEAD 確認完整範圍（必須先 git fetch origin） -->
 <!-- 用 git diff origin/<base-branch>..HEAD --diff-filter=D --name-only 確認刪除的檔案 -->
+<!-- 本次對話沒親自做過的 commit（跨 session 累積的 branch、更新既有 PR）：其條目的
+     「改了什麼」必須對 git diff 核實，commit message 只用來定位該查哪段 diff，不能當證據；
+     核不到佐證的標「無法佐證」列出來，不要為了讓 body 看起來完整而放寬。
+     當次對話親自做的照舊（diff 就在對話裡，不必重查）。 -->
 <!-- 每個主題明確標示：新增了什麼、刪除了什麼、修改了什麼 -->
 
 ## Test plan

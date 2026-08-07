@@ -1,7 +1,7 @@
 ---
 name: release-pr
 description: 為 release PR（如 hotfix → master / develop → master）自動產生標題 + description。掃描 base...head 的 commit 範圍，依 Conventional Commit prefix 分類為 Features / Bug Fixes / Improvements，輸出繁體中文 release notes，並寫回 PR 標題與 body。觸發：使用者說「release pr」「寫 release pr」；**或**要為 base 是 master/main、head 是 hotfix/develop/release-* 的 PR 寫標題或說明——即使沒講「release pr」三個字也適用，例如「這批要上線的 PR 幫我寫說明」「發版說明」「hotfix 合回 master 那個 PR 的 description」。不適用 feature PR（那走 /pr）。
-allowed-tools: Bash, Read, AskUserQuestion, Agent
+allowed-tools: Bash, Read, AskUserQuestion, Agent, Skill
 argument-hint: [PR 號碼或 PR URL]
 ---
 
@@ -67,6 +67,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 1. **否定式敘述**——commit 說「不動 X」「不新增 X」時，其真值範圍是**寫下它的那個 PR 當下**，release notes 的 scope 是整個批次。X 只要出現在檔案清單就直接推翻；正確修法是補回 scope 限定詞（「本 PR 不…；後續 #NNNN 才…」）而非刪句。**跨 PR 並排後才浮現的矛盾同理**：整份 body 寫完通讀一次，專找互斥的兩句。
 2. **本機執行結果數字**——commit 尾段的「N unit suites / M tests 綠、build 成功」在 diff 裡永遠查不到，且後續 PR 進版後必然失效。**不轉載**，改指向本 PR 的 check runs；要保留品質訊號（如 mutation testing 結果）就標明「PR #NNNN 當時的本機驗證」。
 3. **批次內自我修正**——`.files[] | select(.filename=="X") | .status` 為 `added` ⇒ 該檔在 base 根本不存在 ⇒ 檔內所有「修復」必然都是批次內自修，移出 Bug Fixes、降級成對應 Improvements 條目的括號註記並明寫「批次內自我修正，未上線」。
+4. **分類與檔案範圍矛盾**——`fix:`／`feat:`／`refactor:` 等 prefix 宣稱的分類，與該 commit 實際觸及的檔案清單矛盾時（例：訊息說「修正 X」但檔案清單全是新檔、或改動範圍遠超訊息描述），以 diff 為準重新分類，不採信 prefix 字面；判準對齊 `evidence-gate` skill 第 2 節 Diff-Grounding 規則。
 
 **驗證「彙整了哪 N 個 PR」**：取那 N 個 merge commit 的檔案聯集，與 compare 的檔案數比對，差額必須逐項解釋得通（base 本就沒有的檔，其 delete 不會出現在 compare 裡）。
 
@@ -89,7 +90,9 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 ## Step 4.5：寫回前的擋門（強制）
 
-Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Agent`（`subagent_type: general-purpose`，需 Bash 跑 `gh`/`git`）重跑一次 Step 2.5 的三個查核——不是新規則，是換一個沒看過草稿產生過程的人重驗一次（核心紀律 #2「驗證不自驗」；Step 2.5 只在 >20 commits 時才派 agent，且屬產出前自查）。
+Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Agent`（`subagent_type: general-purpose`，需 Bash 跑 `gh`/`git`）重跑一次 Step 2.5 的四個查核——不是新規則，是換一個沒看過草稿產生過程的人重驗一次（核心紀律 #2「驗證不自驗」；Step 2.5 只在 >20 commits 時才派 agent，且屬產出前自查）。
+
+本步驟即 `evidence-gate` skill 的 caller 落地（該 skill 第 6 節 Caller 呼叫契約已列本步驟為對應實作）；可直接 `Skill({ skill: "evidence-gate" })` 取用其 Claim Schema（第 1 節）與 Fact-Checker 派遣模板（第 4 節），不必重新定義格式。
 
 **輸入**：draft title/body 全文、PR 號、repo。
 

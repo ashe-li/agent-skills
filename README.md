@@ -52,6 +52,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /triage                    # 基於消融數據退役/復原 learned skills
 /learn-eval-deep <skill>   # 單一 learned skill 三系統深度品質驗證
+/eli5 <主題>               # 白話解釋：對話版（自然語言「白話解釋」也會觸發）／圖解版 HTML 大圖少字
 ```
 
 ## Skills 總覽
@@ -77,6 +78,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
 | [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
+| [`/eli5`](#eli5--白話解釋) | 白話解釋（ELI5）：對話版一句話類比 → 要點 → 技術細節；`/eli5 <主題>` 出 HTML 大圖少字圖解頁 |
 
 ---
 
@@ -451,6 +453,27 @@ UI / 文案 PR mark ready-for-review、merge、production deploy 之前的最後
 | 設計規格對齊確認且視覺差異檢測 | `/figma-verify` |
 | Bug fix（z-index、布局壓蓋）但無文案/token 改動 | skip；PR 註記讓設計師看 |
 | 設計系統明許「工程可自行調整 X 範圍」| skip |
+
+</details>
+
+### `/eli5` — 白話解釋
+
+把一個概念、機制、結論或剛做完的事，講給完全沒接觸過這個主題的人聽。繁體中文版的 Anthropic `/eli5`（Thariq Shihipar 分享、掛在 `anthropics/claude-plugins-community`，原版只有一句 prompt：「像對完全不懂的人解釋，用一個大圖少字的 HTML artifact」）。
+
+<details>
+<summary>Features</summary>
+
+- **兩種模式**：對話中說「白話解釋」「我看不懂」「X 是什麼」→ 純文字對話版；`/eli5 <主題>` 或說「圖解」「畫給我看」→ 一頁 HTML（3–6 個畫面，每畫面一張 inline SVG + ≤ 2 句圖說），有 `Artifact` 工具就 publish、沒有就寫到 `.eli5/<slug>.html` 並 `open`
+- **對話版固定四段**：一句話類比 → 要點 3–5 條（術語首次出現括號白話）→ 類比在哪裡失效 → 技術細節（可選）；解釋「剛做完的事」時改成 發生了什麼 → 為什麼 → 我做了什麼 → 你要注意什麼
+- **不簡化到錯**：簡化是省略不是改事實，省略處要提；不知道就說不知道
+- **簡單內容直接講重點**，不硬套類比（對齊 CLAUDE.md 條件式偏好）
+- **與 speak-human-tw 分工**：手上有稿子要去 AI 味 → `speak-human-tw`；想聽懂某個東西 → `/eli5`
+- **對外文件邊界**：產物標題與 section 不掛「白話」「人話版」label
+
+**觸發語句範例：**
+- 「白話解釋」「白話一點」「白話總結」「我看不懂」
+- 「用比喻講」「X 是什麼」「講簡單一點」
+- 「/eli5 imgproxy 回源」「畫給我看」「做成一頁」
 
 </details>
 

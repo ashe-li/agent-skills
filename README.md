@@ -563,6 +563,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 | [`rules/security-guidance/`](rules/security-guidance/README.md) | `security-guidance` plugin 的擴充檔（guidance + patterns）與省 token 設定記錄；symlink 到 `~/.claude/` 全域生效 |
 | `rules/worktree-prompt.md` / `rules/plan-management.md` | 載入為全域 CLAUDE.md 指令 |
 | [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附 token 預估，比照 Task Tracking），含編隊守則與資源紀律。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
+| [`rules/non-neutral-verification.md`](rules/non-neutral-verification.md) | 非中性驗證三條紀律：還原步驟本身要驗（禁 `git stash` 做 before/after，對已 commit 路徑靜默無效且 pop 會彈到別人的 stash）、驗收環境要有鑑別力（在驗收環境本身跑對照組；flag-gated 改動先比對各環境 build-args）、用「指紋」提早識破環境缺前提。可攜版本，**不預設 symlink 常駐** |
 | [`rules/refactor/remove-architect-pipeline.md`](rules/refactor/remove-architect-pipeline.md) | 禁用規則：不可使用已退化的 `architect` agent，`/design` 一律改用內建 `Plan` agent |
 
 ---

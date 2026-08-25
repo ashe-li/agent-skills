@@ -231,6 +231,14 @@ Skill({ skill: "evidence-gate" })
 PR 建立／更新完成後，判斷本次變更**是否需要截圖驗收**，需要就用 AskUserQuestion 取得授權再跑。
 **這步在 Step 5 之後才做**：截圖要貼成 PR comment，PR（與 preview env）不存在就沒有落點。
 
+> **適用範圍不限於由 `/pr` 建立的 PR。** 若 PR 由派工 agent 或手動 `gh pr create` 建立，
+> 派工者仍須在 PR 存在後補跑本步驟——**委派出去的是工作，不是責任**。
+> 這個 gate 只寫在 `/pr` 裡，所以繞過 `/pr` 的路徑會讓它靜默消失；
+> 而「請 agent 開 PR」正是最常見的繞過方式。
+>
+> 特別要抓的一種狀態：**截圖已經拍了、trace 也存了，但全部落在 `.verification/` 之類的本機路徑**。
+> 證據存在卻停在 reviewer 打不開的地方，等同沒有證據——這正是 `/pr-evidence-comment` 要解決的問題本身。
+
 ### 5.5a 分類（沿用 `/pr-evidence-comment` Step 0 的同一張表）
 
 以 Step 2 的「視覺驗收面」判定與 `gh pr diff <PR> --name-only` 為依據分類：

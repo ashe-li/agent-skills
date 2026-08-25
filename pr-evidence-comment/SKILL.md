@@ -1,6 +1,6 @@
 ---
 name: pr-evidence-comment
-description: 對 PR 做 headed 驗收 → 截圖存證 → 主對話目檢抽驗 → 把逐項 PASS/FAIL 與截圖一起發成 PR comment。截圖上傳走 stock Chrome + CDP（gh CLI 與 GitHub API 都不支援 comment 附圖）。觸發：「headed 驗收這個 PR」「把驗收結果貼上去」「驗收 comment 附截圖」「preview env 驗收」，或 UI 變更 ship 前的視覺驗收；亦由 `/pr` Step 5.5 的截圖驗收 gate 串接。
+description: 對 PR 做 headed 驗收 → 截圖存證 → 主對話目檢抽驗 → 把逐項 PASS/FAIL 與截圖一起發成 PR comment。截圖上傳走 stock Chrome + CDP（gh CLI 與 GitHub API 都不支援 comment 附圖）。觸發：「headed 驗收這個 PR」「把驗收結果貼上去」「驗收 comment 附截圖」「preview env 驗收」，或 UI 變更 ship 前的視覺驗收；亦由 `/pr` Step 5.5 的截圖驗收 gate 串接。**狀態型觸發（不需使用者開口）**：PR 已存在、含 UI／行為變更、且尚無截圖證據時就該提醒——**包含由 subagent 或手動 `gh pr create` 建立的 PR，繞過 `/pr` 不代表免驗收**；以及本機已產出截圖／trace 但只落在 `.verification/` 等本機路徑、尚未上傳到 PR 時。
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, AskUserQuestion
 argument-hint: <PR 編號 / preview 或 staging URL / 驗收項目清單>
 ---

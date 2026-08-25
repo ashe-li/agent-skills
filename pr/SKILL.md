@@ -67,6 +67,7 @@ expected_count = N（對話中識別的 context 項目總數）
 - **遺漏**：是否有 debug code（console.log、debugger）未清除
 - **型別**：TypeScript 型別是否正確、有無 `any` 濫用
 - **樣式**：是否符合專案既有 coding style
+- **視覺驗收面**：變更是否觸及 UI 視覺／互動行為？觸及則列出「待截圖驗收項目」草稿（一項一個可判 PASS/FAIL 的斷言），交給 Step 5.5 收尾；未觸及則明示「無視覺面，Step 5.5 將跳過」
 
 ### 主動安全審查（依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）
 
@@ -74,7 +75,7 @@ expected_count = N（對話中識別的 context 項目總數）
 
 - **觸及** → 委派內建 `/security-review` skill 審查當前 branch 的 pending changes，判準以 `~/.claude/claude-security-guidance.md` 為準；findings 併入下方輸出，CRITICAL/HIGH 在「互動確認」中提示先修正
 - **未觸及** → 明示「無安全敏感面，跳過」
-- **若從 `/update` 串接**：Step 2 已含安全審查，此處不重複委派（去重）
+- **若從 `/update` 串接**：Step 2 已含安全審查，此處不重複委派（去重）。但**「視覺驗收面」判定不在 `/update` 涵蓋範圍**——即使跳過本步驟其餘檢查，該判定仍要做（或由 Step 5.5a 直接從 `gh pr diff --name-only` 補判），否則 Step 5.5 會無輸入而誤跳過
 
 ### 輸出格式
 
@@ -209,6 +210,8 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 ## Test plan
 
 <!-- 測試計畫，checkbox 格式 -->
+<!-- 若 Step 2 判定有視覺面，此處列出待截圖驗收的編號項目（B1/C1…），並在 Step 5.5 完成後回頭勾選；
+     移除／重構類不要列截圖項，改列量測項（grep 殘留、bundle diff、目錄不存在） -->
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
@@ -223,11 +226,60 @@ description 定稿後、執行 `gh pr create`/`gh pr edit` 前，呼叫 `evidenc
 Skill({ skill: "evidence-gate" })
 ```
 
+## Step 5.5: 截圖驗收 gate（PR 已存在後執行）
+
+PR 建立／更新完成後，判斷本次變更**是否需要截圖驗收**，需要就用 AskUserQuestion 取得授權再跑。
+**這步在 Step 5 之後才做**：截圖要貼成 PR comment，PR（與 preview env）不存在就沒有落點。
+
+### 5.5a 分類（沿用 `/pr-evidence-comment` Step 0 的同一張表）
+
+以 Step 2 的「視覺驗收面」判定與 `gh pr diff <PR> --name-only` 為依據分類：
+
+| 變更類型 | 驗收手段 | 本步驟動作 |
+|---|---|---|
+| UI 視覺／互動行為 | headed 截圖 | 進 5.5b 詢問 |
+| 狀態遷移後「行為不變」 | 截圖（證沒壞）＋ 量測（證真的遷了） | 進 5.5b 詢問，並提醒量測項不可省 |
+| 純移除／重構 | 量測（grep 殘留、bundle diff、目錄不存在） | **不問截圖**，直接提示補量測項到 Test plan |
+| API／資料正確性 | curl／測試輸出 | **不問截圖**，直接提示補測試輸出 |
+| 純文件／設定／CI | 無 | 明示「無視覺面，跳過」 |
+
+> 移除類拍不出來：截圖只能顯示「看起來正常」，證不了「東西真的不在了」。別為了有圖而追截圖。
+
+### 5.5b 互動確認（AskUserQuestion）
+
+判定為「需要截圖驗收」時，**必須**用 AskUserQuestion 詢問，不可自行決定跑或不跑（會開瀏覽器、要人工登入、且會以使用者身分公開發 comment）。
+
+問題帶上：偵測到的視覺面變更檔案、Step 2 草擬的驗收項目編號清單、以及可用的驗收環境（preview URL／staging／local）。選項：
+
+1. **現在就驗（推薦）** — 委派 `/pr-evidence-comment`，帶入驗收項目清單與環境 URL
+2. **只列清單，我自己驗** — 把編號清單寫進 PR 的 Test plan（未勾選），不開瀏覽器
+3. **這次不需要** — 記錄理由並在 PR 補一句說明為何免視覺驗收
+
+環境判定：base 為專案預設分支且 repo 有 preview 部署慣例時，先確認 preview env 是否就緒（例如 PR 需要特定 label 才部署）。**未就緒不要硬跑**——改問使用者要「等 preview 好了再驗」還是「先用 local 驗」。
+
+### 5.5c 執行與回填
+
+使用者選 1 → 用 Skill tool 委派：
+
+```
+Skill({ skill: "pr-evidence-comment" })
+```
+
+該 skill 跑完（截圖已上傳、`gh pr view` 驗證過 `user-attachments` 數量相符）後回到本步驟：
+
+- 把逐項 PASS/FAIL 結論回填 PR description 的 Test plan（勾選已驗項目）
+- FAIL 項目**不可**當成「已驗收」帶過——列出來並回到修正流程
+- 驗收結論同時回貼 PR comment（由該 skill 完成），對話裡只做摘要
+- 這次回填**不必重跑 Step 5 的 evidence-gate**：證據就是剛產生的截圖與 comment 連結，回填時直接引用；但 Test plan 只能寫實際驗過的項目，未驗的維持未勾選
+
+使用者選 2 或 3 → 依選項寫回 Test plan／說明，不呼叫該 skill。
+
 ## Step 6: 確認結果
 
 1. 輸出 PR URL
 2. 確認 PR description 已更新
-3. 如果有相關的其他 PR（如 feature → develop、develop → master），檢查是否需要同步更新
+3. 回報 Step 5.5 的結果：已截圖驗收（附 comment 連結）／已列清單待人工驗／判定免驗（附理由）／無視覺面
+4. 如果有相關的其他 PR（如 feature → develop、develop → master），檢查是否需要同步更新
 
 ### 使用方式
 

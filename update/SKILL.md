@@ -160,6 +160,6 @@ Step 4 完成後，對「知識寫入 Manifest」做最終驗證 —— 不依�
 
 檢查 `$ARGUMENTS` 是否包含其他 skill 名稱（如 `/pr`）。若有，`/update` 所有步驟（含使用者確認）完成後才用 Skill tool 觸發（傳入該 skill 後面的參數），不會中途跳轉。
 
-串接 `/pr` 時可跳過其 Step 2（Quick Review）——已由本 skill Step 2 的審查 agent 做過更深度審查；其餘步驟正常執行。觸發時在 prompt 前加註 `[PIPELINE: from /update]` 並列出已完成、可跳過的步驟。
+串接 `/pr` 時可跳過其 Step 2（Quick Review）——已由本 skill Step 2 的審查 agent 做過更深度審查；其餘步驟正常執行。觸發時在 prompt 前加註 `[PIPELINE: from /update]` 並列出已完成、可跳過的步驟，並註明「視覺面未判定」（本 skill 不做該判定，由 `/pr` Step 5.5 自行補判，勿因跳過 Step 2 而連帶略過）。
 
 用法：`/update /pr`（先更新知識庫，再 commit + push + 建立/更新 PR）、`/update /pr 7238`（更新 PR #7238）。

@@ -50,6 +50,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
 /plan-run <plan.md>        # 依 plan DAG 由狀態機推進實作（可與 /goal 複合）
 /figma-verify              # Figma vs local 對齊表 + ship gate
+/pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
 /triage                    # 基於消融數據退役/復原 learned skills
 /learn-eval-deep <skill>   # 單一 learned skill 三系統深度品質驗證
 ```
@@ -72,6 +73,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
 | [`/plan-run`](#plan-run--plan-dag-推進器狀態機-by-code) | 依 plan.md DAG 推進實作，Python 狀態機控制順序；可與 `/goal` 複合 |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
+| [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
@@ -94,6 +96,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 2c 自動檢查已完成的 plan 並歸檔至 `plans/completed/`
 - 自動偵測是否已有 open PR，決定建立或更新
 - PR description 包含 Summary、Context、Changes、Test plan
+- **Step 5.5 截圖驗收 gate**：PR 建立/更新後依變更類型分類（UI 互動 → 截圖；純移除/重構 → 量測；API → 測試輸出），需要時用 AskUserQuestion 問使用者要不要現在跑 `/pr-evidence-comment`，跑完把逐項 PASS/FAIL 回填 Test plan。從 `/update` 串接跳過 Step 2 時，此判定不隨之跳過
 
 </details>
 
@@ -454,6 +457,31 @@ UI / 文案 PR mark ready-for-review、merge、production deploy 之前的最後
 
 </details>
 
+### `/pr-evidence-comment` — headed 驗收 → 截圖 → PR comment 附圖
+
+把一次 headed 驗收變成 PR 上 reviewer 打得開的證據。`.verification/` 不進版控，所以 **PR comment 的 `user-attachments` 是截圖唯一的持久化與共享管道**——上傳不是加分項，是流程成立的必要條件。
+
+<details>
+<summary>Features</summary>
+
+- **Step 0 先分類**：移除類變更拍不出來（截圖只能顯示「看起來正常」，證不了「東西真的不在了」），改用量測（grep 殘留、bundle diff、目錄不存在）；混合型則截圖 + 量測都要
+- **Step 1 先列清單再開瀏覽器**：`B*` 未登入態、`C*` 登入態，一個編號一個可判 PASS/FAIL 的斷言
+- **Step 2 headed 驗收**：附 Radix Tabs 不觸發、無 role 巢狀 div、`.env.local` 帶引號三種已知卡點的解法；範圍外 error 如實記錄但不列 FAIL
+- **Step 2.5 主對話目檢抽驗**：截圖會以使用者本人身分公開發文，發文前主模型必須實際 Read 幾張 PNG（每個編號段各一張 + 所有 FAIL/WARN），檢查拍對斷言、無 email/token 外流、編號對得上
+- **Step 4 上傳（核心）**：`gh` CLI 與 GitHub REST API 都不支援 comment 附圖，agent-browser 內建 Chromium 會被 Google Workspace SSO 擋，外部圖床有曝光風險——只有 **stock Chrome + 獨立 `--user-data-dir` + CDP 9222** 走得通（Chrome 136+ 禁止對預設 profile 開 CDP）
+- **Step 5 驗證落地**：`gh pr view --json comments` grep `user-attachments` 數量須等於檔案數，不用「沒有報錯」當成功
+
+**何時用：**
+
+| 情境 | Skill |
+|---|---|
+| PR 的 UI 變更要留下 reviewer 打得開的驗收證據 | `/pr-evidence-comment` |
+| preview env 驗收結果要回貼 PR | `/pr-evidence-comment` |
+| 想確認「有沒有照設計稿做」 | `/figma-verify`（比規格，不是比 PR 行為） |
+| 純移除／重構、API 正確性 | skip；改用量測或測試輸出 |
+
+</details>
+
 <details>
 <summary>Quality Management</summary>
 
@@ -552,6 +580,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr
 ├─ 依既有 plan 推進 ─→ /plan-run <plan.md>
 ├─ UI PR ship 前對 Figma → /figma-verify
+├─ PR 驗收要留證據附圖 → /pr-evidence-comment
 ├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop
 ├─ UI bug 要 verify→fix 迴圈 → /verify-fix-loop <目標>
 ├─ Learned skills 要整理 → /curation
@@ -578,6 +607,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ```
 
 **適合：** 程式碼寫好、測試通過、準備交給 reviewer
+**注意：** 有 UI 視覺面時，Step 5.5 會用 AskUserQuestion 問是否現在跑 `/pr-evidence-comment` 做截圖驗收
 
 ### `/update`
 

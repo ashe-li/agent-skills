@@ -31,7 +31,7 @@ Learned Skills 掃描結果：
 - 評分格式分布：表格 XX / 單行 XX / 無 XX
 ```
 
-把每個有問題的檔案列成一份編號清單（檔案路徑、問題類型、預期修正動作），作為 Step 4 逐項修正與驗證的追蹤基準；逐項修完就在清單標記狀態。**分母是掃描出的檔案數，不是 task 數**——`TaskCreate` 在預設模型上不存在（見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)），不可拿它當追蹤基準。session 若有 Task 工具，可另外用 `TaskCreate` 鏡射這份清單。
+把每個有問題的檔案列成一份編號清單（檔案路徑、問題類型、預期修正動作），作為 Step 4 逐項修正與驗證的追蹤基準；逐項修完就在清單標記狀態。**分母是這份清單的長度（有問題的檔案數），不是掃描總數、也不是 task 數**——乾淨的檔案不進清單，拿掃描總數當分母會讓完成率永遠到不了 100%；而 `TaskCreate` 在預設模型上不存在（見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)），拿 task 數當分母在無工具環境會直接歸零。清單為空（掃描全乾淨）→ 直接進 Step 5 輸出報告，不需要 Step 4。session 若有 Task 工具，可另外用 `TaskCreate` 鏡射這份清單。
 
 ## Step 2: 分類問題
 
@@ -87,13 +87,13 @@ Learned Skills 掃描結果：
 
 **修正後驗證：**
 
-每個修正動作執行後，立即執行確定性驗證並更新對應 task 狀態：
+每個修正動作執行後，立即執行確定性驗證並更新該檔案在清單上的狀態：
 
 - `fmt-missing-frontmatter` 修正後：`grep -c "^---" <file>` 確認 ≥ 2（開頭與結尾各一個 `---`）
 - `fmt-incomplete-frontmatter` 修正後：`grep -E "^(name|description|user-invocable|origin):" <file>` 確認 4 個欄位全部存在
 - `fmt-score-inconsistent` 修正後：`grep -c "| specificity |" <file>` 確認 ≥ 1（表格列存在）
 
-驗證通過 → 標記 task 完成；驗證失敗 → task 保留開放狀態，不可視為完成。
+驗證通過 → 在清單標記該項完成；驗證失敗 → 該項保留開放狀態，不可視為完成。（session 有 Task 工具時，**先更新清單再鏡射 `TaskUpdate`**——清單是權威狀態，Task 呼叫失敗不影響判定。）
 
 ## Step 5: 輸出報告
 

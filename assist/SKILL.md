@@ -122,4 +122,4 @@ Agent(subagent_type="general-purpose")
 - 變更的檔案
 - 未解決的問題與建議下一步
 
-完成狀態的來源是 Step 0 那份清單（或啟用工具時的 `TaskList`），**不需另建 manifest 表格或完成率計算**。
+**完成狀態的權威來源是 Step 0 那份清單**；`TaskList` 只是啟用工具時的鏡射，不是判定依據（Task 呼叫失敗或工具不存在都不該影響完成判定）。**不需另建 manifest 表格或完成率計算**。

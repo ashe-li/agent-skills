@@ -29,11 +29,13 @@ ls plans/active/*.md 2>/dev/null
 ## Step 2：讀取 Plan 內容
 
 讀取目標 plan 檔案，確認：
-- 是否有 `## Phase` 或 `## Step` 段落（實作步驟）
+- 是否有實作步驟段落。**canonical 格式**（`/design` 產出、`plan_runner.py` 解析）的 step 是 `- [ ] **S<phase>.<num>** — <title>` 的 S-code 條目，phase 是**任何 `###` 標頭**（parser 就是 `^###\s+(.+)$`，慣例寫 `### Phase N — <title>`，冒號或破折號都可以）；**舊 plan 另有** `## Phase X` / `### Step X.Y` 標頭式寫法，兩種都要認
 - 是否有 `## 驗證` 或 `## Verification` 段落
 - 是否有 `## Industry & Standards Reference` 段落
 
-列出 plan 裡所有 `## Phase X` / `### Step X.Y` 作為追蹤清單，逐項標記完成狀態。**完成率的分母是 plan 內的 Phase/Step 數**，不是 task 數——`TaskCreate` 在預設模型上不存在（見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)），拿 task 數當分母會在無工具環境直接歸零。session 若有 Task 工具，可另外用 `TaskCreate` 鏡射這份清單。
+列出 plan 裡所有 step 作為追蹤清單，逐項標記完成狀態。**先按 canonical S-code 格式抓**（`- [ ] **S1.1** — <title>`，phase 為其上方最近的 `###` 標頭）；抓不到再退回舊的標頭式格式（`## Phase X` / `### Step X.Y`）。**兩種都抓到空清單就停下來問使用者，不要當作「0 個 step」繼續**——空清單會讓 Step 3 的完成率失去意義。
+
+**完成率的分母是這份清單的長度**（即 plan 內實際的 step 數），不是 task 數——`TaskCreate` 在預設模型上不存在（見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)），拿 task 數當分母會在無工具環境直接歸零。session 若有 Task 工具，可另外用 `TaskCreate` 鏡射這份清單。
 
 ---
 

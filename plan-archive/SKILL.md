@@ -33,7 +33,7 @@ ls plans/active/*.md 2>/dev/null
 - 是否有 `## 驗證` 或 `## Verification` 段落
 - 是否有 `## Industry & Standards Reference` 段落
 
-用 TaskCreate 為每個 `## Phase X` / `### Step X.Y` 建一個 task 追蹤完成狀態，取代手刻表格；task 總數即為 Step 3 完成率的分母。
+列出 plan 裡所有 `## Phase X` / `### Step X.Y` 作為追蹤清單，逐項標記完成狀態。**完成率的分母是 plan 內的 Phase/Step 數**，不是 task 數——`TaskCreate` 在預設模型上不存在（見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)），拿 task 數當分母會在無工具環境直接歸零。session 若有 Task 工具，可另外用 `TaskCreate` 鏡射這份清單。
 
 ---
 
@@ -45,7 +45,7 @@ ls plans/active/*.md 2>/dev/null
 **狀態：✅ 完成（YYYY-MM-DD）**
 ```
 
-再追加或更新 `## 驗證結果` 段落，逐條比對 Step 2 建立的 task：
+再追加或更新 `## 驗證結果` 段落，逐條比對 Step 2 建立的清單：
 
 | # | Phase/Step | 預期結果 | 實際結果 | 狀態 |
 |---|-----------|---------|---------|------|

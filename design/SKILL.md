@@ -10,15 +10,17 @@ redundancy-peers: [assist]
 
 接收功能需求，自動盤點可用資源（agents/skills），透過 Plan agent 建立完整實作計畫並輸出至 plans/active/<slug>.md。**不會自動執行實作，必須等使用者確認。**
 
-## Step 0: 任務追蹤（延後至 Step 6 批次詢問，不在此打斷）
+## Step 0: 任務追蹤（預設文字清單，不打斷）
 
-**規劃階段（Step 1–4）不為 task tracking 單獨發 AskUserQuestion**——是否啟用併入 Step 6 的執行模式批次詢問（單次 AskUserQuestion 最多可帶 4 題，見該節）。例外：使用者已在對話中明示啟用 → 逕行啟用，於每個 Step 開始前 TaskCreate 子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；未啟用則跳過所有 Task 工具呼叫。
+**追蹤預設不依賴 Task 工具。** `TaskCreate` / `TaskUpdate` / `TaskList` 在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上**預設不存在**（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。預設做法：在回覆內維護編號 Step 清單並逐項標記狀態——精度與工具相同，差別只在沒有 UI 面板。
+
+**規劃階段（Step 1–4）不為 task tracking 單獨發 AskUserQuestion。** 且 **session 沒有 Task 工具時，Step 6 批次詢問的「Task 追蹤」題直接剔除**——不要問一個當下開不了的開關（env var 要重啟 session 才生效）。只有 session 確實有 Task 工具（使用者設了 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` 或 `--allowedTools`）時才併入該批次詢問。使用者已明示啟用 → 逕行以 TaskCreate 建子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；**呼叫失敗即 continue，不中止流程**。
 
 > **為什麼延後**：HITL 等待是 /design→實作全程 wall-clock 的最大成本。2026-07-16 PDT-10398 session 實測：3.5h 全程中 ~85–100 min 在等使用者回覆，其中 ~40 min 來自 4 個「分散在流程各處、各自 block」的 AskUserQuestion（Task 追蹤、Worktree、推進方式、編隊授權）。這四題彼此獨立、答案都在「怎麼執行」這一類，合併成 plan 寫入後的一次詢問即可——分散問則每一題都可能撞上使用者離開的空窗。
 
 ## Step 1: 盤點可用資源
 
-> **若啟用 task tracking：** TaskCreate(subject: "盤點可用資源", activeForm: "掃描 agent/skill 中...") → 完成後 TaskUpdate(status: "completed")
+> **追蹤：** 於回覆的 Step 清單把「盤點可用資源」標為進行中，完成後標為完成。（session 有 Task 工具且已啟用時改用 `TaskCreate(subject: "盤點可用資源", activeForm: "掃描 agent/skill 中...")` → `TaskUpdate(status: "completed")`）
 
 盤點 Claude Code 內建資源作為規劃參考：
 
@@ -64,7 +66,7 @@ haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（�
 
 ## Step 3: Plan agent — 建立實作計畫
 
-> **若啟用 task tracking：** TaskCreate(subject: "Plan agent 建立實作計畫", activeForm: "Plan agent 規劃中...") → 完成後 TaskUpdate(status: "completed")
+> **追蹤：** 於回覆的 Step 清單把「Plan agent 建立實作計畫」標為進行中，完成後標為完成。（session 有 Task 工具且已啟用時改用 `TaskCreate(subject: "Plan agent 建立實作計畫", activeForm: "Plan agent 規劃中...")` → `TaskUpdate(status: "completed")`）
 
 使用內建 **Plan** agent 建立詳細的實作計畫。
 
@@ -108,7 +110,7 @@ Agent(subagent_type="Plan")
 
 ## Step 4: 品質檢查與 Plan Mode 呈現
 
-> **若啟用 task tracking：** TaskCreate(subject: "品質檢查與 Plan Mode 呈現", activeForm: "品質檢查與輸出中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID]) → 完成後 TaskUpdate(status: "completed")
+> **追蹤：** 於回覆的 Step 清單把「品質檢查與 Plan Mode 呈現」標為進行中（前置 = Step 3），完成後標為完成。（session 有 Task 工具且已啟用時改用 `TaskCreate(subject: "品質檢查與 Plan Mode 呈現", activeForm: "品質檢查與輸出中...", addBlockedBy: [Step 3 TaskCreate 回傳的 task ID])` → `TaskUpdate(status: "completed")`）
 
 ### Step 4a: 品質審查（subagent 隔離）
 
@@ -248,7 +250,7 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 
 | 題目 | 選項（第一選項 = Recommended） | 何時從批次剔除（答案已知就不問） |
 |---|---|---|
-| Task 追蹤 | 啟用 (Recommended)（附 token 預估）/ 不啟用 | 使用者已明示偏好；低複雜度單一 fix 逕行不問 |
+| Task 追蹤（**僅當 session 有 Task 工具**） | 啟用 (Recommended)（附 token 預估）/ 不啟用 | **session 沒有 Task 工具即剔除**（預設模型即如此，見 `rules/task-tracking-availability.md`，改用文字清單）；使用者已明示偏好；低複雜度單一 fix 逕行不問 |
 | Worktree | 是，建 sibling worktree (Recommended) / 否，當前目錄 | `rules/worktree-prompt.md` 跳過條件：已表態、已在 worktree、小型任務 |
 | 推進方式 | 依複雜度推薦（下表） | 使用者已在 `$ARGUMENTS` 或對話中明示偏好 |
 | 編隊授權 | 啟用並行 (Recommended)（附 token 預估）/ 單路序列 | plan 的 Dependencies DAG 無可並行分支；或使用者已表態 |
@@ -274,7 +276,7 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 
 **選項文案（放進批次詢問的「推進方式」題）：**
 
-> 1a. **`/plan-run` 狀態機（手動）** — Python 狀態機決定 DAG 推進順序、TaskCreate `addBlockedBy` 自動串接、session 中斷可續推、不會跳步；每個 step 完成後手動 enter 繼續
+> 1a. **`/plan-run` 狀態機（手動）** — Python 狀態機決定 DAG 推進順序、session 中斷可續推、不會跳步（依賴關係由狀態機本身維護，Task 工具存在時額外串接 `addBlockedBy`）；每個 step 完成後手動 enter 繼續
 > 1b. **`/plan-run` + `/goal` 自動推進**（強烈推薦於高複雜度）— 同 1a 但用 Claude Code 內建 `/goal` 包外層，狀態機 + evaluator 自動跑到 `all_done=true` 或 N turns；**失敗仍走 Step 3d HITL gate**（不會自動跳過 fail）
 > 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
 > 3. **暫不開始** — 結束 `/design`，由使用者另行決定時機

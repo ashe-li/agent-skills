@@ -31,7 +31,7 @@ Learned Skills 掃描結果：
 - 評分格式分布：表格 XX / 單行 XX / 無 XX
 ```
 
-用 TaskCreate 為每個有問題的檔案建一個 task（含問題類型與預期修正動作），作為 Step 4 逐項修正與驗證的追蹤基準。
+把每個有問題的檔案列成一份編號清單（檔案路徑、問題類型、預期修正動作），作為 Step 4 逐項修正與驗證的追蹤基準；逐項修完就在清單標記狀態。**分母是掃描出的檔案數，不是 task 數**——`TaskCreate` 在預設模型上不存在（見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)），不可拿它當追蹤基準。session 若有 Task 工具，可另外用 `TaskCreate` 鏡射這份清單。
 
 ## Step 2: 分類問題
 

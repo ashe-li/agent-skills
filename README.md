@@ -139,7 +139,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - 中等以上複雜度：Plan agent 輸出架構決策（替代方案、相容性、可擴展性、效能/安全影響、文件影響評估）
 - 品質審查使用 `general-purpose` subagent 隔離執行（已禁用的 `architect` agent 不再使用，見 [`rules/refactor/remove-architect-pipeline.md`](rules/refactor/remove-architect-pipeline.md)），含社群共識與反面意見驗證維度，問題可回饋修正（最多 2 次迭代）
 - plan 含 Community Consensus & Dissenting Views 表格和品質保障步驟
-- Step 0 條件式 HITL：評估複雜度後詢問是否啟用 TaskCreate/TaskUpdate
+- Step 0 追蹤預設用回覆內的文字 Step 清單；只有 session 確實有 Task 工具時才詢問是否改用 TaskCreate/TaskUpdate（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)）
 - Step 4b 用 `EnterPlanMode` 呈現計畫（Claude Code 2.1.77+ accept 時自動觸發 session auto-naming），使用者確認後才寫入檔案
 - Step 6 可選進入 worktree 隔離開發
 - Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run` 狀態機（手動）/ `/plan-run` + `/goal` 自動推進
@@ -404,7 +404,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 ### `/plan-run` — Plan DAG 推進器（狀態機 by code）
 
-依照 `plan.md` 的 Dependencies DAG，由 Python 狀態機決定下一步該執行哪些 step、TaskCreate 該如何串接，避免 LLM 自主推進造成漏步、亂序、`addBlockedBy` 串錯。
+依照 `plan.md` 的 Dependencies DAG，由 Python 狀態機決定下一步該執行哪些 step，避免 LLM 自主推進造成漏步、亂序。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）；session 有 Task 工具時，狀態機額外指定 `TaskCreate` 該如何串接，避免 `addBlockedBy` 串錯。
 
 <details>
 <summary>Features</summary>
@@ -412,7 +412,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - **DAG 推進邏輯在 Python**：`scripts/plan_runner.py` 控制 step 順序、依賴檢查、status transition；LLM 不負責「下一步是什麼」的判斷
 - **LLM 只負責執行**：把 transition 回傳的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
-- **TaskCreate 受控**：state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入；避免串錯依賴
+- **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
 - **Token 策略三層**：
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
@@ -424,7 +424,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 | 情境 | Skill |
 |---|---|
 | 多 step 實作計畫需依序推進、避免漏步亂序 | `/plan-run` |
-| 單次 step 執行需人工判斷順序 | LLM 直接呼叫 TaskCreate / agent |
+| 單次 step 執行需人工判斷順序 | LLM 直接派 agent（不需 plan state） |
 | Step 內部 bug 修復迴圈 | `/verify-fix-loop` |
 
 </details>
@@ -562,7 +562,8 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 |------|------|
 | [`rules/security-guidance/`](rules/security-guidance/README.md) | `security-guidance` plugin 的擴充檔（guidance + patterns）與省 token 設定記錄；symlink 到 `~/.claude/` 全域生效 |
 | `rules/worktree-prompt.md` / `rules/plan-management.md` | 載入為全域 CLAUDE.md 指令 |
-| [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附 token 預估，比照 Task Tracking），含編隊守則與資源紀律。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
+| [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md) | `TodoWrite` / `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` 自 Claude Code v2.1.233 起在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上**預設不註冊**：官方立場、三條有效 opt-in 途徑、以及「SKILL.md frontmatter 的 `allowed-tools` 不構成 opt-in」這個實測結論；含本 repo 撰寫守則（主線不得依賴 Task 工具、不得拿 task 數當完成率分母）與可觀察的驗證指令 |
+| [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附 token 預估，比照 Task Tracking），含編隊守則與資源紀律（HITL 附 token 預估的做法比照 Task Tracking，但本身不依賴 Task 工具）。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
 | [`rules/refactor/remove-architect-pipeline.md`](rules/refactor/remove-architect-pipeline.md) | 禁用規則：不可使用已退化的 `architect` agent，`/design` 一律改用內建 `Plan` agent |
 
 ---

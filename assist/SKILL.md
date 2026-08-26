@@ -12,9 +12,11 @@ redundancy-peers: [design]
 
 > 與 `/design` 的分工：`/assist` 是萬用路由入口，涵蓋審查/文件/研究/build 修復等各類情境；`/design` 專注在完整實作計畫的產出。不確定用哪個時先選 `/assist`——判定為需要完整規劃時會委派 `/design`，而非手動重造一套規劃流程。
 
-## Step 0: 任務追蹤（條件式 HITL）
+## Step 0: 任務追蹤（預設文字清單）
 
-依 CLAUDE.md 全域規則詢問是否啟用 task tracking（複雜任務用 AskUserQuestion 附 token 預估，簡單任務不問逕行）。啟用後於每個 Step 開始前 TaskCreate 子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；不啟用則跳過所有 Task 工具呼叫。
+**預設在回覆內維護編號 Step 清單並逐項標記狀態**，不依賴 Task 工具——`TaskCreate` / `TaskUpdate` / `TaskList` 在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不存在（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。
+
+**session 沒有 Task 工具就不要發這題 AskUserQuestion**——問一個當下開不了的開關只是多一輪 HITL（env var 要重啟 session 才生效）。只有 session 確實有 Task 工具時，才依 CLAUDE.md 全域規則詢問是否改用工具追蹤（複雜任務附 token 預估，簡單任務逕行不問）；啟用後於每個 Step 開始前 TaskCreate 子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed，**呼叫失敗即 continue，不中止 pipeline**。
 
 ## Step 1: 情境分析
 
@@ -105,7 +107,7 @@ Agent(subagent_type="general-purpose")
 
 ## Step 4: 執行
 
-> 若啟用 task tracking：每個資源執行前 TaskCreate 子任務（含 activeForm，保留回傳的 task ID），執行後 TaskUpdate 為 completed；有依賴順序用 addBlockedBy 標記前序 task ID。
+> **追蹤：** 每個資源執行前把它在回覆的 Step 清單標為進行中，執行後標為完成，有依賴順序就在清單註明前序項目。（session 有 Task 工具且已啟用時改用 `TaskCreate`（含 activeForm，保留回傳的 task ID）→ `TaskUpdate(completed)`，依賴用 `addBlockedBy` 標記前序 task ID。）
 
 依序執行選定的 agent/skill。每個完成後，把「做了什麼、關鍵發現、修改的檔案、待解問題」整理成一段交給下一步——交接內容須自包含（下一個執行者看不到上一步的完整過程），不需要固定的必填欄位模板。
 
@@ -120,4 +122,4 @@ Agent(subagent_type="general-purpose")
 - 變更的檔案
 - 未解決的問題與建議下一步
 
-若啟用 task tracking，TaskList 本身即為完成狀態的來源，不需另建 manifest 表格或完成率計算。
+**完成狀態的權威來源是 Step 0 那份清單**；`TaskList` 只是啟用工具時的鏡射，不是判定依據（Task 呼叫失敗或工具不存在都不該影響完成判定）。**不需另建 manifest 表格或完成率計算**。

@@ -24,7 +24,7 @@ teammate 的 idle 通知與 mailbox 訊息（SendMessage）走不同管道，送
 
 **主對話側**：
 
-- 收到 idle 通知但沒有對應結果回報時，先查客觀證據（worktree `git status`/`git log`、預期輸出檔案是否已產生、`TaskList`/`TaskGet` 狀態），不要只憑「收到 idle 通知」就判斷 teammate 已停擺或已完成。
+- 收到 idle 通知但沒有對應結果回報時，先查客觀證據（worktree `git status`/`git log`、預期輸出檔案是否已產生；session 有 Task 工具時另可看 `TaskList`/`TaskGet` 狀態——預設模型沒有這些工具，見 [`task-tracking-availability.md`](task-tracking-availability.md)，此時 git 與輸出檔就是唯一證據來源），不要只憑「收到 idle 通知」就判斷 teammate 已停擺或已完成。
 - 剛派工後緊接著收到的 idle 通知，高機率是派工訊息與上一輪通知交錯（teammate 才剛接手、尚未開始執行），先等下一輪訊號再判斷，不要立刻當異常處理。
 - 催動訊息務必冪等：附上「若已完成/已回報請忽略本訊息，直接告知先前回報的時間點或內容摘要」，避免對方重做已完成的工作。
 

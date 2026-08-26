@@ -1,6 +1,6 @@
 ---
 name: plan-run
-description: 依 plan.md 的 Dependencies DAG 推進實作 — Python 狀態機決定下一步（非 LLM 判斷），自動串接 TaskCreate/TaskUpdate。觸發：使用者要求依 plan 推進、要求 task tracking 對齊 DAG、或抱怨 LLM 跳步漏步。
+description: 依 plan.md 的 Dependencies DAG 推進實作 — Python 狀態機決定下一步（非 LLM 判斷），推進不依賴 Task 工具，有工具時才額外串接 TaskCreate/TaskUpdate。觸發：使用者要求依 plan 推進、要求 task tracking 對齊 DAG、或抱怨 LLM 跳步漏步。
 allowed-tools: Bash, Read, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: <plans/active/xxx.md 路徑>
 redundancy-peers: [design]
@@ -14,7 +14,7 @@ redundancy-peers: [design]
 
 - **DAG 推進邏輯在 Python**：`scripts/plan_runner.py` 控制 step 順序、依賴檢查、status transition；LLM 不負責「下一步是什麼」的判斷，只負責把 transition 回傳的 step 拿來執行（呼叫 agent、跑命令），完成後回報 `complete` / `fail`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + `previously_reported_ready`（給 delta 模式用）
-- **TaskCreate 受控**：state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入；**全程 best-effort** — TaskCreate/TaskUpdate 允許失敗，失敗即 continue，不中止 DAG 推進（下文不再重述）
+- **Task 工具全程 best-effort，且預設不存在**：`TaskCreate` / `TaskUpdate` / `TaskList` 在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不註冊（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。**這不影響 `/plan-run`** —— 推進順序、依賴檢查、續推能力全在 state file，`task_id` 只用於 audit 與 UI 面板。工具存在時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入；工具不存在或呼叫失敗即 continue，不中止 DAG 推進（下文不再重述）。狀態可讀性由 `plan_runner.py status` 提供，不靠 `TaskList`
 - **Output 三層 token 策略**：
   - `next` — full bootstrap（~2.8KB），列出全部 ready 完整模板；只在 session 開始 / 失去 context 時呼叫一次，之後改讀 delta output（下文不再重述）
   - `complete / fail / skip` — delta 模式（150~2KB 視解鎖數而定），**只列「本次新解鎖」的完整模板**，先前已展示過的 ready 只列 ID
@@ -60,9 +60,9 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 ## Step 2: 建立父 task
 
-呼叫 `TaskCreate(subject="<plan title>", activeForm="<plan title> 推進中")`，成功後把 task_id 寫回 state（給 audit + child task 的 `addBlockedBy` 用）：`plan_runner.py set-parent "$ARGUMENTS" --task-id=<parent_task_id>`。
+**session 有 Task 工具時**才做這步：呼叫 `TaskCreate(subject="<plan title>", activeForm="<plan title> 推進中")`，成功後把 task_id 寫回 state（給 audit + child task 的 `addBlockedBy` 用）：`plan_runner.py set-parent "$ARGUMENTS" --task-id=<parent_task_id>`。
 
-若 `TaskCreate` 不可用（tool deferred、quota 滿、user 沒開 task tracking），記 warning 直接進 Step 3 —— state machine 不依賴 task_id，整個推進流程不會中斷。
+**`TaskCreate` 不存在（預設模型即如此）或呼叫失敗**（tool deferred、quota 滿）：不要停下來問使用者、也不要嘗試改設定，記一則 warning 直接進 Step 3 —— state machine 不依賴 task_id，整個推進流程不會中斷，只是少了 UI 面板。
 
 ## Step 3: 推進迴圈
 
@@ -74,19 +74,20 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 ### 3b. 對每個 ready step 執行
 
-1. **Reconcile：先檢查 task list 是否已有對應 pending hint task**（先前 step 的 `## Next hints` 可能已 pre-create）
+1. **Reconcile（僅在有 Task 工具時）：先檢查 task list 是否已有對應 pending hint task**（先前 step 的 `## Next hints` 可能已 pre-create）
    - 有 → `TaskUpdate(<hint_task_id>, in_progress)`，不要 TaskCreate 重複
    - 沒 → `TaskCreate`（照搬模板裡的 `task_create.subject / activeForm / addBlockedBy`）→ 拿到 task_id
-2. **回寫 task_id**：`plan_runner.py start "$ARGUMENTS" <step_id> --task-id=<task_id>`
-3. **讀 `start` 的 `## Next hints` 區塊（如有）→ batch TaskCreate 列出的 next step 為 pending**（addBlockedBy = 當前 task_id），讓 user 看到「已完成 N + 進行中 1 + 下一步 hint」的 sliding window
+   - **無 Task 工具 → 整個 step 1 跳過**，改在回覆內把該 step 標為進行中
+2. **回寫 task_id**：`plan_runner.py start "$ARGUMENTS" <step_id> --task-id=<task_id>`；無 task_id 時省略 `--task-id`（`start` 照常轉態）
+3. **讀 `start` 的 `## Next hints` 區塊（如有）→ 有 Task 工具則 batch TaskCreate 列出的 next step 為 pending**（addBlockedBy = 當前 task_id），讓 user 看到「已完成 N + 進行中 1 + 下一步 hint」的 sliding window；無工具時把同樣的 sliding window 寫進回覆文字
 4. **執行實際工作**：依 step 的 `agent` / `command` / `skill` 欄位
 5. **回報結果**：
-   - 成功：`plan_runner.py complete "$ARGUMENTS" <step_id>` → output 會自動帶 `## Required sync` 內含 `TaskUpdate(<task_id>, completed)` 指令，跟著做
+   - 成功：`plan_runner.py complete "$ARGUMENTS" <step_id>` → **有 task_id 時** output 才會帶 `## Required sync`（內含 `TaskUpdate(<task_id>, completed)`），跟著做；沒有該區塊就是無工具模式，直接進下一步
    - 失敗：`plan_runner.py fail "$ARGUMENTS" <step_id> --reason="<msg>"` → 同上但 status=failed
 
 ### 3c. 讀 transition output 決定下一步
 
-每次 `complete / fail / skip` 的 output 依現況附帶對應區塊：`## Required sync`（有 task_id 時，含 `TaskUpdate(...)` 完整指令）、`## Newly unlocked (N)`（新解鎖 step 的完整 instruction 模板，**搭配 3b reconcile 規則**判斷 TaskCreate 或 TaskUpdate）、`## Still ready (M): <ids>`（僅列 ID，模板已給過）、`## In progress (N)`（僅列 ID + task_id）、`## Blocked (N)`（列出 blocking 原因）；全部空則顯示 `(no ready / in_progress / blocked steps)`。`start` 另可能含 `## Next hints`（下一個 pending step 的完整 instruction，3b step 3 用）。
+每次 `complete / fail / skip` 的 output 依現況附帶對應區塊：`## Required sync`（有 task_id 時，含 `TaskUpdate(...)` 完整指令）、`## Newly unlocked (N)`（新解鎖 step 的完整 instruction 模板；有 Task 工具時**搭配 3b reconcile 規則**判斷 TaskCreate 或 TaskUpdate，無工具則只當執行清單讀）、`## Still ready (M): <ids>`（僅列 ID，模板已給過）、`## In progress (N)`（僅列 ID + task_id）、`## Blocked (N)`（列出 blocking 原因）；全部空則顯示 `(no ready / in_progress / blocked steps)`。`start` 另可能含 `## Next hints`（下一個 pending step 的完整 instruction，3b step 3 用）。
 
 讀到 `Newly unlocked` 套 3b reconcile rule 進入下個 step；`Still ready` 只是提醒（instructions 在更早的 output 裡）。
 
@@ -120,7 +121,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 `summary.all_done == true` 後：
 
 1. 比對 plan 的 Acceptance Criteria，逐項勾選
-2. `TaskUpdate(<parent_task_id>, status=completed)`
+2. 有 parent task_id 時 `TaskUpdate(<parent_task_id>, status=completed)`；無則跳過
 3. 提示使用者執行 `/plan-archive` 歸檔 plan 至 `plans/completed/`
 
 ## DAG 視覺化（debug 用）
@@ -174,7 +175,7 @@ state machine 依下列規則解析 `plan.md`：
 | Status | 意義 |
 |--------|------|
 | `pending` | 等待中（deps 未滿足或未啟動） |
-| `in_progress` | 執行中（已 TaskCreate 並回寫 task_id） |
+| `in_progress` | 執行中（有 Task 工具時已 TaskCreate 並回寫 task_id；無工具則 task_id 為 null） |
 | `completed` | 完成 |
 | `failed` | 失敗（需使用者決定後續） |
 | `blocked` | 因 dep 失敗而 block；dep reset 後自動回 pending |
@@ -187,4 +188,4 @@ state transition 由 Python 強制驗證，不允許 `completed → pending` 等
 - **狀態機不執行實際工作**：只決定 DAG 順序；agent 呼叫、build/test、檔案修改皆由 LLM 完成
 - **失敗不自動重試**：避免吃 token，必經 user 決定
 - **並行 step 由 LLM 自行決定是否真的並行**：state machine 只告訴你「這些 step 可以開始」
-- **task_id 完全由 LLM 提供**：state machine 不會自動生成；若 LLM 沒呼叫 TaskCreate，task_id 為 null（不影響 DAG 推進，僅 audit）
+- **task_id 完全由 LLM 提供**：state machine 不會自動生成；若 LLM 沒呼叫 TaskCreate（含工具根本不存在的預設情形），task_id 為 null（不影響 DAG 推進，僅 audit）

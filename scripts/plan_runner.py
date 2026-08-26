@@ -665,10 +665,12 @@ def _format_step_action_block(step: dict[str, Any]) -> list[str]:
     """Build the executable action sequence for one ready step."""
     lines: list[str] = []
     tc = step["task_create"]
-    lines.append(f"  1. TaskCreate(subject={tc['subject']!r}, "
+    lines.append(f"  1. (best-effort, skip if no Task tools) "
+                 f"TaskCreate(subject={tc['subject']!r}, "
                  f"activeForm={tc['activeForm']!r}, "
                  f"addBlockedBy={_format_addblocked(tc['addBlockedBy'])}) -> save task_id")
-    lines.append(f"  2. plan_runner.py start <plan> {step['id']} --task-id=<task_id>")
+    lines.append(f"  2. plan_runner.py start <plan> {step['id']}"
+                 f" [--task-id=<task_id> if step 1 ran]")
     sid = step["id"]
     if step.get("agent"):
         lines.append(f"  3. Agent(subagent_type={step['agent']!r}, prompt=<files + action below>)")
@@ -678,8 +680,10 @@ def _format_step_action_block(step: dict[str, Any]) -> list[str]:
         lines.append(f"  3. Apply skill {step['skill']}")
     else:
         lines.append(f"  3. (no agent/command/skill specified — manual execution per Action)")
-    lines.append(f"  4. ok: plan_runner.py complete <plan> {sid} + TaskUpdate(task_id, completed)")
-    lines.append(f"     err: plan_runner.py fail <plan> {sid} --reason=<msg> + TaskUpdate(task_id, failed)")
+    lines.append(f"  4. ok: plan_runner.py complete <plan> {sid}"
+                 f" (+ TaskUpdate(task_id, completed) if step 1 ran)")
+    lines.append(f"     err: plan_runner.py fail <plan> {sid} --reason=<msg>"
+                 f" (+ TaskUpdate(task_id, failed) if step 1 ran)")
     return lines
 
 

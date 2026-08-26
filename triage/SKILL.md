@@ -57,7 +57,7 @@ allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion
 當使用者提供消融數據（如 `full-analysis.json`）時：
 
 1. 讀取數據，篩選 delta < 0 的 skills，按 delta 絕對值排序
-2. 用 TaskCreate 為每個待退役 skill 建一個 task，並對每個執行 Step 2 的影響分析（grep 搜尋引用）：
+2. 把待退役 skill 列成清單（即下表，**表列本身就是追蹤基準與分母**），並對每個執行 Step 2 的影響分析（grep 搜尋引用）：
 
    | Skill | Delta | Tier | 依賴關係 |
    |-------|-------|------|---------|
@@ -65,7 +65,7 @@ allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion
    | skill-b.md | -0.10 | T2 | skill-c 引用 |
 
    有依賴關係的 skill 需先與使用者確認才可退役，不可批次自動退役；無依賴關係的可批次逐一確認後退役
-3. 逐一確認後退役，每次退役後更新對應 task 狀態
+3. 逐一確認後退役，每次退役後在表上標記該列狀態（session 若有 Task 工具可另用 `TaskCreate`/`TaskUpdate` 鏡射；預設模型沒有這些工具，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）
 
 ## Step 5: 退役後完整性驗證
 

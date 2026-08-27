@@ -20,6 +20,16 @@
 # agent-skills checkout never turns a Stop hook into a visible error.
 # `set -e` is deliberately NOT used, so a non-zero exit mid-script can't
 # be misread as this script's own intended failure exit.
+#
+# This matters most for a checkout that predates the `hook-stop`
+# subcommand: argparse rejects the unknown choice and exits 2, and exit 2
+# from a Stop hook is a *blocking* error — every turn of every session on
+# this machine would be blocked with an argparse usage dump fed back to
+# the model. Hence the `|| exit 0` below, which is a hard requirement and
+# not defensive garnish: it makes an old, a broken, or a mid-rebase
+# checkout degrade to "this hook does nothing" instead of to a
+# machine-wide outage. stderr is discarded for the same reason — an
+# unsupported checkout must be quiet, not noisy, on every single turn.
 
 AGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$HOME/Documents/agent-skills}"
 
@@ -33,4 +43,8 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
-exec python3 "$RUNNER" hook-stop
+# stdout is passed straight through (no shell variable round-trip, which
+# would mangle escape sequences inside the JSON reason string).
+python3 "$RUNNER" hook-stop 2>/dev/null || exit 0
+
+exit 0

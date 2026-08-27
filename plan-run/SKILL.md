@@ -8,14 +8,14 @@ redundancy-peers: [design]
 
 # /plan-run — Plan DAG 推進器（控制流在 Stop hook）
 
-依照 `plan.md` 的 Dependencies DAG 推進實作。**你不需要記得去查下一步是什麼**——hook 會告訴你。
+依照 `plan.md` 的 Dependencies DAG 推進實作。**你不需要記得主動去查進度**——hook 每輪會把下一步告訴你。
 
 ## 設計原則
 
 - **控制流在 Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要把下一步注入回來。LLM 不需要（也不應該）主動想起查狀態，只負責執行被指定的 step 並回報 `complete` / `fail`。對比「用文字請 LLM 自願呼叫腳本」：後者的第一層控制流仍在模型手上
 - **State 持久化 + pointer**：step 狀態存 `<plan-dir>/.plan-state/<slug>.state.json`；hook 靠 `~/.claude/plan-run/active/<hash(cwd)>.json` 這個 pointer 找到「這個 cwd 現在在推哪份 plan」。兩者都在檔案系統上，**新 session／compaction 之後照樣接得上**
 - **每 6 步一次 check-in**：harness 硬性規定連續 8 次 block 就強制結束（官方防呆，不可繞過）。hook 主動在第 6 步（或更早的 phase 邊界）停，讓停的那刻落在對使用者有意義的地方，而不是撞上限被截斷。每次注入結尾都印 `Auto-advance N/6`
-- **Task 工具 best-effort，且預設不存在**：`TaskCreate` / `TaskUpdate` / `TaskList` 在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不註冊（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。**推進順序、依賴檢查、續推能力全在 state file**，`task_id` 只用於 audit 與 UI 面板；工具不存在或呼叫失敗即 continue，不中止 DAG（下文不再重述）
+- **Task 追蹤工具 best-effort，且預設不存在**：frontmatter 列的那三個 Task 工具在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不註冊（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。**推進順序、依賴檢查、續推能力全在 state file**，`task_id` 只用於 audit 與 UI 面板；工具不存在或呼叫失敗即 continue，不中止 DAG（下文不再重述）
 - **Output 分層**：`next` 是 full bootstrap（~2.8KB，列出全部 ready 的完整模板）；`complete / fail / skip` 是 delta（只列本次新解鎖的完整模板，先前給過的只列 ID）；`index` 是 ~500 chars 的純 trace。全部預設 markdown，`--format=json` 給 tooling
 
 ## 前置：安裝 Stop hook（一次性）
@@ -49,7 +49,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。已存在 state → 先 `plan_runner.py status "$ARGUMENTS"` 看狀態再決定，要重來用 `init --force`。
 
-> 有 Task 工具時可額外建父 task：`TaskCreate(subject="<plan title>")` → `plan_runner.py set-parent "$ARGUMENTS" --task-id=<id>`。**沒有工具就跳過**，不要停下來問使用者、也不要改設定。
+> 有 Task 工具時可額外建一個父 task（subject 用 plan title），再 `plan_runner.py set-parent "$ARGUMENTS" --task-id=<id>` 寫回 state 供 audit。**沒有工具就跳過**，不要停下來問使用者、也不要改設定。
 
 ## Step 2: 執行 hook 指定的 step
 
@@ -62,7 +62,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
    err: ... fail <plan> <step_id> --reason="<msg>"
 ```
 
-`start` 印的絕對路徑可直接複製執行。有 Task 工具時：`start` 的 `## Next hints` 列出的 next step batch 建成 pending（`addBlockedBy` = 當前 task_id）給使用者一個 sliding window，已被 pre-create 的 hint task 改用 `TaskUpdate(..., in_progress)` 而非重複 `TaskCreate`。
+`start` 印的絕對路徑可直接複製執行。有 Task 工具時：`start` 的 `## Next hints` 列出的 next step 可批次建成 pending task（`addBlockedBy` = 當前 task_id），給使用者一個 sliding window；先前已被 pre-create 的 hint task 改標成 in_progress，不要重複建立。
 
 `complete / fail / skip` 的 output 依現況附帶 `## Newly unlocked (N)`（新解鎖的完整模板）、`## Still ready (M): <ids>`（只列 ID，模板已給過）、`## In progress`、`## Blocked`（含原因），有 task_id 時多一段 `## Required sync`。這些是補充，**推進本身不靠你讀完它們**——漏讀了 hook 下一輪還會再講一次。
 

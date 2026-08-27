@@ -1489,6 +1489,59 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("3 PASS / 2 INFO / 1 FAIL — 有項目未通過", out)
 
+    def _wrapper_with_default(self, body):
+        w = self.tmp_root / "plan-run-stop.sh"
+        w.write_text(body, encoding="utf-8")
+        return w
+
+    def test_wrapper_default_read_from_installed_file_not_constant(self):
+        """The probe must resolve the runner from the *installed* wrapper. A
+        hand edit that points the machine at an unmerged checkout otherwise
+        makes doctor answer about a file the hook will never run -- FAIL on a
+        working install, and PASS on a wrapper edited to point at junk."""
+        target = self.tmp_root / "elsewhere"
+        w = self._wrapper_with_default(
+            '#!/bin/bash\n'
+            f'AGENT_SKILLS_DIR="${{AGENT_SKILLS_DIR:-{target}}}"\n'
+        )
+        with mock.patch.object(pr, "WRAPPER_SCRIPT_PATH", w):
+            self.assertEqual(pr._wrapper_installed_default(), target)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("AGENT_SKILLS_DIR", None)
+                self.assertEqual(
+                    pr._doctor_wrapper_runner_path(),
+                    target / "scripts" / "plan_runner.py",
+                )
+
+    def test_wrapper_default_expands_home_token(self):
+        w = self._wrapper_with_default(
+            '#!/bin/bash\nAGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$HOME/Documents/x}"\n'
+        )
+        with mock.patch.object(pr, "WRAPPER_SCRIPT_PATH", w):
+            self.assertEqual(pr._wrapper_installed_default(), Path.home() / "Documents" / "x")
+
+    def test_wrapper_default_falls_back_when_missing_or_unparseable(self):
+        absent = self.tmp_root / "no-such-wrapper.sh"
+        with mock.patch.object(pr, "WRAPPER_SCRIPT_PATH", absent):
+            self.assertEqual(pr._wrapper_installed_default(), pr.WRAPPER_DEFAULT_SKILLS_DIR)
+        w = self._wrapper_with_default("#!/bin/bash\necho nothing to see here\n")
+        with mock.patch.object(pr, "WRAPPER_SCRIPT_PATH", w):
+            self.assertEqual(pr._wrapper_installed_default(), pr.WRAPPER_DEFAULT_SKILLS_DIR)
+
+    def test_env_var_still_overrides_wrapper_default(self):
+        """The wrapper prefers an exported AGENT_SKILLS_DIR over its own
+        default, so the probe must too -- otherwise the documented
+        `export`-based dev pointer stops being visible to doctor."""
+        w = self._wrapper_with_default(
+            '#!/bin/bash\nAGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-/from/file}"\n'
+        )
+        with mock.patch.object(pr, "WRAPPER_SCRIPT_PATH", w), \
+             mock.patch.dict(os.environ, {"AGENT_SKILLS_DIR": "/from/env"}):
+            self.assertEqual(
+                pr._doctor_wrapper_runner_path(),
+                Path("/from/env") / "scripts" / "plan_runner.py",
+            )
+
     def test_missing_plan_run_dir_is_info_not_fail(self):
         """S2.7: the directory is created on first attach, so its absence is
         the normal post-install state -- FAIL there is a false alarm."""

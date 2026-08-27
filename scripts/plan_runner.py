@@ -3192,9 +3192,16 @@ DOCTOR_PASS = "PASS"
 DOCTOR_INFO = "INFO"
 DOCTOR_FAIL = "FAIL"
 
-# The wrapper's own default for AGENT_SKILLS_DIR; kept in sync with
-# scripts/hooks/plan-run-stop.sh.
+# Fallback only. The authoritative default is the one written in the
+# *installed* wrapper, which _wrapper_installed_default() reads; this value
+# is used when that file is missing or unparseable. Two copies of the same
+# constant is the bug pattern this whole check exists to catch, so never
+# resolve the runner from this alone.
 WRAPPER_DEFAULT_SKILLS_DIR = Path.home() / "Documents" / "agent-skills"
+
+_WRAPPER_DEFAULT_RE = re.compile(
+    r'^AGENT_SKILLS_DIR="\$\{AGENT_SKILLS_DIR:-(?P<default>[^}]*)\}"\s*$', re.M
+)
 DOCTOR_PROBE_TIMEOUT_SECONDS = 10
 
 
@@ -3247,13 +3254,40 @@ def _doctor_check_wrapper_script() -> tuple[str, str, str]:
     return ("wrapper script 存在且可執行", _doctor_status(ok), detail)
 
 
+def _wrapper_installed_default() -> Path:
+    """The default AGENT_SKILLS_DIR written in the *installed* wrapper.
+
+    Read from the file rather than from WRAPPER_DEFAULT_SKILLS_DIR: a hand
+    edit of the installed wrapper (the practical way to point a machine at an
+    unmerged checkout, since an exported variable dies with its shell) moves
+    the path the hook actually runs. A probe that keeps its own copy of the
+    default then answers about a file the hook will never touch — reporting
+    FAIL on a working install, and PASS on a wrapper edited to point at
+    something broken. Unreadable or unparseable falls back to the constant.
+    """
+    try:
+        text = WRAPPER_SCRIPT_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return WRAPPER_DEFAULT_SKILLS_DIR
+    m = _WRAPPER_DEFAULT_RE.search(text)
+    if not m:
+        return WRAPPER_DEFAULT_SKILLS_DIR
+    raw = m.group("default").strip()
+    if not raw:
+        return WRAPPER_DEFAULT_SKILLS_DIR
+    home = str(Path.home())
+    for token in ("${HOME}", "$HOME"):
+        raw = raw.replace(token, home)
+    return Path(raw).expanduser()
+
+
 def _doctor_wrapper_runner_path() -> Path:
     """The plan_runner.py the *wrapper* will run, resolved the same way
     scripts/hooks/plan-run-stop.sh resolves it — not `__file__`. Those two
     pointing at different checkouts is precisely the failure this check
     exists to catch.
     """
-    base = os.environ.get("AGENT_SKILLS_DIR") or str(WRAPPER_DEFAULT_SKILLS_DIR)
+    base = os.environ.get("AGENT_SKILLS_DIR") or str(_wrapper_installed_default())
     return Path(base) / "scripts" / "plan_runner.py"
 
 

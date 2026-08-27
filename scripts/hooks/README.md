@@ -118,6 +118,10 @@ cp ~/.claude/settings.json.bak.<timestamp> ~/.claude/settings.json
 export AGENT_SKILLS_DIR=/Users/shiun/Documents/agent-skills-stop-hook
 ```
 
+要在**真實 session**（而非手動跑指令）裡試用未合併的分支，`export` 不夠——它隨 shell 消失。
+改動 wrapper 裡那一行的預設值才會每個 session 生效，並在上面留註解寫明何時要改回來。
+`doctor` 是讀已安裝的 wrapper 取得預設值（不是自存一份常數），所以兩種指法它都認得。
+
 **警告**：這個環境變數只在目前 shell / session 有效，且是全域 Stop hook 共用的設定。
 若 `AGENT_SKILLS_DIR` 指向的 worktree 路徑之後被刪除（例如 `git worktree remove`），
 hook 會在**每個 session** 靜默失效（因為 `plan-run-stop.sh` 找不到 `plan_runner.py` 就

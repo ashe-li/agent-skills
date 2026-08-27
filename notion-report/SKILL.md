@@ -32,7 +32,21 @@ argument-hint: <Notion URL> [--to pm|design|ops|eng（可逗號分隔多選）] 
 ### 走 API：需一次性建立 integration（可選）
 
 Notion API 需要 internal integration token，**必須由使用者本人建立**，Claude 無法代勞。
-**公司型 workspace 常需管理員核准**——沒權限就直接走 browser 路徑，不必卡在這裡。
+
+> **權限門檻（2026-08-27 查官方文件確認）**：
+> **只有 workspace owner 能建立 internal integration。** Notion 官方明文：
+> 「Only Workspace owners will be able to access the `Connections` tab and create integrations.」
+> 一般 member 連 Connections 分頁都進不去。
+>
+> 把頁面加進 Connections 則需要對該頁有 **Full access**——不是 Can edit 就夠。
+> 官方說明：加連線時的頁面選擇器「only displays pages or databases to which a
+> user has full access」。
+>
+> Enterprise 方案另可由 owner 限制成員能安裝哪些 connection，或設成
+> 「Connection owners only」讓成員完全不能自行掛頁面。
+>
+> **結論：多數人沒有這個權限，browser 路徑才是常態路徑。** 不確定自己是不是
+> workspace owner 時，不要花時間試——直接走 browser。
 
 1. 到 <https://www.notion.so/my-integrations> → New integration → 選 workspace → 建立
 2. 複製 Internal Integration Secret（`ntn_` 開頭）

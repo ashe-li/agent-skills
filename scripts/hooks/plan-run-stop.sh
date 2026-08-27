@@ -33,6 +33,17 @@
 
 AGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$HOME/Documents/agent-skills}"
 
+# The variable is never eval'd or word-split (it is quoted everywhere), so
+# this is not an injection guard. It bounds *which* Python file this hook
+# will execute every turn of every session: anything that can set this
+# process's environment (direnv, settings.json's `env` block) could
+# otherwise point it at an arbitrary checkout. Outside $HOME we do nothing,
+# matching every other failure path here.
+case "$AGENT_SKILLS_DIR" in
+    "$HOME"/*) ;;
+    *) exit 0 ;;
+esac
+
 RUNNER="$AGENT_SKILLS_DIR/scripts/plan_runner.py"
 
 if [ ! -f "$RUNNER" ]; then

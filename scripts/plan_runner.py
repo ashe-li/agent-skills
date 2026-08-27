@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
@@ -1003,14 +1004,33 @@ def _ensure_pointer_active_dir() -> Path:
 
 def write_pointer_atomic(pointer_path: Path, data: dict[str, Any]) -> None:
     """Write a pointer file so a concurrent reader never sees a half-written
-    JSON body: write to a per-process tmp file, then `os.replace` (POSIX
-    rename is atomic within the same directory).
+    JSON body: write to a tmp file in the same directory, then `os.replace`
+    (POSIX rename is atomic within the same directory).
+
+    The tmp file comes from tempfile.mkstemp() — an unpredictable name opened
+    with O_CREAT|O_EXCL|O_NOFOLLOW at mode 0600. The previous
+    `.{name}.{pid}.tmp` + write_text() pair was both guessable and
+    symlink-following, so a pre-planted symlink at that path turned this
+    function into an arbitrary-file overwrite (S2.6 security review F3).
+    The tmp file is removed in `finally` so a failed replace leaves nothing
+    behind.
     """
     _ensure_pointer_active_dir()
-    tmp_path = pointer_path.parent / f".{pointer_path.name}.{os.getpid()}.tmp"
     payload = json.dumps(data, indent=2, ensure_ascii=False)
-    tmp_path.write_text(payload, encoding="utf-8")
-    os.replace(tmp_path, pointer_path)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(pointer_path.parent), prefix=f".{pointer_path.name}.", suffix=".tmp",
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, pointer_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
 
 
 def new_pointer_record(
@@ -1107,6 +1127,10 @@ def _validate_pointer_inner(data: Any) -> str:
         return POINTER_STATUS_INVALID
     resolved_plan = plan_path.resolve()
     if not resolved_plan.exists() or not resolved_plan.is_file():
+        return POINTER_STATUS_INVALID
+    # A plan outside $HOME (/tmp, /private/var/folders, a mounted volume) is
+    # never a legitimate attach target — see S2.6 security review F2.
+    if not _is_within_allowed_root(resolved_plan):
         return POINTER_STATUS_INVALID
     if not _pointer_fields_well_typed(data):
         return POINTER_STATUS_INVALID
@@ -1846,6 +1870,8 @@ def _hook_pointer_shape_ok(pointer: dict[str, Any]) -> bool:
     candidate = Path(plan_path)
     if not candidate.is_absolute() or candidate.suffix != ".md":
         return False
+    if not _is_within_allowed_root(candidate):
+        return False
     return _pointer_fields_well_typed(pointer)
 
 
@@ -2234,8 +2260,14 @@ def _load_hook_state(pointer_data: dict[str, Any]) -> dict[str, Any] | None:
     plan_path_raw = pointer_data.get("plan_path")
     if not isinstance(plan_path_raw, str) or not plan_path_raw:
         return None
+    plan_path = Path(plan_path_raw)
+    # _run_hook_stop() reads before it validates (resolve_pointer_for_hook
+    # uses require_valid=False), so the allowed-root gate has to be here too
+    # or an out-of-$HOME plan_path gets read anyway.
     try:
-        return load_state(Path(plan_path_raw))
+        if not _is_within_allowed_root(plan_path):
+            return None
+        return load_state(plan_path)
     except (OSError, ValueError, json.JSONDecodeError):
         return None
 
@@ -2366,7 +2398,10 @@ def cmd_init(args: argparse.Namespace) -> int:
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
         pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
-        print(error if error is not None else f"Attached: {pointer_path}")
+        if error is not None:
+            print(error)
+        else:
+            _print_attach_result(plan_path, Path.cwd().resolve(), pointer_path)
     return 0
 
 
@@ -2764,6 +2799,17 @@ def _attach_pointer_for_cwd(plan_path: Path, cwd: Path) -> tuple[Path | None, st
     both write identical pointer records.
     """
     resolved_cwd = cwd.resolve()
+    # S2.6 F2: refuse before writing anything. attach is the only moment on
+    # this whole path where a human is watching, so an out-of-$HOME plan
+    # (sandbox/temp dir, mounted volume, clone outside $HOME) is rejected
+    # here with the path spelled out, not silently at hook time.
+    if not _is_within_allowed_root(plan_path):
+        return None, (
+            f"拒絕 attach：plan 不在 {POINTER_ALLOWED_ROOT} 底下。\n"
+            f"  Plan: {plan_path}\n"
+            "  原因: plan_path 必須位於 $HOME 之內；沙箱／臨時目錄／外接磁碟上的 "
+            "plan 一旦綁定，本目錄的每一輪都會被它驅動。"
+        )
     conflict = check_single_active_plan(resolved_cwd, plan_path)
     if conflict is not None:
         return None, conflict
@@ -2774,6 +2820,20 @@ def _attach_pointer_for_cwd(plan_path: Path, cwd: Path) -> tuple[Path | None, st
     pointer_path = pointer_path_for(resolved_cwd)
     write_pointer_atomic(pointer_path, data)
     return pointer_path, None
+
+
+def _print_attach_result(plan_path: Path, resolved_cwd: Path, pointer_path: Path) -> None:
+    """S2.6: attach used to print only the pointer file name, which is a
+    sha256 of the cwd — it showed neither which plan got bound nor where.
+    Print all three, and warn (never refuse) when the plan lives outside the
+    cwd: cross-directory binding is the normal way this tool is used (plan in
+    knowledge-base, implementation in another repo).
+    """
+    print(f"Plan: {plan_path}")
+    print(f"Cwd: {resolved_cwd}")
+    print(f"Pointer: {pointer_path}")
+    if not _is_within_allowed_root(plan_path, resolved_cwd):
+        print("注意：plan 不在此目錄下，本目錄的每一輪都將由該 plan 驅動。")
 
 
 def _hook_registered_in_settings() -> bool:
@@ -2814,7 +2874,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
     if error is not None:
         print(error)
         return 1
-    print(f"Attached: {pointer_path}")
+    _print_attach_result(plan_path, Path.cwd().resolve(), pointer_path)
     if not _hook_fully_installed():
         print(HOOKS_SETUP_DOC_HINT)
     return 0
@@ -2882,61 +2942,122 @@ def cmd_pointer(args: argparse.Namespace) -> int:
     return 0
 
 
-def _doctor_check_python_version() -> tuple[str, bool, str]:
+# doctor reports three states, not two: FAIL is reserved for an actual
+# fault. "This cwd has no active plan" is the normal state of nearly every
+# directory, and printing it as FAIL trains the user to ignore the tool that
+# install verification depends on (S2.6 review, 可用性缺陷).
+DOCTOR_PASS = "PASS"
+DOCTOR_INFO = "INFO"
+DOCTOR_FAIL = "FAIL"
+
+# The wrapper's own default for AGENT_SKILLS_DIR; kept in sync with
+# scripts/hooks/plan-run-stop.sh.
+WRAPPER_DEFAULT_SKILLS_DIR = Path.home() / "Documents" / "agent-skills"
+DOCTOR_PROBE_TIMEOUT_SECONDS = 10
+
+
+def _doctor_status(ok: bool) -> str:
+    return DOCTOR_PASS if ok else DOCTOR_FAIL
+
+
+def _doctor_check_python_version() -> tuple[str, str, str]:
     actual = sys.version_info[:3]
     ok = actual >= PYTHON_MIN_VERSION
     need = ".".join(str(n) for n in PYTHON_MIN_VERSION)
     have = ".".join(str(n) for n in actual)
-    return ("python3 版本", ok, f"{have}（需 >= {need}）")
+    return ("python3 版本", _doctor_status(ok), f"{have}（需 >= {need}）")
 
 
-def _doctor_check_plan_run_dir() -> tuple[str, bool, str]:
+def _doctor_check_plan_run_dir() -> tuple[str, str, str]:
     if not PLAN_RUN_DIR.is_dir():
-        return ("~/.claude/plan-run/ 可寫", False, f"{PLAN_RUN_DIR} 不存在")
+        return ("~/.claude/plan-run/ 可寫", DOCTOR_FAIL, f"{PLAN_RUN_DIR} 不存在")
     writable = os.access(PLAN_RUN_DIR, os.W_OK)
     detail = str(PLAN_RUN_DIR) if writable else f"{PLAN_RUN_DIR} 存在但不可寫"
-    return ("~/.claude/plan-run/ 可寫", writable, detail)
+    return ("~/.claude/plan-run/ 可寫", _doctor_status(writable), detail)
 
 
-def _doctor_check_settings_hook() -> tuple[str, bool, str]:
+def _doctor_check_settings_hook() -> tuple[str, str, str]:
     ok = _hook_registered_in_settings()
     detail = (
         f"hooks.Stop 含 {HOOK_COMMAND_MARKER}" if ok
         else f"hooks.Stop 未含 {HOOK_COMMAND_MARKER}（或 settings.json 不存在/損毀）"
     )
-    return ("settings.json Stop hook 已註冊", ok, detail)
+    return ("settings.json Stop hook 已註冊", _doctor_status(ok), detail)
 
 
-def _doctor_check_wrapper_script() -> tuple[str, bool, str]:
+def _doctor_check_wrapper_script() -> tuple[str, str, str]:
     ok = _wrapper_script_installed()
     detail = str(WRAPPER_SCRIPT_PATH) if ok else f"{WRAPPER_SCRIPT_PATH} 不存在或不可執行"
-    return ("wrapper script 存在且可執行", ok, detail)
+    return ("wrapper script 存在且可執行", _doctor_status(ok), detail)
 
 
-def _doctor_check_pointer() -> tuple[str, bool, str]:
+def _doctor_wrapper_runner_path() -> Path:
+    """The plan_runner.py the *wrapper* will run, resolved the same way
+    scripts/hooks/plan-run-stop.sh resolves it — not `__file__`. Those two
+    pointing at different checkouts is precisely the failure this check
+    exists to catch.
+    """
+    base = os.environ.get("AGENT_SKILLS_DIR") or str(WRAPPER_DEFAULT_SKILLS_DIR)
+    return Path(base) / "scripts" / "plan_runner.py"
+
+
+def _doctor_check_hook_stop_supported() -> tuple[str, str, str]:
+    """Live probe: feed the wrapper's runner a non-Stop event and see whether
+    it answers. A checkout predating the `hook-stop` subcommand exits 2 from
+    argparse, which the wrapper swallows via `|| exit 0` — so without this
+    probe a silently dead hook still shows 5/5 PASS.
+    """
+    name = "wrapper 的 runner 支援 hook-stop"
+    runner = _doctor_wrapper_runner_path()
+    if not runner.is_file():
+        return (name, DOCTOR_FAIL, f"{runner} 不存在（wrapper 將靜默 exit 0，hook 不作用）")
+    try:
+        probe = subprocess.run(
+            [sys.executable, str(runner), "hook-stop"],
+            input='{"hook_event_name":"NotStop"}',
+            capture_output=True, text=True,
+            timeout=DOCTOR_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return (name, DOCTOR_FAIL, f"{runner} 探測失敗：{exc}")
+    if probe.returncode != 0 or not probe.stdout.strip():
+        return (
+            name, DOCTOR_FAIL,
+            f"{runner} 不支援 hook-stop（exit {probe.returncode}）——checkout 過舊或損毀",
+        )
+    return (name, DOCTOR_PASS, str(runner))
+
+
+def _doctor_check_pointer() -> tuple[str, str, str]:
     resolved = resolve_pointer(Path.cwd())
-    ok = resolved is not None
-    detail = str(resolved.path) if ok else "當前 cwd 無 active plan"
-    return ("當前 cwd 有效 pointer", ok, detail)
+    if resolved is None:
+        return ("當前 cwd 有效 pointer", DOCTOR_INFO, "當前 cwd 無 active plan（非錯誤）")
+    return ("當前 cwd 有效 pointer", DOCTOR_PASS, str(resolved.path))
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Read-only self-check. Never writes `~/.claude/settings.json` or any
-    other user config — only reads and reports PASS/FAIL per item.
+    other user config — only reads and reports PASS/INFO/FAIL per item.
+    Exits non-zero when any item FAILs so it can be used as a CI gate; INFO
+    does not count as a failure.
     """
     checks = [
         _doctor_check_python_version(),
         _doctor_check_plan_run_dir(),
         _doctor_check_settings_hook(),
         _doctor_check_wrapper_script(),
+        _doctor_check_hook_stop_supported(),
         _doctor_check_pointer(),
     ]
-    passed = 0
-    for name, ok, detail in checks:
-        print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}")
-        passed += 1 if ok else 0
-    print(f"\n{passed}/{len(checks)} PASS")
-    return 0
+    for name, status, detail in checks:
+        print(f"[{status}] {name}: {detail}")
+    passed = sum(1 for _, status, _ in checks if status == DOCTOR_PASS)
+    failed = sum(1 for _, status, _ in checks if status == DOCTOR_FAIL)
+    summary = f"\n{passed}/{len(checks)} PASS"
+    if failed:
+        summary += f"，{failed} FAIL"
+    print(summary)
+    return 1 if failed else 0
 
 
 def main() -> None:

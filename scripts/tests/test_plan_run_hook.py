@@ -16,6 +16,9 @@ Run: cd <worktree> && python3 -m unittest discover scripts/tests -v
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -43,14 +46,20 @@ import plan_runner as pr  # noqa: E402
 
 DEFAULT_SESSION_ID = "sess-fixed"
 
+# S2.6 F2: plan_path must resolve under $HOME (_is_within_allowed_root), so the
+# in-memory fixture path lives under Path.home() even though these tests never
+# create the file — decide_hook_action() itself does no disk I/O.
+FAKE_PLAN_DIR = str(Path.home() / ".plan-run-test-fixture")
+FAKE_PLAN_PATH = f"{FAKE_PLAN_DIR}/plan.md"
+
 
 def make_pointer(**overrides) -> dict:
     now = pr.now_iso()
     base = {
         "schema_version": pr.POINTER_SCHEMA_VERSION,
-        "plan_path": "/tmp/fake-plan-dir/plan.md",
-        "repo_root": "/tmp/fake-plan-dir",
-        "cwd": "/tmp/fake-plan-dir",
+        "plan_path": FAKE_PLAN_PATH,
+        "repo_root": FAKE_PLAN_DIR,
+        "cwd": FAKE_PLAN_DIR,
         "created_at": now,
         "created_by_session": DEFAULT_SESSION_ID,
         "driver_session_id": DEFAULT_SESSION_ID,
@@ -96,7 +105,7 @@ def make_state(steps: dict, *, slug="test-plan", title="Test Plan", phase_order=
         if step.get("id") is None:
             step["id"] = sid
     return {
-        "plan_path": "/tmp/fake-plan-dir/plan.md",
+        "plan_path": FAKE_PLAN_PATH,
         "slug": slug,
         "title": title,
         "phase_order": phase_order or ["P0"],
@@ -110,8 +119,8 @@ def make_state(steps: dict, *, slug="test-plan", title="Test Plan", phase_order=
 def make_hook_input(
     *,
     session_id=DEFAULT_SESSION_ID,
-    transcript_path="/tmp/fake-plan-dir/transcript.jsonl",
-    cwd="/tmp/fake-plan-dir",
+    transcript_path=f"{FAKE_PLAN_DIR}/transcript.jsonl",
+    cwd=FAKE_PLAN_DIR,
     stop_hook_active=True,
     background_tasks=None,
     **overrides,
@@ -373,10 +382,16 @@ class PointerResolutionTests(unittest.TestCase):
         self.pointer_active_dir = self.plan_run_dir / "active"
         patcher1 = mock.patch.object(pr, "PLAN_RUN_DIR", self.plan_run_dir)
         patcher2 = mock.patch.object(pr, "POINTER_ACTIVE_DIR", self.pointer_active_dir)
+        # S2.6 F2: plan_path is now gated on _is_within_allowed_root(); redirect
+        # that root at tmp_root too, so the temp-rooted plan fixtures below count
+        # as in-root exactly the way a real plan under $HOME does.
+        patcher3 = mock.patch.object(pr, "POINTER_ALLOWED_ROOT", tmp_root)
         patcher1.start()
         patcher2.start()
+        patcher3.start()
         self.addCleanup(patcher1.stop)
         self.addCleanup(patcher2.stop)
+        self.addCleanup(patcher3.stop)
         self.repo_root = tmp_root / "repo"
         self.repo_root.mkdir(parents=True, exist_ok=True)
 
@@ -462,7 +477,9 @@ class HookStopCliTests(unittest.TestCase):
         # Pre-create ~/.claude so PLAN_RUN_DIR.mkdir() (no parents=True, see
         # PointerResolutionTests) has an existing parent to create into.
         (self.home_dir / ".claude").mkdir(parents=True, exist_ok=True)
-        self.repo_root = tmp_root / "repo"
+        # S2.6 F2: the child subprocess runs with HOME=self.home_dir, and
+        # plan_path must resolve under it — park the repo fixture inside.
+        self.repo_root = self.home_dir / "repo"
         self.repo_root.mkdir(parents=True, exist_ok=True)
 
     def _write_pointer(self, plan_path: Path, cwd: Path | None = None) -> Path:
@@ -950,6 +967,214 @@ class ReasonSanitizationTests(unittest.TestCase):
         self.assertEqual(pr._sanitize_plan_action(None), "(no action text)")
         self.assertEqual(pr._sanitize_plan_action("   "), "(no action text)")
         self.assertEqual(pr._sanitize_plan_text(None, 10), "")
+
+
+class AllowedRootTests(unittest.TestCase):
+    """S2.6 F2: a plan_path outside $HOME must be rejected on all three
+    independently reachable read paths — validate_pointer(),
+    _hook_pointer_shape_ok(), and _load_hook_state() (which _run_hook_stop()
+    reaches *before* any shape check, via require_valid=False).
+
+    The fixture is a fully well-formed plan + state pair in a temp dir under
+    /tmp (i.e. outside $HOME), so the only thing that can reject it is the
+    allowed-root gate.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(dir="/tmp")
+        self.addCleanup(self._tmp.cleanup)
+        outside = Path(self._tmp.name).resolve()
+        self.assertFalse(pr._is_within_allowed_root(outside), "fixture must be outside $HOME")
+        self.plan_path = outside / "evil.md"
+        self.plan_path.write_text("# Evil Plan\n", encoding="utf-8")
+        state = make_state({"S1": make_step(status="pending")})
+        state["plan_path"] = str(self.plan_path)
+        pr.save_state(self.plan_path, state)
+        self.pointer = make_pointer(
+            plan_path=str(self.plan_path), repo_root=str(outside), cwd=str(outside),
+        )
+
+    def test_state_file_fixture_is_otherwise_valid(self):
+        # Guard: the same pointer with an in-$HOME plan_path would be VALID,
+        # so the assertions below really are testing the allowed-root gate.
+        self.assertIsInstance(pr.load_state(self.plan_path).get("steps"), dict)
+
+    def test_validate_pointer_rejects_plan_outside_home(self):
+        self.assertEqual(pr.validate_pointer(self.pointer), pr.POINTER_STATUS_INVALID)
+
+    def test_hook_pointer_shape_ok_rejects_plan_outside_home(self):
+        self.assertFalse(pr._hook_pointer_shape_ok(self.pointer))
+
+    def test_load_hook_state_does_not_read_plan_outside_home(self):
+        self.assertIsNone(pr._load_hook_state(self.pointer))
+
+    def test_in_home_plan_passes_all_three(self):
+        home_tmp = tempfile.TemporaryDirectory(dir=str(Path.home()))
+        self.addCleanup(home_tmp.cleanup)
+        plan_path = Path(home_tmp.name).resolve() / "ok.md"
+        plan_path.write_text("# OK Plan\n", encoding="utf-8")
+        state = make_state({"S1": make_step(status="pending")})
+        state["plan_path"] = str(plan_path)
+        pr.save_state(plan_path, state)
+        pointer = make_pointer(plan_path=str(plan_path))
+        self.assertEqual(pr.validate_pointer(pointer), pr.POINTER_STATUS_VALID)
+        self.assertTrue(pr._hook_pointer_shape_ok(pointer))
+        self.assertIsNotNone(pr._load_hook_state(pointer))
+
+
+class PointerAtomicWriteTests(unittest.TestCase):
+    """S2.6 F3, inverted: the review's PoC pre-planted a symlink at the old,
+    fully predictable tmp path (`.{name}.{pid}.tmp`) and got an arbitrary
+    file overwritten. Same setup here — the victim must survive.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        tmp_root = Path(self._tmp.name).resolve()
+        self.plan_run_dir = tmp_root / "plan-run"
+        self.active_dir = self.plan_run_dir / "active"
+        for name, value in (("PLAN_RUN_DIR", self.plan_run_dir),
+                            ("POINTER_ACTIVE_DIR", self.active_dir)):
+            patcher = mock.patch.object(pr, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.victim = tmp_root / "victim.txt"
+        self.victim.write_text("ORIGINAL", encoding="utf-8")
+        self.pointer_path = pr.pointer_path_for(tmp_root / "some-cwd")
+
+    def test_planted_tmp_symlink_does_not_overwrite_victim(self):
+        pr._ensure_pointer_active_dir()
+        legacy_tmp = self.active_dir / f".{self.pointer_path.name}.{os.getpid()}.tmp"
+        os.symlink(self.victim, legacy_tmp)
+        pr.write_pointer_atomic(self.pointer_path, {"x": 1})
+        self.assertEqual(self.victim.read_text(encoding="utf-8"), "ORIGINAL")
+        self.assertFalse(self.pointer_path.is_symlink())
+        self.assertEqual(json.loads(self.pointer_path.read_text(encoding="utf-8")), {"x": 1})
+
+    def test_pointer_file_is_0600_and_leaves_no_tmp_behind(self):
+        pr.write_pointer_atomic(self.pointer_path, {"x": 1})
+        self.assertEqual(self.pointer_path.stat().st_mode & 0o777, 0o600)
+        leftovers = [q.name for q in self.active_dir.iterdir() if q.name.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
+
+class AttachSurfaceTests(unittest.TestCase):
+    """S2.6 F2 write side + attach output.
+
+    Runs the real CLI in a subprocess with HOME redirected at a temp dir, so
+    plan_runner's POINTER_ALLOWED_ROOT / PLAN_RUN_DIR (both derived from
+    Path.home() at import) land inside the sandbox and the real
+    ~/.claude/plan-run/ is never touched.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        tmp_root = Path(self._tmp.name).resolve()
+        self.home_dir = tmp_root / "home"
+        (self.home_dir / ".claude").mkdir(parents=True, exist_ok=True)
+        self.work_dir = self.home_dir / "work"
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+
+    def _run_attach(self, plan_path: Path, cwd: Path):
+        env = dict(os.environ, HOME=str(self.home_dir))
+        return subprocess.run(
+            [sys.executable, str(pr.__file__), "attach", str(plan_path)],
+            cwd=str(cwd), env=env, capture_output=True, text=True, timeout=30,
+        )
+
+    def _make_plan(self, plan_path: Path) -> Path:
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text("# A Plan\n", encoding="utf-8")
+        return plan_path
+
+    def test_attach_rejects_plan_outside_home(self):
+        outside = tempfile.TemporaryDirectory(dir="/tmp")
+        self.addCleanup(outside.cleanup)
+        plan_path = self._make_plan(Path(outside.name).resolve() / "evil.md")
+        r = self._run_attach(plan_path, self.work_dir)
+        self.assertNotEqual(r.returncode, 0, msg=r.stdout)
+        self.assertIn("拒絕 attach", r.stdout)
+        self.assertIn(str(plan_path), r.stdout, "error must name the rejected path")
+        # Fail-fast: nothing written.
+        active = self.home_dir / ".claude" / "plan-run" / "active"
+        self.assertEqual(list(active.glob("*.json")) if active.is_dir() else [], [])
+
+    def test_attach_prints_plan_cwd_and_pointer(self):
+        plan_path = self._make_plan(self.work_dir / "plan.md")
+        r = self._run_attach(plan_path, self.work_dir)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn(f"Plan: {plan_path}", r.stdout)
+        self.assertIn(f"Cwd: {self.work_dir}", r.stdout)
+        self.assertRegex(r.stdout, r"Pointer: .*\.json")
+        self.assertNotIn("plan 不在此目錄下", r.stdout)
+
+    def test_attach_warns_but_succeeds_when_plan_outside_cwd(self):
+        plan_path = self._make_plan(self.home_dir / "plans" / "plan.md")
+        r = self._run_attach(plan_path, self.work_dir)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn(f"Plan: {plan_path}", r.stdout)
+        self.assertIn("plan 不在此目錄下", r.stdout)
+
+
+class DoctorTests(unittest.TestCase):
+    """S2.6 usability + self-check blind spot: no-pointer is INFO (not FAIL),
+    and a runner that cannot serve `hook-stop` is caught by a live probe.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_root = Path(self._tmp.name).resolve()
+
+    def test_no_pointer_is_info_not_fail(self):
+        empty_active = self.tmp_root / "plan-run" / "active"
+        empty_active.mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(pr, "POINTER_ACTIVE_DIR", empty_active):
+            name, status, detail = pr._doctor_check_pointer()
+        self.assertEqual(status, pr.DOCTOR_INFO)
+        self.assertIn("非錯誤", detail)
+
+    def test_probe_passes_against_this_checkout(self):
+        skills_dir = Path(pr.__file__).resolve().parents[1]
+        with mock.patch.dict(os.environ, {"AGENT_SKILLS_DIR": str(skills_dir)}):
+            name, status, detail = pr._doctor_check_hook_stop_supported()
+        self.assertEqual(status, pr.DOCTOR_PASS, msg=detail)
+
+    def test_probe_fails_when_runner_lacks_hook_stop(self):
+        fake = self.tmp_root / "old-checkout" / "scripts"
+        fake.mkdir(parents=True, exist_ok=True)
+        (fake / "plan_runner.py").write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"AGENT_SKILLS_DIR": str(fake.parent)}):
+            name, status, detail = pr._doctor_check_hook_stop_supported()
+        self.assertEqual(status, pr.DOCTOR_FAIL)
+        self.assertIn("hook-stop", detail)
+
+    def test_probe_targets_wrapper_runner_not_this_file(self):
+        # The whole point of the check: it must probe AGENT_SKILLS_DIR's
+        # runner, which can differ from the file doctor itself runs from.
+        with mock.patch.dict(os.environ, {"AGENT_SKILLS_DIR": str(self.tmp_root / "nope")}):
+            name, status, detail = pr._doctor_check_hook_stop_supported()
+        self.assertEqual(status, pr.DOCTOR_FAIL)
+        self.assertIn(str(self.tmp_root / "nope"), detail)
+
+    def test_doctor_exit_code_nonzero_on_fail_zero_on_info(self):
+        args = argparse.Namespace()
+
+        def run_with(checks):
+            with mock.patch.object(pr, "_doctor_check_python_version", lambda: checks[0]), \
+                 mock.patch.object(pr, "_doctor_check_plan_run_dir", lambda: checks[1]), \
+                 mock.patch.object(pr, "_doctor_check_settings_hook", lambda: checks[2]), \
+                 mock.patch.object(pr, "_doctor_check_wrapper_script", lambda: checks[3]), \
+                 mock.patch.object(pr, "_doctor_check_hook_stop_supported", lambda: checks[4]), \
+                 mock.patch.object(pr, "_doctor_check_pointer", lambda: checks[5]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                return pr.cmd_doctor(args)
+
+        all_pass = [("c", pr.DOCTOR_PASS, "d")] * 5
+        self.assertEqual(run_with(all_pass + [("p", pr.DOCTOR_INFO, "無 active plan")]), 0)
+        self.assertEqual(run_with(all_pass + [("p", pr.DOCTOR_FAIL, "broken")]), 1)
 
 
 if __name__ == "__main__":

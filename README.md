@@ -93,11 +93,11 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/plan-run`](#plan-run--plan-dag-推進器控制流在-stop-hook) | 依 plan.md DAG 推進實作，控制流在 Stop hook（harness 每輪強制查 state 並注入下一步） |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
-| [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
+| `/triage` | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
-| [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
+| `/learn-eval-deep` | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
 

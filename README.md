@@ -23,6 +23,25 @@ npx skills add ashe-li/agent-skills --global
 
 </details>
 
+<details>
+<summary>安裝後確認載入的版本與 repo 一致</summary>
+
+`npx skills add` 安裝的是 GitHub 的**同步快照**，不是你手上的 checkout——PR 合併後不會自動生效，要跑一次 `npx skills update`。改完 skill 就宣稱「已生效」是錯的，驗一下：
+
+```bash
+# 逐支比對安裝端與 repo；有輸出就是落後
+for d in ~/.agents/skills/*/; do s=$(basename "$d")
+  [ -d "<你的 checkout>/$s" ] && \
+    { diff -rq "$d" "<你的 checkout>/$s" >/dev/null 2>&1 || echo "STALE: $s"; }
+done
+```
+
+另外快照**只同步 `SKILL.md`**，同層的 `scripts/` 不會一起下來。所以 SKILL.md 裡引用的 `scripts/plan_runner.py` 指的是 **repo checkout** 的路徑，不是快照——切分支、關掉 PR、清理殘留之後，回頭確認那些被引用的路徑還在。
+
+若你偏好「改 repo 就立刻生效」，可以把 `~/.claude/skills/<name>` 直接 symlink 到 checkout（`ln -sfn <你的 checkout>/<name> ~/.claude/skills/<name>`）。代價是 `npx skills update` 管不到它，而且**主 repo 切分支會連帶換掉生效中的 skill 版本**——要改的正好是當下在用的 skill 時，請在 sibling worktree 施工。
+
+</details>
+
 ## Usage
 
 ```

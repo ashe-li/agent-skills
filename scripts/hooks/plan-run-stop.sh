@@ -1,0 +1,36 @@
+#!/bin/bash
+#
+# plan-run-stop.sh — Stop hook wrapper for agent-skills' plan_runner.py.
+#
+# This script is intentionally minimal: it does not parse or touch the
+# Stop hook's stdin JSON payload at all. It is handed through byte-for-byte
+# to `plan_runner.py hook-stop`, which owns all reading/writing/output for
+# the Stop hook. Keeping this wrapper free of stdin parsing / string
+# interpolation avoids any risk of path or argument injection from
+# hook input.
+#
+# AGENT_SKILLS_DIR points at the agent-skills checkout that provides
+# scripts/plan_runner.py. It defaults to the primary checkout at
+# ~/Documents/agent-skills. Override it only for deliberate, temporary
+# testing against another checkout (e.g. a sibling worktree) — see
+# scripts/hooks/README.md in that checkout for the install/dev-pointer
+# procedure and its risks.
+#
+# Every failure path below exits 0 (silently) so a missing/broken
+# agent-skills checkout never turns a Stop hook into a visible error.
+# `set -e` is deliberately NOT used, so a non-zero exit mid-script can't
+# be misread as this script's own intended failure exit.
+
+AGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$HOME/Documents/agent-skills}"
+
+RUNNER="$AGENT_SKILLS_DIR/scripts/plan_runner.py"
+
+if [ ! -f "$RUNNER" ]; then
+    exit 0
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+    exit 0
+fi
+
+exec python3 "$RUNNER" hook-stop

@@ -664,6 +664,27 @@ def emit(payload: dict[str, Any]) -> None:
 # LLM-optimized markdown formatters
 # ---------------------------------------------------------------------------
 
+def _runner_invocation(plan_path: str | None) -> str:
+    """How the hook wants its own runner invoked, as an absolute path.
+
+    A bare `plan_runner.py` makes the model guess where the script lives, and
+    the guess is neither stable nor safe: in the S2.3 end-to-end run it
+    resolved to `$CWD/plan_runner.py` (nonexistent -- six wasted turns) in one
+    session and to a *different checkout* of agent-skills in another. A tool
+    whose premise is "the control flow no longer depends on the model working
+    things out" cannot ship a command that is not runnable as printed.
+
+    `plan_path` is unused today; it is threaded through so a future per-plan
+    runner override has a seam. Falls back to the bare name only if this
+    module has no resolvable file path (frozen/exec'd from memory).
+    """
+    try:
+        here = Path(__file__).resolve()
+    except (OSError, NameError):
+        return "plan_runner.py"
+    return f"python3 {_quote_plan_path(str(here))}"
+
+
 def _format_step_action_block(
     step: dict[str, Any],
     inline_values: bool = True,
@@ -689,10 +710,11 @@ def _format_step_action_block(
     lines: list[str] = []
     sid = _sanitize_step_id(step.get("id"))
     plan = _quote_plan_path(plan_path)
+    runner = _runner_invocation(plan_path)
     agent = _sanitize_plan_field(step.get("agent"))
     command = _sanitize_plan_field(step.get("command"))
     skill = _sanitize_plan_field(step.get("skill"))
-    lines.append(f"  1. plan_runner.py start {plan} {sid}")
+    lines.append(f"  1. {runner} start {plan} {sid}")
     if agent:
         detail = f"subagent_type={agent!r}" if inline_values else 'subagent_type=<"agent" above>'
         prompt = "<files + action below>" if inline_values else '<"files" + "action" above>'
@@ -706,8 +728,8 @@ def _format_step_action_block(
     else:
         source = "Action" if inline_values else 'the "action" field above'
         lines.append(f"  2. (no agent/command/skill specified — manual execution per {source})")
-    lines.append(f"  3. ok: plan_runner.py complete {plan} {sid}"
-                 f" | err: plan_runner.py fail {plan} {sid} --reason=<msg>")
+    lines.append(f"  3. ok: {runner} complete {plan} {sid}"
+                 f" | err: {runner} fail {plan} {sid} --reason=<msg>")
     return lines
 
 
@@ -1894,8 +1916,9 @@ _NAG_ESCALATION_NOTE = (
 # so is the whole point: an unchanged reason repeated verbatim is
 # indistinguishable from normal progress.
 _ASSIGN_REPEAT_NOTE = (
-    "注意：這是同一個 step 連續第 {count} 次被指派——前一次的指示沒有被執行，"
-    "`plan_runner.py start {plan} {step}` 到現在都還沒跑過（該 step 仍是 pending）。"
+    "注意：這是同一個 step 連續第 {count} 次被指派——`{step}` 仍停在 pending，"
+    "state 沒有收到對應的 start。可能是指令沒被執行，也可能是執行了但失敗；"
+    "若是後者，請回報錯誤或改用 fail，不要重覆同一道指令。"
     "請先實際執行上面第 1 行的 start 指令，再繼續後面的動作。"
 )
 

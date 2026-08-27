@@ -478,7 +478,8 @@ class ReadyStepNagTests(unittest.TestCase):
             pointer = self._advance(pointer, state).pointer_updates
         decision = self._advance(pointer, state)
         self.assertEqual(decision.decision, "block")
-        self.assertIn("前一次的指示沒有被執行", decision.reason)
+        self.assertIn("仍停在 pending", decision.reason)
+        self.assertIn("state 沒有收到對應的 start", decision.reason)
         self.assertIn("start", decision.reason)
         self.assertIn("pending", decision.reason)
         self.assertEqual(
@@ -504,7 +505,8 @@ class ReadyStepNagTests(unittest.TestCase):
         decision = self._advance(pointer, self._two_pending(), stop_hook_active=False)
         self.assertEqual(decision.pointer_updates["consecutive_blocks"], 1)  # reset, then this block
         self.assertEqual(decision.pointer_updates["assign_repeat_count"], 4)
-        self.assertIn("前一次的指示沒有被執行", decision.reason)
+        self.assertIn("仍停在 pending", decision.reason)
+        self.assertIn("state 沒有收到對應的 start", decision.reason)
 
     def test_step_reaching_in_progress_clears_the_repeat_record(self):
         pointer = make_pointer(last_assigned_step_id="S1.1", assign_repeat_count=3)
@@ -619,12 +621,18 @@ class PlanPathInReasonTests(unittest.TestCase):
         spaced = str(Path.home() / "my plans" / "a plan.md")
         reason = self._reason(spaced)
         self.assertNotIn("<plan>", reason)
-        self.assertIn(f"plan_runner.py start '{spaced}' S0.1", reason)
+        self.assertIn(f"start '{spaced}' S0.1", reason)
         # Whatever is printed must survive a round-trip through the shell
-        # lexer as exactly three words: the script, the plan, the step id.
+        # lexer with the plan path intact as ONE word -- and with an absolute
+        # runner path, so the model never has to guess where the script lives
+        # (S2.3: a bare name resolved to $CWD in one session and to a
+        # different agent-skills checkout in another).
         line = next(ln for ln in reason.split("\n") if "start" in ln)
         argv = shlex.split(line.split(". ", 1)[1])
-        self.assertEqual(argv, ["plan_runner.py", "start", spaced, "S0.1"])
+        self.assertEqual(argv[0], "python3")
+        self.assertTrue(Path(argv[1]).is_absolute(), argv[1])
+        self.assertEqual(argv[1], str(Path(pr.__file__).resolve()))
+        self.assertEqual(argv[2:], ["start", spaced, "S0.1"])
 
     def test_report_result_reason_also_uses_the_real_path(self):
         reason = self._reason(FAKE_PLAN_PATH, status="in_progress")

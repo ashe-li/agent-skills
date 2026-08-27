@@ -3321,11 +3321,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for name, status, detail in checks:
         print(f"[{status}] {name}: {detail}")
     passed = sum(1 for _, status, _ in checks if status == DOCTOR_PASS)
+    info = sum(1 for _, status, _ in checks if status == DOCTOR_INFO)
     failed = sum(1 for _, status, _ in checks if status == DOCTOR_FAIL)
-    summary = f"\n{passed}/{len(checks)} PASS"
-    if failed:
-        summary += f"，{failed} FAIL"
-    print(summary)
+    # Print all three counts, not "N/6 PASS": with INFO items in the mix a
+    # fully healthy install reports 4 of 6, which reads as a failure. The
+    # verdict is spelled out rather than left for the reader to infer.
+    verdict = "有項目未通過" if failed else "安裝正常"
+    print(f"\n{passed} PASS / {info} INFO / {failed} FAIL — {verdict}")
     return 1 if failed else 0
 
 

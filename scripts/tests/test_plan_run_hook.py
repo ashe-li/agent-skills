@@ -1457,6 +1457,38 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("$HOME", detail)
         self.assertFalse(marker.exists(), "probe executed a runner the wrapper would refuse")
 
+    def _run_doctor(self, checks):
+        buf = io.StringIO()
+        with mock.patch.object(pr, "_doctor_check_python_version", lambda: checks[0]), \
+             mock.patch.object(pr, "_doctor_check_plan_run_dir", lambda: checks[1]), \
+             mock.patch.object(pr, "_doctor_check_settings_hook", lambda: checks[2]), \
+             mock.patch.object(pr, "_doctor_check_wrapper_script", lambda: checks[3]), \
+             mock.patch.object(pr, "_doctor_check_hook_stop_supported", lambda: checks[4]), \
+             mock.patch.object(pr, "_doctor_check_pointer", lambda: checks[5]), \
+             contextlib.redirect_stdout(buf):
+            rc = pr.cmd_doctor(argparse.Namespace())
+        return rc, buf.getvalue()
+
+    @staticmethod
+    def _checks(statuses):
+        return [(f"c{i}", s, "d") for i, s in enumerate(statuses)]
+
+    def test_doctor_summary_counts_info_and_states_verdict(self):
+        """A healthy install has INFO items, so "4/6 PASS" reads as a failure.
+        All three counts are printed and the verdict is spelled out."""
+        rc, out = self._run_doctor(self._checks(
+            [pr.DOCTOR_PASS, pr.DOCTOR_INFO, pr.DOCTOR_PASS,
+             pr.DOCTOR_PASS, pr.DOCTOR_PASS, pr.DOCTOR_INFO]))
+        self.assertEqual(rc, 0)
+        self.assertIn("4 PASS / 2 INFO / 0 FAIL — 安裝正常", out)
+
+    def test_doctor_summary_on_failure_states_verdict_and_exits_1(self):
+        rc, out = self._run_doctor(self._checks(
+            [pr.DOCTOR_PASS, pr.DOCTOR_INFO, pr.DOCTOR_PASS,
+             pr.DOCTOR_PASS, pr.DOCTOR_FAIL, pr.DOCTOR_INFO]))
+        self.assertEqual(rc, 1)
+        self.assertIn("3 PASS / 2 INFO / 1 FAIL — 有項目未通過", out)
+
     def test_missing_plan_run_dir_is_info_not_fail(self):
         """S2.7: the directory is created on first attach, so its absence is
         the normal post-install state -- FAIL there is a false alarm."""

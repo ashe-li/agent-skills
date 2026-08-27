@@ -48,7 +48,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
-/plan-run <plan.md>        # 依 plan DAG 由狀態機推進實作（可與 /goal 複合）
+/plan-run <plan.md>        # 依 plan DAG 推進實作（Stop hook 每輪注入下一步）
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
 /triage                    # 基於消融數據退役/復原 learned skills
@@ -71,7 +71,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | **Deprecated** — Defer/restore ECC skills 減少 init tokens，等 harness 端 ECC plugin 處置定案後移除 |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
-| [`/plan-run`](#plan-run--plan-dag-推進器狀態機-by-code) | 依 plan.md DAG 推進實作，Python 狀態機控制順序；可與 `/goal` 複合 |
+| [`/plan-run`](#plan-run--plan-dag-推進器控制流在-stop-hook) | 依 plan.md DAG 推進實作，控制流在 Stop hook（harness 每輪強制查 state 並注入下一步） |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
 | [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
@@ -142,7 +142,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 0 追蹤預設用回覆內的文字 Step 清單；只有 session 確實有 Task 工具時才詢問是否改用 TaskCreate/TaskUpdate（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)）
 - Step 4b 用 `EnterPlanMode` 呈現計畫（Claude Code 2.1.77+ accept 時自動觸發 session auto-naming），使用者確認後才寫入檔案
 - Step 6 可選進入 worktree 隔離開發
-- Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run` 狀態機（手動）/ `/plan-run` + `/goal` 自動推進
+- Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run`（Stop hook 驅動，裝了 hook 就會自動逐步推進）
 - 不自動執行實作，使用者確認後才開始
 
 </details>
@@ -265,7 +265,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 - 自動偵測待歸檔的 plan（或手動指定檔名）
 - 補充「狀態：完成」標記與驗證結果段落
-- 內建 Hook 設定：`ExitPlanMode` PostToolUse hook 自動存至 `plans/active/`
+- 內建 Hook 設定：`ExitPlanMode` PostToolUse hook 自動存至 `plans/active/`（安裝步驟見 [`docs/hooks-setup.md`](docs/hooks-setup.md)，同一份文件的第二篇是 `/plan-run` 的 Stop hook）
 - 內建 Rule 範本：加入 CLAUDE.md 確保主動歸檔
 
 **目錄規範：** `plans/active/` → 進行中 ｜ `plans/completed/` → 已完成 ｜ `plans/archived/` → 長期封存
@@ -402,22 +402,23 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
-### `/plan-run` — Plan DAG 推進器（狀態機 by code）
+### `/plan-run` — Plan DAG 推進器（控制流在 Stop hook）
 
-依照 `plan.md` 的 Dependencies DAG，由 Python 狀態機決定下一步該執行哪些 step，避免 LLM 自主推進造成漏步、亂序。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）；session 有 Task 工具時，狀態機額外指定 `TaskCreate` 該如何串接，避免 `addBlockedBy` 串錯。
+依照 `plan.md` 的 Dependencies DAG 推進實作。控制流掛在 Claude Code 官方的 **Stop hook** 上：harness 每輪結束時強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要把下一步注入回模型——LLM 不需要（也不應該）主動想起查狀態。安裝步驟見 [`docs/hooks-setup.md`](docs/hooks-setup.md) 的「Plan DAG 推進 Stop Hook」章節；未安裝時 `/plan-run` 仍可用，但退回手動模式。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）。
 
 <details>
 <summary>Features</summary>
 
-- **DAG 推進邏輯在 Python**：`scripts/plan_runner.py` 控制 step 順序、依賴檢查、status transition；LLM 不負責「下一步是什麼」的判斷
-- **LLM 只負責執行**：把 transition 回傳的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **控制流在 Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要注入下一步。對比「用文字請 LLM 自願呼叫腳本」——後者的第一層控制流仍在模型手上
+- **LLM 只負責執行**：把 hook 指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **跨 session 續推**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
 - **Token 策略三層**：
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
-- **與 `/goal` 複合**：可設 `/goal plan_runner.py status all_done=true` 讓 DAG 自動推進；step 失敗仍由 HITL gate 把關
+- **每 6 步一次 check-in**：harness 硬性規定連續 8 次 block 就強制結束該輪。hook 主動在第 6 步（或更早的 phase 邊界）停下來，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**
 

@@ -137,7 +137,7 @@
 
 - [ ] **S2.2** — 既有子命令回歸測試
   - Files: scripts/tests/test_plan_runner_regression.py
-  - Action: 對 12 個既有子命令（`init`/`next`/`start`/`complete`/`fail`/`skip`/`status`/`index`/`dag`/`normalize`/`set-parent`/`reset`）逐一比對 stdout 契約。強制 assertion：`complete` 無 task_id 時輸出**不得**含 `## Required sync`；有 task_id 時**必須**含且含 `TaskUpdate(...)`；`complete` 首行仍為 `Progress: N/M` 且第二行含 `pending:X | completed:Y`；`init --no-attach` 的 stdout 與 base commit `e745670` 逐字元相同（先在 base 產 golden 檔）；非法轉移（`completed → pending`）仍被拒；`normalize` 仍 idempotent
+  - Action: 對 12 個既有子命令（`init`/`next`/`start`/`complete`/`fail`/`skip`/`status`/`index`/`dag`/`normalize`/`set-parent`/`reset`）逐一比對 stdout 契約。強制 assertion：`complete` 無 task_id 時輸出**不得**含 `## Required sync`；有 task_id 時**必須**含且含 `TaskUpdate(...)`；`complete` 的 stdout 第一行仍為 `# completed: <step>`，其內嵌 state view 區塊首行仍為 `Progress: N/M`，且該行之後（有 parent task 時中間隔一行 `Parent task:`）緊接 `pending:X | completed:Y` 計數行；`init --no-attach` 的 stdout 與 base commit `e745670` 逐字元相同（先在 base 產 golden 檔）；非法轉移（`completed → pending`）仍被拒；`normalize` 仍 idempotent
   - Dependencies: S1.4, S1.7
   - Risk: golden 檔含絕對路徑造成環境相依；產生時把 plan 路徑正規化後再比對
   - Token: 【1 × Sonnet × ~14K】

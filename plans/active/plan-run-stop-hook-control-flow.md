@@ -384,18 +384,34 @@ hook 注入的 `reason` 會以 harness 的權威被當成 LLM 的下一個指令
 
 ## Acceptance Criteria
 
-- [ ] **AC1｜真實多 step plan 跑得完，中途無 LLM 自願查狀態**：以 `google-news-traffic-recovery.md` 的沙箱副本（20 steps / 5 phases）跑完全程。證據：transcript 中 LLM 主動呼叫 `next`/`status`/`index` 的次數為 **0**；每一次推進都由 hook 的 block reason 觸發；交叉依賴 `S4.2 <- S4.1,S3.4` 在兩者皆 completed 之前不曾被指派。
-- [ ] **AC2｜跨 session 續推**：中途 `/clear` 開新 session，隨便說一句話結束第一輪；hook 在該輪結束時 block，reason 指向**正確的下一個 ready step**（與 `status` 輸出一致）。同一驗證另跑一次「模擬 compaction」變體。
-- [ ] **AC3｜fail 的 HITL gate 未被破壞**：對某 step 跑 `fail`，該輪 **turn 正常結束**（hook 回 `{}` 或 `decision: allow`），主線出現 `AskUserQuestion` 三選一（重試/跳過/中止），且後續輪次在使用者回答前不再被 hook block。
-- [ ] **AC4｜對其他 session 零影響**：在 3 個無 active plan 的 cwd 各跑一輪，hook stdout/stderr 皆為空、`exit 0`、耗時 < 200ms；4 個既有 Stop hook 的 observability 事件照常寫入（`/obs` 或 events.jsonl 可查）。同 cwd 並行第二個 session 時不重複驅動。
-- [ ] **AC5｜8-block 行為可觀察且有意義**：20 步跑完的過程中至少出現 2 次 check-in；每次 check-in 前一輪 Claude 都輸出了進度摘要（含 N/M 與下一步）；**沒有任何一次是被 harness 強制打斷**（連續 block 數不曾達 8）；至少 1 次 check-in 落在 phase 邊界。
-- [ ] **AC6｜SKILL.md 行數與砍除項對照可驗**：`wc -l plan-run/SKILL.md` ≤ 135；`grep -c "/goal" plan-run/SKILL.md` = 0；`grep -c "TaskCreate" plan-run/SKILL.md` ≤ 1（僅 frontmatter）；不再出現「LLM 不負責『下一步是什麼』的判斷」；Plan 格式約束表的 Phase 標頭列已改為與 `^###\s+(.+)$` 相符的敘述；`python3 scripts/check_skill.py --files plan-run/SKILL.md --repo-dir .` 通過。
-- [ ] **AC7｜既有 `plan_runner.py` 子命令零回歸**：`python3 -m unittest discover scripts/tests` 全綠。其中至少含：`complete` 無 task_id 時輸出不含 `## Required sync`、有 task_id 時含且含 `TaskUpdate(`；`complete` 首行為 `Progress: N/M` 且第二行含 `pending:` / `completed:`；`init --no-attach` stdout 與 base `e745670` 的 golden 檔一致；非法轉移仍被拒；`normalize` 仍 idempotent。
-- [ ] **AC8｜多 hook 共存有實測結論**：S2.4 產出一張表，明確記載「兩個 hook 同時 block 時 Claude 實際收到哪一則 reason」「`wrap.sh` 是否原樣轉送 JSON」「top-level vs `hookSpecificOutput` 哪個形狀在本機 v2.1.2xx 有效」，並據此定案 hook 的輸出形狀。
-- [ ] **AC9｜安全項逐條有據**：`/security-review-scoped` 對 shell 執行、路徑驗證、pointer 權限、prompt-injection 隔離四面各給 PASS，或給出的 FAIL 已修正並複驗。
-- [ ] **AC10｜安裝可逆**：**S2.7 實際執行**移除步驟後產出 `.verification/2026-08-26/uninstall-reversibility.md`，其中記載 `settings.json` 回到 4 個 Stop hook（且四個既有 hook 的 command 字串與備份逐字相同）、`~/.claude/plan-run/` 已刪除、新 session 一輪正常結束、`plan_runner.py` 既有子命令仍可手動使用，最後還原安裝並 `doctor` 確認 5 個 hook 在位。
+- [x] **AC1｜真實多 step plan 跑得完，中途無 LLM 自願查狀態**：以 `google-news-traffic-recovery.md` 的沙箱副本（20 steps / 5 phases）跑完全程。證據：transcript 中 LLM 主動呼叫 `next`/`status`/`index` 的次數為 **0**；每一次推進都由 hook 的 block reason 觸發；交叉依賴 `S4.2 <- S4.1,S3.4` 在兩者皆 completed 之前不曾被指派。
+  - 驗收：**PASS** — 20-step 沙箱 E2E 跑完 20/20，`status`/`next`/`index`/`dag` 呼叫 **0 次**；交叉依賴 `S4.2 <- S4.1,S3.4` 正確擋在兩個前置之後（第 16 位）。證據：`.verification/2026-08-26/e2e-20-step-plan.md`
+- [x] **AC2｜跨 session 續推**：中途 `/clear` 開新 session，隨便說一句話結束第一輪；hook 在該輪結束時 block，reason 指向**正確的下一個 ready step**（與 `status` 輸出一致）。同一驗證另跑一次「模擬 compaction」變體。
+  - 驗收：**PASS** — 變體 (a)，lease 過期後新 session 首輪即接上正確的下一步。同檔
+- [x] **AC3｜fail 的 HITL gate 未被破壞**：對某 step 跑 `fail`，該輪 **turn 正常結束**（hook 回 `{}` 或 `decision: allow`），主線出現 `AskUserQuestion` 三選一（重試/跳過/中止），且後續輪次在使用者回答前不再被 hook block。
+  - 驗收：**PASS** — 變體 (b)，`fail` 後 turn 正常結束、hook 不 block。同檔
+- [x] **AC4｜對其他 session 零影響**：在 3 個無 active plan 的 cwd 各跑一輪，hook stdout/stderr 皆為空、`exit 0`、耗時 < 200ms；4 個既有 Stop hook 的 observability 事件照常寫入（`/obs` 或 events.jsonl 可查）。同 cwd 並行第二個 session 時不重複驅動。
+  - 驗收：**PASS** — 三個無 active plan 的 cwd 各跑一輪，stdout **與 stderr 皆 0 bytes**、exit 0、耗時中位數 69ms（n=15）；四個既有 Stop hook 觸發次數與新 hook 一致；lease 仲裁擋下同 cwd 的第二個 session。證據：`zero-impact.md`
+- [x] **AC5｜8-block 行為可觀察且有意義**：20 步跑完的過程中至少出現 2 次 check-in；每次 check-in 前一輪 Claude 都輸出了進度摘要（含 N/M 與下一步）；**沒有任何一次是被 harness 強制打斷**（連續 block 數不曾達 8）；至少 1 次 check-in 落在 phase 邊界。
+  - 驗收：**PASS（一項未取得直接證據）** — 每輪推進正好 6 步 = `BLOCK_BUDGET`，**連續 block 數不曾達 8**；phase 邊界 check-in 觸發 **3 次**（≥2 且 ≥1 落在 phase 邊界）。惟「每次 check-in 前一輪都輸出進度摘要」這一項證據檔未逐輪記載，未另行補驗
+- [x] **AC6｜SKILL.md 行數與砍除項對照可驗**：`wc -l plan-run/SKILL.md` ≤ 135；`grep -c "/goal" plan-run/SKILL.md` = 0；`grep -c "TaskCreate" plan-run/SKILL.md` ≤ 1（僅 frontmatter）；不再出現「LLM 不負責『下一步是什麼』的判斷」；Plan 格式約束表的 Phase 標頭列已改為與 `^###\s+(.+)$` 相符的敘述；`python3 scripts/check_skill.py --files plan-run/SKILL.md --repo-dir .` 通過。
+  - 驗收：**PASS** — `wc -l` = **134** ≤135；`grep -c "/goal"` = 0；`grep -c "TaskCreate"` = 1（僅 frontmatter）；禁用語 0；Phase 標頭列已改為與 parser regex 相符的敘述並區分 parser 與 normalize；`check_skill.py` PASS（25.0）
+- [x] **AC7｜既有 `plan_runner.py` 子命令零回歸**：`python3 -m unittest discover scripts/tests` 全綠。其中至少含：`complete` 無 task_id 時輸出不含 `## Required sync`、有 task_id 時含且含 `TaskUpdate(`；`complete` 首行為 `Progress: N/M` 且第二行含 `pending:` / `completed:`；`init --no-attach` stdout 與 base `e745670` 的 golden 檔一致；非法轉移仍被拒；`normalize` 仍 idempotent。
+  - 驗收：**PASS** — `python3 -m unittest discover scripts/tests` **104 則全綠**，含 `init --no-attach` 對 base `e745670` golden 的逐位元組比對
+- [x] **AC8｜多 hook 共存有實測結論**：S2.4 產出一張表，明確記載「兩個 hook 同時 block 時 Claude 實際收到哪一則 reason」「`wrap.sh` 是否原樣轉送 JSON」「top-level vs `hookSpecificOutput` 哪個形狀在本機 v2.1.2xx 有效」，並據此定案 hook 的輸出形狀。
+  - 驗收：**PASS** — S2.4 產出四變體對照表並據此定案採 top-level `reason`；另證實多 hook 同時 block 時每則 reason 都送達、`wrap.sh` 逐位元組原樣轉送、`--settings` 是合併而非取代。證據：`multi-hook-coexistence.md`
+- [x] **AC9｜安全項逐條有據**：`/security-review-scoped` 對 shell 執行、路徑驗證、pointer 權限、prompt-injection 隔離四面各給 PASS，或給出的 FAIL 已修正並複驗。
+  - 驗收：**PASS** — 四面（shell 執行、路徑驗證、pointer 權限、prompt-injection 隔離）皆達「PASS 或 FAIL 已修正並複驗」。證據：`security-review-scoped.md`
+- [x] **AC10｜安裝可逆**：**S2.7 實際執行**移除步驟後產出 `.verification/2026-08-26/uninstall-reversibility.md`，其中記載 `settings.json` 回到 4 個 Stop hook（且四個既有 hook 的 command 字串與備份逐字相同）、`~/.claude/plan-run/` 已刪除、新 session 一輪正常結束、`plan_runner.py` 既有子命令仍可手動使用，最後還原安裝並 `doctor` 確認 5 個 hook 在位。
+  - 驗收：**PASS** — S2.7 實際執行移除六段全過，四個既有 hook 的 JSON 與備份逐字相同、新 session 一輪正常結束且 `plan-run` 0 次、12 個子命令 13 次呼叫全 exit 0、還原後結構與備份完全相同。證據：`uninstall-reversibility.md`
 
 ## Review Notes
+
+- **狀態：19/19 完成，10 條 AC 全數勾選（2026-08-27）。** AC5 有一項子條件（「每次 check-in 前一輪都輸出進度摘要」）證據檔未逐輪記載，未另行補驗，已在該條註明——其餘三項子條件皆有直接證據。
+- **S3.5 的 doc-reviewer 抓到三個 FAIL，主對話逐條實跑複驗後全部成立並已修**（commit `4323702`）：①失敗處理的 `reset` / `skip` 漏必填的 plan 參數，照抄會噴 argparse error——那三行正好是使用者最可能直接複製貼上、且發生在事情已經出錯的時刻；②`doctor` 範例輸出省掉了 `: <路徑>` 尾巴，與實跑不符；③格式約束表的可辨識欄位漏 `Why` / `Input` / `Output`（`FIELD_KEYS` 實際 11 個，**191 行版本就漏了**，非本次造成）。
+- **merge 後還有兩處本機資產要同步**（皆在 agent-skills 之外，本 plan 不改）：`~/.claude/skills/dispatch-loop/SKILL.md` 第 3 行 description 的「`/plan-run` + `/goal`」，以及 `~/.claude/CLAUDE.md` 的「委派推進迴圈」條目。後者屬 CLAUDE.md，改動前須依 `playbooks/40-maintenance-protocol.md` 先備份到 `~/.claude/backups/`。
+- **順手修掉的既有問題**：README skill 表有兩條指向不存在標頭的連結（`/triage`、`/learn-eval-deep`），以 base commit `e745670` 驗過同樣是斷的，非本次造成，已改為純文字（`7cc6306`）。
+- **`doctor` 摘要行的假失敗**：六項中兩項天生是 INFO，原本印 `4/6 PASS`，健康安裝永遠印不出滿分、讀起來像沒過。改為 `4 PASS / 2 INFO / 0 FAIL — 安裝正常` 並補 2 則回歸測試（`40d56a7` 之後的修正）。
 
 - **設計原則的誠實化是本案的實質交付之一**。改完之後，`/plan-run` 是「控制流在 harness + Python、LLM 只執行與回報」；若 hook 沒裝，SKILL.md 必須誠實說「你現在是手動模式，LLM 會盡量記得查狀態，但不保證」。不要在任何一份文件裡把手動模式寫成等價。
 - **跨 repo follow-up（本 plan 不做）**：`~/.claude/skills/dispatch-loop/SKILL.md` 描述的是「`/plan-run` + `/goal` 逐 step 派工」的標準操作模式，屬 knowledge-base 資產。本 plan 移除 `/goal` 後該 skill 會與 agent-skills 不一致，需另開一次更新。

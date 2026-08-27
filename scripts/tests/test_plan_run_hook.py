@@ -1457,6 +1457,32 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("$HOME", detail)
         self.assertFalse(marker.exists(), "probe executed a runner the wrapper would refuse")
 
+    def test_missing_plan_run_dir_is_info_not_fail(self):
+        """S2.7: the directory is created on first attach, so its absence is
+        the normal post-install state -- FAIL there is a false alarm."""
+        absent = self.tmp_root / "never-created"
+        with mock.patch.object(pr, "PLAN_RUN_DIR", absent):
+            name, status, detail = pr._doctor_check_plan_run_dir()
+        self.assertEqual(status, pr.DOCTOR_INFO, msg=detail)
+        self.assertIn("非錯誤", detail)
+
+    def test_missing_plan_run_dir_fails_when_parent_unwritable(self):
+        locked = self.tmp_root / "locked"
+        locked.mkdir()
+        target = locked / "plan-run"
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        with mock.patch.object(pr, "PLAN_RUN_DIR", target):
+            name, status, detail = pr._doctor_check_plan_run_dir()
+        self.assertEqual(status, pr.DOCTOR_FAIL, msg=detail)
+
+    def test_existing_plan_run_dir_still_passes(self):
+        present = self.tmp_root / "plan-run-present"
+        present.mkdir()
+        with mock.patch.object(pr, "PLAN_RUN_DIR", present):
+            name, status, detail = pr._doctor_check_plan_run_dir()
+        self.assertEqual(status, pr.DOCTOR_PASS, msg=detail)
+
     def test_no_pointer_is_info_not_fail(self):
         empty_active = self.tmp_root / "plan-run" / "active"
         empty_active.mkdir(parents=True, exist_ok=True)

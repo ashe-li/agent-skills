@@ -39,6 +39,13 @@ AGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$HOME/Documents/agent-skills}"
 # process's environment (direnv, settings.json's `env` block) could
 # otherwise point it at an arbitrary checkout. Outside $HOME we do nothing,
 # matching every other failure path here.
+# Resolve before comparing: a bare glob match is a *string* test, so both
+# "$HOME/../../elsewhere" and "$HOME/<symlink-pointing-out>" satisfy it while
+# the kernel opens a file outside $HOME. `cd -P` collapses `..` and symlinks,
+# so what we compare is the real final path. A directory we cannot enter is
+# unusable anyway, hence the same silent exit 0.
+AGENT_SKILLS_DIR=$(cd "$AGENT_SKILLS_DIR" 2>/dev/null && pwd -P) || exit 0
+
 case "$AGENT_SKILLS_DIR" in
     "$HOME"/*) ;;
     *) exit 0 ;;

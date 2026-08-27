@@ -112,7 +112,11 @@ class PlanRunnerRegressionTestCase(unittest.TestCase):
     def init_plan(self) -> subprocess.CompletedProcess:
         r = run_cli("init", str(self.plan_path), "--no-attach")
         self.assertEqual(r.returncode, 0, msg=r.stderr)
-        self.assertNotIn("Attached:", r.stdout, "must not attach a pointer")
+        # S2.6: attach's one-line `Attached: <pointer>` became three lines
+        # (Plan:/Cwd:/Pointer:), so assert on the new markers instead — the
+        # old string can no longer appear regardless of --no-attach.
+        self.assertNotIn("Pointer:", r.stdout, "must not attach a pointer")
+        self.assertNotIn("Cwd:", r.stdout, "must not attach a pointer")
         return r
 
     def _progress_and_counts_lines(self, stdout: str) -> tuple[str, str]:

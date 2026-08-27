@@ -79,13 +79,21 @@ cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%Y%m%d%H%M%S)
 # JSON 語法驗證
 python3 -c "import json; json.load(open(__import__('os').path.expanduser('~/.claude/settings.json')))" && echo "JSON OK"
 
-# 確認 hooks.Stop 陣列長度是 5（4 個既有 + 1 個新增），且沒有任何一個舊 hook 消失
+# 確認 hooks.Stop 陣列長度是 5（4 個既有 + 1 個新增），且 4 個既有 hook 的 command
+# 字串逐字未變。只比長度不夠：長度 5 也可能是「刪了一個舊的、加了兩個新的」。
+# 把 <timestamp> 換成 2.1 步驟實際產生的備份檔名。
 python3 -c "
 import json, os
-p = os.path.expanduser('~/.claude/settings.json')
-d = json.load(open(p))
-stop = d.get('hooks', {}).get('Stop', [])
-print('Stop hook 數量:', len(stop))
+def commands(path):
+    d = json.load(open(os.path.expanduser(path)))
+    return [h.get('command') for e in d.get('hooks', {}).get('Stop', [])
+            for h in e.get('hooks', [])]
+before = commands('~/.claude/settings.json.bak.<timestamp>')
+after = commands('~/.claude/settings.json')
+assert after[:len(before)] == before, ('舊 hook 被改動或消失', before, after)
+assert len(after) == len(before) + 1, ('新增數量不是 1', len(before), len(after))
+assert 'plan-run-stop' in after[-1], after[-1]
+print('既有', len(before), '個 hook 逐字未變；新增 1 個:', after[-1])
 "
 
 # 跑 doctor 確認 plan_runner 端也認得安裝狀態

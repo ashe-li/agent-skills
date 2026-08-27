@@ -3211,11 +3211,25 @@ def _doctor_check_python_version() -> tuple[str, str, str]:
 
 
 def _doctor_check_plan_run_dir() -> tuple[str, str, str]:
+    """Absence is not a fault: `_ensure_pointer_active_dir()` creates this on
+    the first attach, so a fresh install (or one whose state was cleared)
+    legitimately has no such directory. What matters is whether we could
+    create it -- i.e. whether the parent is writable. Reporting FAIL for the
+    normal post-install state is the same mistake as flagging "no active
+    plan" (S2.6); a self-check that cries wolf trains people to ignore it.
+    """
+    name = "~/.claude/plan-run/ 可寫"
+    if not PLAN_RUN_DIR.exists():
+        parent = PLAN_RUN_DIR.parent
+        if parent.is_dir() and os.access(parent, os.W_OK):
+            return (name, DOCTOR_INFO,
+                    f"{PLAN_RUN_DIR} 尚未建立（首次 attach 時自動建立，非錯誤）")
+        return (name, DOCTOR_FAIL, f"{PLAN_RUN_DIR} 不存在且 {parent} 不可寫")
     if not PLAN_RUN_DIR.is_dir():
-        return ("~/.claude/plan-run/ 可寫", DOCTOR_FAIL, f"{PLAN_RUN_DIR} 不存在")
+        return (name, DOCTOR_FAIL, f"{PLAN_RUN_DIR} 存在但不是目錄")
     writable = os.access(PLAN_RUN_DIR, os.W_OK)
     detail = str(PLAN_RUN_DIR) if writable else f"{PLAN_RUN_DIR} 存在但不可寫"
-    return ("~/.claude/plan-run/ 可寫", _doctor_status(writable), detail)
+    return (name, _doctor_status(writable), detail)
 
 
 def _doctor_check_settings_hook() -> tuple[str, str, str]:

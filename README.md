@@ -35,6 +35,7 @@ npx skills add ashe-li/agent-skills --global
 /assist <任務>              # 指定任務描述
 /simplify                  # 自動修正程式碼（dead code、命名、nesting）
 /notion-plan <URL>         # Notion 需求 → 實作計畫
+/notion-report <URL>       # 把成果寫回 Notion（API，指定收件對象）
 /worktree                  # 列出所有 worktree 狀態
 /worktree create <name>    # 建立新 worktree
 /worktree cleanup          # 清理已 merge 的 worktree（單 repo 互動）
@@ -65,6 +66,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
 | [`/simplify`](#simplify--自動修正) | `/code-review` 後自動修正（並行互補模式） |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
+| [`/notion-report`](#notion-report--把成果寫回-notion) | 把工作成果寫回 Notion 頁面，依收件對象調整內容 |
 | [`/worktree`](#worktree--git-worktree-管理) | Worktree 建立、狀態、清理 |
 | [`/curation`](#curation--learned-skills-品質管控) | 掃描 learned skills 格式、標準化、清理廢棄 |
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
@@ -216,6 +218,25 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Playwright MCP 抓取（Notion 為 CSR，不用 WebFetch）
 - 自動處理長頁面捲動載入、Toggle 展開、登入偵測
 - 擷取內容整理為結構化 Markdown 後，自動觸發 `/design`
+
+</details>
+
+### `/notion-report` — 把成果寫回 Notion
+
+`/notion-plan` 的反向：那個從 Notion 讀需求進來，這個往 Notion 寫結果出去。
+
+<details>
+<summary>Features</summary>
+
+- **走官方 REST API，不開瀏覽器**——`/notion-plan` 必須用 `playwright-cli` 是因為要讀 CSR 畫面；寫入不需要看畫面，因此本 skill 不注入 snapshot、不吃 context
+- **依收件對象調整內容**：`--to pm|design|ops|eng`，各自有該寫與刻意不寫的項目
+- 兩種寫入模式：`--mode append`（預設，追加區塊到頁面末端）／`--mode comment`（發成頁面 comment，侵入性最低）
+- 只做 append 與 comment，**不刪除、不覆寫**既有內容
+- 寫入前強制 dry-run 過目，寫入後 `readback` 讀回驗證
+- Markdown → Notion block 轉換由 `scripts/notion_api.py` 處理（標題／清單／callout／code／連結／行內粗體）
+
+需一次性設定 Notion internal integration token，並把目標頁面加進 integration 的 Connections，
+細節見 [`notion-report/SKILL.md`](notion-report/SKILL.md)。
 
 </details>
 
@@ -589,6 +610,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 需要 worktree ───→ /worktree create <name>
 ├─ Worktree 要清理 ─→ /worktree cleanup
 ├─ 有 Notion ticket ─→ /notion-plan <URL>
+├─ 成果要回報進 Notion → /notion-report <URL> --to pm|design|ops|eng
 ├─ Learned skills 要分流 → /triage
 ├─ 技術決策需要深度查驗 → /evidence-check <做法>
 ├─ 高風險決策需迭代驗證 → /verify-evidence-loop <主張>
@@ -643,6 +665,16 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 **適合：** 不確定該用哪個工具
 **不適合：** 已知道要用哪個 skill
+
+### `/notion-report`
+
+```
+/notion-report https://app.notion.com/p/workspace/abc123 --to pm
+/notion-report <URL> --to ops --mode comment
+/notion-report <URL> --to eng --dry-run     # 只出稿不寫入
+```
+
+**適合：** 工作做完了，要把結果回報給 PM／設計／營運／工程，且不想開瀏覽器
 
 ### `/notion-plan`
 
@@ -717,5 +749,6 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 | `/update` | Pending | nested agents (`general-purpose` 文件更新 + 審查 + inline pattern 提取) |
 | `/assist` | Pending | 情境分析可測，pipeline 執行會修改專案 |
 | `/notion-plan` | Pending | 依賴外部 Notion 頁面 |
+| `/notion-report` | Pending | 寫入外部 Notion 頁面，需 mock API 或專用測試頁 |
 
 </details>

@@ -275,9 +275,18 @@ playwright-cli -s=notion eval "$(python3 "$BROWSER" insert-js "$DRAFT")"
 
 回傳 JSON 的判讀：
 
-- `handledByNotion: true` → Notion 的貼上處理器接走了事件，正常
-- `handledByNotion: false` → 事件沒被接管，內容多半沒進去，**不要重試**，先做 Step 5 確認實際狀態
 - `FAIL: ...` → 照訊息處理，多半是頁面沒載完或無編輯權限
+- `dispatched: true` → 事件送出了。**這不代表寫入成功，也不代表失敗。**
+- `blocksBefore` → 記下這個數字，Step 5 要拿它跟寫入後的 block 數比對
+- `preventDefaultCalled` → **純事實記錄，不是成功訊號，不要拿它下判斷**
+
+> **實測紀錄（2026-08-27 首次端到端執行）**：`preventDefaultCalled: false`
+> 但內容其實**完全寫入成功**（block 數 8 → 50，型別轉換全正確）。
+> Notion 的貼上處理器不走 `preventDefault`，所以 `dispatchEvent` 的回傳值
+> 對這個編輯器沒有判別力。**唯一權威的成功判定是 Step 5 的讀回驗證。**
+>
+> 當時若把它當失敗訊號而重試，就會寫進去兩份——這正是紅線第 7 條
+> 「寫入失敗預設不重試，先驗證實際狀態」存在的理由。
 
 > **為什麼用 synthetic paste 而不是逐字打字**：Notion 的貼上處理器會把 text/plain
 > 的 Markdown 直接解析成對應 block（標題、清單、code block 都認得）。逐字打字則要
@@ -311,9 +320,21 @@ browser 路徑（挑草稿裡一段夠獨特的字串當 needle，例如標題�
 playwright-cli -s=notion eval "$(python3 "$BROWSER" verify-js "<草稿標題那一行>")"
 ```
 
-`found: true` 且 **`occurrences: 1`** 才算過。
-`occurrences` 大於 1 代表**送出了兩次**（常見於誤判失敗後重試），
-要告知使用者並請他手動刪掉重複的那份——不要自己再操作頁面去刪。
+**這一步是 browser 路徑唯一的成功判定，Step 4 的回傳值都不算數。** 三項全中才算過：
+
+1. `found: true`
+2. **`occurrences: 1`**——大於 1 代表送出了兩次（常見於誤判失敗後重試），
+   要告知使用者並請他手動刪掉重複的那份，不要自己再操作頁面去刪
+3. block 數比 Step 4 的 `blocksBefore` 明顯增加
+
+想再確認排版有正確解析（而不是整段變成一坨純文字），數一下 block 型別分佈：
+
+```bash
+playwright-cli -s=notion eval '() => { const c = document.querySelector(".notion-page-content") || document.querySelector("[data-content-editable-root=\"true\"]"); const counts = {}; [...c.querySelectorAll("[data-block-id]")].forEach(b => { const cl = [...b.classList].find(x => x.startsWith("notion-") && x.endsWith("-block")) || "other"; counts[cl] = (counts[cl] || 0) + 1; }); return JSON.stringify(counts); }'
+```
+
+看到 `notion-header-block` / `notion-bulleted_list-block` / `notion-divider-block`
+等型別就代表 Markdown 有被解析；若幾乎全是 `notion-text-block`，代表被當純文字貼進去了。
 
 確認最後幾個 block 就是剛寫入的內容、順序正確、沒有重複送出。
 把 readback 輸出存進 `.verification/<date>/notion-report/readback.txt` 當證據。
@@ -328,7 +349,7 @@ playwright-cli -s=notion eval "$(python3 "$BROWSER" verify-js "<草稿標題那�
 | 寫錯內容 | API 無法整段復原，告知使用者需在 Notion 手動刪除該區塊，並附上要刪的標題 |
 | 頁面很長導致 readback 看不到 | 正常，`readback` 只印最後 n 個；用 `probe` 對照 block 總數變化 |
 | `validation_error` 提到 rich_text 長度 | 單段超過 2000 字，腳本會自動切段；若仍失敗代表單一 block 內容過長，拆成多段 |
-| **（browser）`handledByNotion: false`** | **先做 Step 5 確認實際狀態再說**。盲目重試是這條路徑最容易造成重複寫入的原因 |
+| **（browser）Step 4 看起來像失敗** | **先做 Step 5 確認實際狀態再說**——實測過「訊號說失敗、其實寫入成功」。盲目重試是這條路徑最容易造成重複寫入的原因 |
 | （browser）`editables: 0` | 帳號對該頁只有 view 權限。停止，不要嘗試繞道 |
 | （browser）`loginRedirect: true` | profile session 過期，依「走 browser」段落重新登入一次 |
 | （browser）內容進去了但排版跑掉 | Notion 貼上解析與 Markdown 有落差。**不要在頁面上手動修**，改草稿後請使用者刪掉舊的重寫一次 |

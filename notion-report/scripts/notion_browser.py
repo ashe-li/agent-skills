@@ -88,7 +88,8 @@ def insert_js(md_file):
   range.collapse(false);
   sel.removeAllRanges();
   sel.addRange(range);
-  const before = (content.innerText || "").length;
+  const charsBefore = (content.innerText || "").length;
+  const blocksBefore = content.querySelectorAll("[data-block-id]").length;
   const dt = new DataTransfer();
   dt.setData("text/plain", MD);
   const notCancelled = last.dispatchEvent(new ClipboardEvent("paste", {
@@ -96,8 +97,12 @@ def insert_js(md_file):
   }));
   return JSON.stringify({
     dispatched: true,
-    handledByNotion: !notCancelled,
-    lengthBefore: before,
+    // 純事實記錄：dispatchEvent 是否被 preventDefault 攔下。
+    // 【不是成功訊號】——Notion 的貼上處理器不呼叫 preventDefault，
+    // 實測寫入成功時這裡仍是 false。權威判定一律靠 Step 5 的 verify-js。
+    preventDefaultCalled: !notCancelled,
+    blocksBefore: blocksBefore,
+    charsBefore: charsBefore,
     chars: MD.length
   });
 }"""

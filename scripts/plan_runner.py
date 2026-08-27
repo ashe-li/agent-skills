@@ -1129,12 +1129,27 @@ def _load_pointer_file(pointer_path: Path) -> Any:
         return None
 
 
-def _try_load_active_pointer(candidate: Path) -> ResolvedPointer | None:
+def _try_load_active_pointer(
+    candidate: Path, *, require_valid: bool = True
+) -> ResolvedPointer | None:
+    """Load `candidate`'s pointer file, or None if it does not qualify.
+
+    `require_valid=False` is the Stop hook's entry: it still requires a
+    pointer file that exists, parses as a JSON object, and is not stale,
+    but skips validate_pointer() so a *present but malformed* pointer (or
+    one whose state file is corrupt) still reaches the caller. Without that
+    the hook's "invalid" branch is unreachable and a broken pointer makes
+    the hook go silent instead of warning — see _branch_invalid().
+    """
     pointer_path = pointer_path_for(candidate)
     if not pointer_path.is_file():
         return None
     data = _load_pointer_file(pointer_path)
-    if data is None or validate_pointer(data) != POINTER_STATUS_VALID:
+    # A non-dict body (or unparseable bytes) is unusable either way: we
+    # cannot even name which plan is broken, so there is nothing to report.
+    if not isinstance(data, dict):
+        return None
+    if require_valid and validate_pointer(data) != POINTER_STATUS_VALID:
         return None
     if _is_pointer_stale(data):
         return None
@@ -1192,6 +1207,20 @@ def _git_common_dir_parent(cwd: Path) -> list[Path]:
     return [parent]
 
 
+def _resolve_pointer_in(cwd: str | Path, *, require_valid: bool) -> ResolvedPointer | None:
+    """Shared candidate walk for both resolve_pointer() entry points, so the
+    search order (ancestors, then git common-dir parent) has exactly one
+    implementation and cannot drift between the CLI and the hook.
+    """
+    start = Path(cwd).resolve()
+    candidates = _walk_ancestors(start) + _git_common_dir_parent(start)
+    for candidate in candidates:
+        found = _try_load_active_pointer(candidate, require_valid=require_valid)
+        if found is not None:
+            return found
+    return None
+
+
 def resolve_pointer(cwd: str | Path) -> ResolvedPointer | None:
     """Find the active pointer governing `cwd`, if any.
 
@@ -1200,13 +1229,24 @@ def resolve_pointer(cwd: str | Path) -> ResolvedPointer | None:
     candidate whose pointer file is present, valid, and not stale; returns
     None if nothing qualifies.
     """
-    start = Path(cwd).resolve()
-    candidates = _walk_ancestors(start) + _git_common_dir_parent(start)
-    for candidate in candidates:
-        found = _try_load_active_pointer(candidate)
-        if found is not None:
-            return found
-    return None
+    return _resolve_pointer_in(cwd, require_valid=True)
+
+
+def resolve_pointer_for_hook(cwd: str | Path) -> ResolvedPointer | None:
+    """resolve_pointer() for the Stop hook: same candidate walk, but a
+    present-yet-invalid pointer is *returned* rather than skipped.
+
+    The hook needs to distinguish "no pointer here, none of our business"
+    (stay silent) from "there is a pointer for this cwd and it is broken"
+    (warn once). Only the latter can be reported, and only if the malformed
+    pointer actually reaches decide_hook_action().
+
+    Note this deliberately stops at the first *present* pointer instead of
+    walking past a broken one to a valid ancestor: the nearest pointer is
+    the one governing this cwd, and shadowing its breakage with a parent's
+    plan would be worse than reporting it.
+    """
+    return _resolve_pointer_in(cwd, require_valid=False)
 
 
 def check_single_active_plan(cwd: str | Path, plan_path: str | Path) -> str | None:
@@ -1846,9 +1886,21 @@ def _branch_invalid(ctx: _HookContext) -> HookDecision | None:
     if _hook_pointer_shape_ok(ctx.pointer) and _hook_state_shape_ok(ctx.state):
         return None
     if _hook_str(ctx.pointer.get("warned_at")):
-        return _hook_allow(ctx)
-    ctx.update(warned_at=now_iso())
-    return _hook_allow(ctx, system_message=_INVALID_POINTER_MESSAGE)
+        # Already warned: "go quiet forever" literally — no output (same
+        # silent allow as branch (1)'s "not our cwd") and no write at all.
+        # Going through ctx.updates() here would stamp `last_seen_at` (and
+        # any counter reset) onto a pointer we have just judged malformed.
+        return HookDecision(decision=HOOK_ALLOW, silent=True)
+    # Only `warned_at` is added, and the rest of the file is preserved
+    # byte-for-byte in content: the write must not repair the pointer into
+    # something that looks valid, and must not remove it either.
+    marked = dict(ctx.pointer)
+    marked["warned_at"] = now_iso()
+    return HookDecision(
+        decision=HOOK_ALLOW,
+        system_message=_INVALID_POINTER_MESSAGE,
+        pointer_updates=marked,
+    )
 
 
 def _hook_lease_alive(ctx: _HookContext) -> bool:
@@ -2113,7 +2165,12 @@ def _apply_hook_side_effects(
     if decision.pointer_updates is not None:
         try:
             write_pointer_atomic(resolved.path, decision.pointer_updates)
-        except OSError:
+        # Not just OSError: since the hook now also writes back pointers of
+        # *unvalidated* shape, json.dumps() can raise TypeError/ValueError
+        # (unserializable or out-of-range value) or RecursionError (deeply
+        # nested user JSON). Those must not escape to cmd_hook_stop's
+        # catch-all, which would replace the warning with a bare "{}".
+        except (OSError, TypeError, ValueError, RecursionError):
             pass
     elif decision.delete_pointer:
         try:
@@ -2125,7 +2182,7 @@ def _apply_hook_side_effects(
 def _run_hook_stop() -> None:
     hook_input = _read_hook_input()
     cwd = hook_input.get("cwd")
-    resolved = resolve_pointer(cwd) if isinstance(cwd, str) and cwd else None
+    resolved = resolve_pointer_for_hook(cwd) if isinstance(cwd, str) and cwd else None
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
 

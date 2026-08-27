@@ -72,9 +72,9 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 > Step `<id>` 失敗：`<reason>`；後續 blocked：`<list>`
 >
-> 1. **重試** — `plan_runner.py reset --step=<id>`
-> 2. **跳過** — `plan_runner.py skip <id>`（風險自負）
-> 3. **中止** — `plan_runner.py pause`
+> 1. **重試** — `plan_runner.py reset "$ARGUMENTS" --step=<id>`
+> 2. **跳過** — `plan_runner.py skip "$ARGUMENTS" <id>`（風險自負）
+> 3. **中止** — `plan_runner.py pause`（不吃 plan 參數，作用於 cwd 的 pointer）
 
 ## Step 4: 完成驗證
 
@@ -98,7 +98,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 | Step 標頭 | `- [ ] **<step_id>** — <title>`（`**` bold 可省略；分隔符 `—` `-` `:` `：` 皆可） |
 | Step ID | `S\d+(\.\d+)?[a-z]?`（例：`S0.1`、`S1a`、`S3.1a`、`S12`） |
 | Step 欄位 | `  - <key>: <value>`（縮排 2 空格，ASCII 或全形冒號皆可） |
-| 可辨識欄位 | `Files`、`Action`、`Agent`、`Skill`、`Command`、`Agent/Skill`、`Dependencies`、`Risk` |
+| 可辨識欄位 | `Files`、`Action`、`Agent`、`Skill`、`Command`、`Agent/Skill`、`Dependencies`、`Risk`、`Why`、`Input`、`Output` |
 | Dependencies 值 | 逗號、斜線、空白分隔的 step ID 清單；支援 range 語法 |
 
 **Range 語法**（展開為 plan 內出現順序的完整 list）：`Dependencies: S4.1 ~ S6` → `[S4.1, S4.2, S4.3, S5, S6]`；支援 `~`、`...`、`..`、`–`、`—` 五種分隔符；可與單一 ID 混用；端點不存在時降級為只保留端點 + warning。

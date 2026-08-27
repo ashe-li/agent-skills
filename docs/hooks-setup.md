@@ -220,17 +220,19 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py doctor
 六項全 PASS 或 INFO 才算裝好：
 
 ```
-[PASS] python3 版本: 3.x（需 >= 3.9）
-[INFO] ~/.claude/plan-run/ 可寫: 尚未建立（首次 attach 時自動建立，非錯誤）
+[PASS] python3 版本: 3.14.5（需 >= 3.9）
+[INFO] ~/.claude/plan-run/ 可寫: /Users/<you>/.claude/plan-run 尚未建立（首次 attach 時自動建立，非錯誤）
 [PASS] settings.json Stop hook 已註冊: hooks.Stop 含 plan-run-stop
-[PASS] wrapper script 存在且可執行
-[PASS] wrapper 的 runner 支援 hook-stop
+[PASS] wrapper script 存在且可執行: /Users/<you>/.claude/hooks/plan-run-stop.sh
+[PASS] wrapper 的 runner 支援 hook-stop: /Users/<you>/Documents/agent-skills/scripts/plan_runner.py
 [INFO] 當前 cwd 有效 pointer: 當前 cwd 無 active plan（非錯誤）
 
 4 PASS / 2 INFO / 0 FAIL — 安裝正常
 ```
 
-`INFO` 不是錯誤，是「這件事還沒發生但很正常」——健康的全新安裝就是 4 PASS + 2 INFO，最後一行的判定才是結論。有任一 FAIL 時 `doctor` exit 1，可直接當 CI gate 用。`doctor` 是唯讀的，可以隨時跑。
+（冒號後是實際查到的路徑，上面以 `<you>` 代替家目錄。）
+
+`INFO` 不是錯誤，是「這件事還沒發生但很正常」，所以**全新安裝的最佳成績就是 4 PASS + 2 INFO，印不出 6/6**——最後一行的判定才是結論。等你 `attach` 過一份 plan，那兩項 INFO 會各自轉成 PASS（先變 `5 PASS / 1 INFO`，在有 active plan 的目錄下跑則是 `6 PASS / 0 INFO`）。有任一 FAIL 時 `doctor` exit 1，可直接當 CI gate 用。`doctor` 是唯讀的，可以隨時跑。
 
 ## 4. 與既有 Stop hook 共存
 

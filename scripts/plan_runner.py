@@ -3001,6 +3001,16 @@ def _doctor_wrapper_runner_path() -> Path:
     return Path(base) / "scripts" / "plan_runner.py"
 
 
+def _doctor_wrapper_would_run(runner: Path) -> bool:
+    """Would the wrapper actually execute `runner`? It refuses anything whose
+    real path falls outside $HOME, so a probe that ignores that rule reports
+    PASS for a file the hook will never run -- and reports it in exactly the
+    situation this check was added to catch (a dev-time AGENT_SKILLS_DIR
+    pointing at a sandbox or temp clone, where the hook is silently dead).
+    """
+    return _is_within_allowed_root(runner)
+
+
 def _doctor_check_hook_stop_supported() -> tuple[str, str, str]:
     """Live probe: feed the wrapper's runner a non-Stop event and see whether
     it answers. A checkout predating the `hook-stop` subcommand exits 2 from
@@ -3009,6 +3019,9 @@ def _doctor_check_hook_stop_supported() -> tuple[str, str, str]:
     """
     name = "wrapper 的 runner 支援 hook-stop"
     runner = _doctor_wrapper_runner_path()
+    if not _doctor_wrapper_would_run(runner):
+        return (name, DOCTOR_FAIL,
+                f"{runner} 在 $HOME 之外，wrapper 會拒絕執行它（hook 靜默不作用）")
     if not runner.is_file():
         return (name, DOCTOR_FAIL, f"{runner} 不存在（wrapper 將靜默 exit 0，hook 不作用）")
     try:

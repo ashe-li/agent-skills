@@ -1124,9 +1124,31 @@ class DoctorTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
+        # Under $HOME on purpose: the probe now refuses to execute a runner
+        # whose real path falls outside $HOME (that is what the wrapper does),
+        # so a fixture in the system temp dir would be rejected before the
+        # probe it is meant to exercise ever runs.
+        self._tmp = tempfile.TemporaryDirectory(dir=Path.home(), prefix=".plan-run-test-")
         self.addCleanup(self._tmp.cleanup)
         self.tmp_root = Path(self._tmp.name).resolve()
+
+    def test_probe_fails_when_runner_outside_home(self):
+        """N1: the wrapper refuses anything outside $HOME, so probing it would
+        report PASS for a file the hook will never run -- and would do so in
+        exactly the case the probe exists to catch."""
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        fake = Path(outside.name).resolve() / "scripts"
+        fake.mkdir(parents=True, exist_ok=True)
+        marker = Path(outside.name).resolve() / "EXECUTED"
+        (fake / "plan_runner.py").write_text(
+            f"import pathlib,sys\npathlib.Path({str(marker)!r}).write_text('x')\n"
+            "print('{}')\nsys.exit(0)\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"AGENT_SKILLS_DIR": str(fake.parent)}):
+            name, status, detail = pr._doctor_check_hook_stop_supported()
+        self.assertEqual(status, pr.DOCTOR_FAIL, msg=detail)
+        self.assertIn("$HOME", detail)
+        self.assertFalse(marker.exists(), "probe executed a runner the wrapper would refuse")
 
     def test_no_pointer_is_info_not_fail(self):
         empty_active = self.tmp_root / "plan-run" / "active"

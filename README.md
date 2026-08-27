@@ -35,7 +35,7 @@ npx skills add ashe-li/agent-skills --global
 /assist <任務>              # 指定任務描述
 /simplify                  # 自動修正程式碼（dead code、命名、nesting）
 /notion-plan <URL>         # Notion 需求 → 實作計畫
-/notion-report <URL>       # 把成果寫回 Notion（API，指定收件對象）
+/notion-report <URL>       # 把成果寫回 Notion（API 優先，指定收件對象）
 /worktree                  # 列出所有 worktree 狀態
 /worktree create <name>    # 建立新 worktree
 /worktree cleanup          # 清理已 merge 的 worktree（單 repo 互動）
@@ -66,7 +66,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
 | [`/simplify`](#simplify--自動修正) | `/code-review` 後自動修正（並行互補模式） |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
-| [`/notion-report`](#notion-report--把成果寫回-notion) | 把工作成果寫回 Notion 頁面，依收件對象調整內容 |
+| [`/notion-report`](#notion-report--把成果寫回-notion) | 把成果寫回 Notion，API 優先、無 token 自動退回瀏覽器 |
 | [`/worktree`](#worktree--git-worktree-管理) | Worktree 建立、狀態、清理 |
 | [`/curation`](#curation--learned-skills-品質管控) | 掃描 learned skills 格式、標準化、清理廢棄 |
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
@@ -228,14 +228,21 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 <details>
 <summary>Features</summary>
 
-- **走官方 REST API，不開瀏覽器**——`/notion-plan` 必須用 `playwright-cli` 是因為要讀 CSR 畫面；寫入不需要看畫面，因此本 skill 不注入 snapshot、不吃 context
-- **依收件對象調整內容**：`--to pm|design|ops|eng`，各自有該寫與刻意不寫的項目
-- 兩種寫入模式：`--mode append`（預設，追加區塊到頁面末端）／`--mode comment`（發成頁面 comment，侵入性最低）
-- 只做 append 與 comment，**不刪除、不覆寫**既有內容
-- 寫入前強制 dry-run 過目，寫入後 `readback` 讀回驗證
-- Markdown → Notion block 轉換由 `scripts/notion_api.py` 處理（標題／清單／callout／code／連結／行內粗體）
+**兩條寫入路徑，自動選路**（`NOTION_TOKEN` 有值走 API，否則走 browser；`--via` 可強制）：
 
-需一次性設定 Notion internal integration token，並把目標頁面加進 integration 的 Connections，
+| 路徑 | 前提 | 代價 |
+|---|---|---|
+| **API**（優先） | 需自建 internal integration，且頁面要加進 Connections | 不開瀏覽器、不注入 snapshot、幾乎不吃 context |
+| **browser**（退路） | 沿用 `/notion-plan` 的 `notion-profile` 登入 session，免 token | 要開瀏覽器，較慢 |
+
+公司型 workspace 常需管理員核准才能建 integration，所以 browser 路徑不是次等品，而是很多人的唯一可行路徑。兩條路的「定對象 → 組稿 → dry-run」完全共用，只有寫入動作不同。
+
+- **依收件對象調整內容**：`--to pm|design|ops|eng`（可多選），各自有該寫與刻意不寫的項目；未指定時以 `AskUserQuestion` 詢問，不自行推測
+- 兩種寫入模式：`--mode append`（預設）／`--mode comment`（僅 API 路徑）
+- 只做 append 與 comment，**不刪除、不覆寫**既有內容
+- 寫入前強制 dry-run 過目，寫入後讀回驗證（browser 路徑另檢查 `occurrences: 1`，防重複寫入）
+- browser 路徑用 synthetic paste event 讓 Notion 自己解析 Markdown，**不碰系統剪貼簿、不需 clipboard 權限**
+
 細節見 [`notion-report/SKILL.md`](notion-report/SKILL.md)。
 
 </details>
@@ -670,7 +677,9 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 ```
 /notion-report https://app.notion.com/p/workspace/abc123 --to pm
+/notion-report <URL> --to pm,design         # 多對象，各自分區
 /notion-report <URL> --to ops --mode comment
+/notion-report <URL> --to eng --via browser # 強制走瀏覽器（無 API token 時自動）
 /notion-report <URL> --to eng --dry-run     # 只出稿不寫入
 ```
 
@@ -749,6 +758,6 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 | `/update` | Pending | nested agents (`general-purpose` 文件更新 + 審查 + inline pattern 提取) |
 | `/assist` | Pending | 情境分析可測，pipeline 執行會修改專案 |
 | `/notion-plan` | Pending | 依賴外部 Notion 頁面 |
-| `/notion-report` | Pending | 寫入外部 Notion 頁面，需 mock API 或專用測試頁 |
+| `/notion-report` | Pending | 寫入外部 Notion 頁面；API 路徑需 mock，browser 路徑需登入 session |
 
 </details>

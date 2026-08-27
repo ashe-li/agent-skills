@@ -150,7 +150,16 @@ exit 0
 
 它決定這個 hook **每輪要執行哪一支 Python 檔**，預設 `~/Documents/agent-skills`。只在刻意、暫時地對另一份 checkout（例如 sibling worktree）測試時才覆寫。
 
-> **警語**：指向非預設路徑時，**那個路徑一旦消失（worktree 被刪、branch 被切走），hook 就全域失效**——而且是安靜失效，因為所有失敗路徑都 exit 0。測完把覆寫拿掉，並跑一次 `doctor` 確認回到預設 checkout。
+兩種指法：
+
+| 做法 | 生效範圍 | 適用 |
+|---|---|---|
+| `export AGENT_SKILLS_DIR=<path>` | **只有當前 shell** | 在終端機裡手動跑 `plan_runner.py` 對照 |
+| 直接改 wrapper 裡那一行的預設值 | 每一個 session | 要在真實 session 裡試用未合併的分支 |
+
+環境變數優先於 wrapper 的預設值，兩者 `doctor` 都看得到——`doctor` 是**讀已安裝的 wrapper**取得預設值，不是自己另存一份常數，所以你改了 wrapper 它就跟著改。
+
+> **警語**：指向非預設路徑時，**那個路徑一旦消失（worktree 被刪、branch 被切走），hook 就全域失效**——而且是安靜失效，因為所有失敗路徑都 exit 0。改 wrapper 那一行時順手在上面留註解寫明「暫時指向哪裡、何時要改回來」，測完還原並跑一次 `doctor` 確認 runner 路徑已指回預設 checkout。
 
 ## 2. 追加到 `~/.claude/settings.json`
 

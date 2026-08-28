@@ -437,7 +437,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
-- **每 6 步一次 check-in**：harness 硬性規定連續 8 次 block 就強制結束該輪。hook 主動在第 6 步（或更早的 phase 邊界）停下來，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷。step `fail` 時 hook 不 block，交還 HITL gate
+- **每 7 步一次 check-in**：實測 harness 對每個 turn 的 Stop 輪數設上限（9 次呼叫、8 次續推被採納），且該上限由所有 blocker 共用——多掛一支 blocker 不會換到更多輪。hook 主動在第 7 步（或更早的 phase 邊界）停下來留一輪餘裕，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷；`PLAN_RUN_BLOCK_BUDGET=8` 可用滿。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**
 

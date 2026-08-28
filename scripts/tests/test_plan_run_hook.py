@@ -282,7 +282,7 @@ class DecideHookActionTests(unittest.TestCase):
 
     # 11a. consecutive_blocks == budget-1 (5) -> block, checkpoint_pending.
     def test_budget_second_to_last_sets_checkpoint_pending(self):
-        pointer = make_pointer(consecutive_blocks=5)
+        pointer = make_pointer(consecutive_blocks=pr.BLOCK_BUDGET - 1)
         state = make_state({
             "S1.1": make_step(status="pending", phase="P1"),
             "S1.2": make_step(status="pending", phase="P1"),  # keeps phase P1 incomplete
@@ -290,12 +290,12 @@ class DecideHookActionTests(unittest.TestCase):
         decision = pr.decide_hook_action(make_hook_input(), pointer, state)
         self.assertEqual(decision.decision, "block")
         self.assertTrue(decision.pointer_updates["checkpoint_pending"])
-        self.assertEqual(decision.pointer_updates["consecutive_blocks"], 6)
-        self.assertIn("Auto-advance 6/6", decision.reason)
+        self.assertEqual(decision.pointer_updates["consecutive_blocks"], pr.BLOCK_BUDGET)
+        self.assertIn(f"Auto-advance {pr.BLOCK_BUDGET}/{pr.BLOCK_BUDGET}", decision.reason)
 
     # 11b. consecutive_blocks == budget (6) -> allow, no more blocking.
     def test_budget_exhausted_allows(self):
-        pointer = make_pointer(consecutive_blocks=6)
+        pointer = make_pointer(consecutive_blocks=pr.BLOCK_BUDGET)
         state = make_state({"S0.1": make_step(status="pending")})
         decision = pr.decide_hook_action(make_hook_input(), pointer, state)
         self.assertEqual(decision.decision, "allow")
@@ -527,7 +527,7 @@ class ReadyStepNagTests(unittest.TestCase):
         self.assertEqual(decision.pointer_updates["turn_start_completed"], 2)
 
     def test_budget_exhausted_with_zero_advance_says_zero(self):
-        pointer = make_pointer(consecutive_blocks=6, turn_start_completed=0)
+        pointer = make_pointer(consecutive_blocks=pr.BLOCK_BUDGET, turn_start_completed=0)
         decision = self._advance(pointer, self._two_pending())
         self.assertEqual(decision.decision, "allow")
         self.assertIn("本輪 0 步推進", decision.system_message)
@@ -535,7 +535,7 @@ class ReadyStepNagTests(unittest.TestCase):
         self.assertIn("S1.1", decision.system_message)
 
     def test_budget_exhausted_after_real_progress_reports_the_steps(self):
-        pointer = make_pointer(consecutive_blocks=6, turn_start_completed=0)
+        pointer = make_pointer(consecutive_blocks=pr.BLOCK_BUDGET, turn_start_completed=0)
         state = make_state({
             "S1.1": make_step(status="completed", phase="P1"),
             "S1.2": make_step(status="completed", phase="P1"),
@@ -549,7 +549,7 @@ class ReadyStepNagTests(unittest.TestCase):
     def test_budget_exhausted_without_a_baseline_claims_nothing(self):
         """A pointer written before the field existed has no starting point;
         guessing "0 步" there would be a false stuck warning."""
-        pointer = make_pointer(consecutive_blocks=6)
+        pointer = make_pointer(consecutive_blocks=pr.BLOCK_BUDGET)
         pointer.pop("turn_start_completed", None)
         decision = self._advance(pointer, self._two_pending())
         self.assertEqual(decision.decision, "allow")

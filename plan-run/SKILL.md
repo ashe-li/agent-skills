@@ -26,7 +26,12 @@ redundancy-peers: [design]
 python3 ~/Documents/agent-skills/scripts/plan_runner.py doctor
 ```
 
-六項全 PASS/INFO 才算裝好（`INFO` 不是錯誤）。**任何一項 FAIL 先修 hook，不要硬推 plan**——hook 沒生效時控制流會退回「靠 LLM 自願」，等於沒裝。未安裝時見下方「手動退化模式」。
+六項全 PASS/INFO 才算裝好（`INFO` 不是錯誤）。FAIL 分兩種讀法：
+
+- **只有「Stop hook 已註冊」/「wrapper 存在且可執行」FAIL** → hook 沒裝，這不是要你先修好才能動；照下方「手動退化模式」跑即可，想要自動推進再回頭裝
+- **其他項目 FAIL**（runner 路徑對不上、`~/.claude/plan-run/` 不可寫）→ hook 裝了但行為不可預期，**先修再推 plan**
+
+`attach` / `init` 只接受 `$HOME` 底下的 plan 路徑（`resolve()` 後比對，擋 symlink escape）。plan 放在 `$HOME` 之外時 pointer 會被判為 invalid、自動推進不會啟動，此時同樣走手動退化模式，或把 plan 搬進 `$HOME`。
 
 ## Step 0: 格式檢查 — 若為 planner-agent 輸出先 normalize
 
@@ -130,5 +135,6 @@ transition 由 Python 強制驗證，不允許 `completed → pending` 等非法
 - **狀態機不執行實際工作**：只決定 DAG 順序；agent 呼叫、build/test、檔案修改皆由 LLM 完成
 - **失敗不自動重試**：避免吃 token，必經 user 決定
 - **並行 step 由 LLM 自行決定是否真的並行**：state machine 只告訴你「這些 step 可以開始」
+- **hook 指定的 step 已經被授權，直接做**：使用者跑 `/plan-run <plan>` 就是對整份 plan 的授權。不要每個 step 停下來問「要繼續嗎」「要不要派這兩個 agent」——同時派多個 step 的 agent 也不必另外問編隊。需要人介入的三個時點已經寫死在流程裡（`fail` 的 HITL gate、check-in 邊界、plan 裡標 `Risk: high` 或不可逆的 step），除此之外照 hook 給的三行做完再回報
 - **hook 不 block 的三種情形**：step `fail`、達到 check-in 邊界、cwd 無 active pointer。前兩者是刻意的 HITL gate，第三者保證對其他 session 零影響
 - **不要為了跑更久而調高 block 上限**：`PLAN_RUN_BLOCK_BUDGET` 硬夾在 7 以下，且本 skill 從不碰 harness 自己的 block-cap 環境變數。撞到 check-in 就是該讓人看一眼

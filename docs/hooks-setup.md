@@ -289,12 +289,16 @@ mkdir -p <專案>/.claude
 
 ## 7. 為什麼不提高 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`
 
-harness 規定連續 8 次 block 就強制結束該輪，這是官方防呆。本 hook 主動把預算設在 **6**（或更早的 phase 邊界就停），讓停下來的那一刻落在對使用者有意義的檢查點，而不是撞上限被硬截斷。
+本機實測（2.1.251，證據 `.verification/2026-08-29/stop-hook-block-cap-measured.md`）：always-block 的 Stop hook 會被呼叫 **9 次，第 9 次的 block 不被採納**——實際可用 **8 次續推**，這是官方防呆。而且**上限是每個 turn 的 Stop 輪數，不是每支 hook 的次數**：掛兩支獨立的 always-block hook，兩支都拿到全部 9 輪，turn 一樣在第 9 輪結束。
+
+所以**多掛一支 blocker（例如 `/goal`）不會讓一輪跑更多步**——拿到的是「同一輪多一則彼此稀釋的 reason」，不是更多輪。想一輪跑更久只有調自己的預算一條路。
+
+本 hook 主動把預算設在 **7**（或更早的 phase 邊界就停），留一輪餘裕，讓停下來的那一刻落在對使用者有意義的檢查點，而不是撞上限被硬截斷。
 
 **不要為了「一次跑完整份 plan」去調高上限。** 那個上限存在的理由就是「無人值守跑很久」是被刻意擋住的行為；繞過它等於把 plan 推進變成一個沒有人在看的迴圈。本 repo 的做法是順著它設計：
 
 - `plan_runner.py` **從不讀寫** harness 自己的 block-cap 環境變數
-- 本 repo 自己的 `PLAN_RUN_BLOCK_BUDGET` 硬夾在 **7**（低於 harness 的 8），設再大都無效；設小於 6 才真的生效，用途是「我想更頻繁地被問一次」
+- 本 repo 自己的 `PLAN_RUN_BLOCK_BUDGET` 硬夾在 **8**（實測可用的續推數），設再大都無效。預設 7 留一輪餘裕，設 `8` 是用滿、設小於 7 是「我想更頻繁地被問一次」
 - `stop_hook_active` 旗標一律照實回報，不偽造
 
 撞到 check-in 就是該讓人看一眼。要繼續，回一句話就會從下一步接著跑。

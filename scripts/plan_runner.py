@@ -1467,10 +1467,22 @@ def check_single_active_plan(cwd: str | Path, plan_path: str | Path) -> str | No
 # boundary (a point meaningful to the user) rather than mid-step wherever
 # the 8th block happens to fall. This module never touches the harness's
 # own official block-cap env var and never fabricates stop_hook_active;
-# BLOCK_BUDGET's effective value is hard-clamped below 8 regardless of env.
+# Measured on 2026-08-29 against Claude Code 2.1.251 (see
+# .verification/2026-08-29/stop-hook-block-cap-measured.md): an always-block
+# Stop hook is invoked 9 times and the 9th block is NOT honoured, so 8
+# continuations are actually available. The cap is per *turn*, not per hook:
+# two independent blocking hooks each got all 9 invocations, so a co-blocking
+# hook does not steal rounds from us -- it only injects a second competing
+# reason into the same round.
+#
+# The default keeps one round of margin (7 of the 8 available) so a future
+# version that lowers the cap degrades to "one fewer step", not to a hard
+# mid-step cutoff. PLAN_RUN_BLOCK_BUDGET can raise it to the measured
+# ceiling; above that it is clamped, and we still never read or write the
+# harness's own cap.
 
-BLOCK_BUDGET = 6
-BLOCK_BUDGET_HARD_CAP = 7
+BLOCK_BUDGET = 7
+BLOCK_BUDGET_HARD_CAP = 8
 PHASE_MIN = 3
 
 _BLOCK_BUDGET_ENV_VAR = "PLAN_RUN_BLOCK_BUDGET"
@@ -1497,8 +1509,9 @@ def _effective_block_budget() -> int:
 
     Any malformed override (non-numeric, non-positive, empty/missing) falls
     back to the default silently — never raises. The override can lower the
-    budget freely but is hard-clamped at BLOCK_BUDGET_HARD_CAP (< 8) so an
-    env var can never push us past the harness's own hard limit.
+    budget freely but is hard-clamped at BLOCK_BUDGET_HARD_CAP (the measured
+    number of honoured continuations) so an env var can never push us past
+    the harness's own hard limit.
     """
     raw = os.environ.get(_BLOCK_BUDGET_ENV_VAR)
     if raw is None or not raw.strip():

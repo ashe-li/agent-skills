@@ -14,7 +14,7 @@ redundancy-peers: [design]
 
 - **控制流在 Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要把下一步注入回來。LLM 不需要（也不應該）主動想起查狀態，只負責執行被指定的 step 並回報 `complete` / `fail`。對比「用文字請 LLM 自願呼叫腳本」：後者的第一層控制流仍在模型手上
 - **State 持久化 + pointer**：step 狀態存 `<plan-dir>/.plan-state/<slug>.state.json`；hook 靠 `~/.claude/plan-run/active/<hash(cwd)>.json` 這個 pointer 找到「這個 cwd 現在在推哪份 plan」。兩者都在檔案系統上，**新 session／compaction 之後照樣接得上**
-- **每 6 步一次 check-in**：harness 硬性規定連續 8 次 block 就強制結束（官方防呆，不可繞過）。hook 主動在第 6 步（或更早的 phase 邊界）停，讓停的那刻落在對使用者有意義的地方，而不是撞上限被截斷。每次注入結尾都印 `Auto-advance N/6`
+- **每 7 步一次 check-in**：本機實測（2.1.251）always-block 的 Stop hook 會被呼叫 **9 次、第 9 次的 block 不被採納**，也就是實際可用 **8 次續推**；且上限是**每個 turn 的輪數**不是每支 hook 的次數（兩支 blocker 各拿滿 9 輪）。hook 主動在第 7 步（或更早的 phase 邊界）停，留一輪餘裕，讓停的那刻落在對使用者有意義的地方而不是撞上限被截斷。每次注入結尾都印 `Auto-advance N/7`；要用滿 8 步設 `PLAN_RUN_BLOCK_BUDGET=8`
 - **Task 追蹤工具 best-effort，且預設不存在**：frontmatter 列的那三個 Task 工具在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不註冊（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。**推進順序、依賴檢查、續推能力全在 state file**，`task_id` 只用於 audit 與 UI 面板；工具不存在或呼叫失敗即 continue，不中止 DAG（下文不再重述）
 - **Output 分層**：`next` 是 full bootstrap（~2.8KB，列出全部 ready 的完整模板）；`complete / fail / skip` 是 delta（只列本次新解鎖的完整模板，先前給過的只列 ID）；`index` 是 ~500 chars 的純 trace。全部預設 markdown，`--format=json` 給 tooling
 
@@ -137,4 +137,5 @@ transition 由 Python 強制驗證，不允許 `completed → pending` 等非法
 - **並行 step 由 LLM 自行決定是否真的並行**：state machine 只告訴你「這些 step 可以開始」
 - **hook 指定的 step 已經被授權，直接做**：使用者跑 `/plan-run <plan>` 就是對整份 plan 的授權。不要每個 step 停下來問「要繼續嗎」「要不要派這兩個 agent」——同時派多個 step 的 agent 也不必另外問編隊。需要人介入的三個時點已經寫死在流程裡（`fail` 的 HITL gate、check-in 邊界、plan 裡標 `Risk: high` 或不可逆的 step），除此之外照 hook 給的三行做完再回報
 - **hook 不 block 的三種情形**：step `fail`、達到 check-in 邊界、cwd 無 active pointer。前兩者是刻意的 HITL gate，第三者保證對其他 session 零影響
-- **不要為了跑更久而調高 block 上限**：`PLAN_RUN_BLOCK_BUDGET` 硬夾在 7 以下，且本 skill 從不碰 harness 自己的 block-cap 環境變數。撞到 check-in 就是該讓人看一眼
+- **不要為了跑更久而調高 harness 的 block 上限**：`PLAN_RUN_BLOCK_BUDGET` 硬夾在實測上限 8 以下（預設 7 留一輪餘裕），且本 skill 從不碰 harness 自己的 block-cap 環境變數。撞到 check-in 就是該讓人看一眼——回一句話就從下一步接著跑，不會退回去
+- **`/goal` 疊在 `/plan-run` 上不會跑更久**：實測上限是每個 turn 的 Stop 輪數、由所有 blocker 共用，多掛一支 blocker 拿到的是「同一輪多一則互相稀釋的 reason」，不是更多輪。想一輪跑更多步只有 `PLAN_RUN_BLOCK_BUDGET` 一條路

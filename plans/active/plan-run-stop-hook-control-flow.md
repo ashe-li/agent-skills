@@ -277,7 +277,9 @@ Renderer 放在 Python（Layer 2）而非 shell，wrapper 只負責 exec——�
 
 三個理由，按份量排：
 
-1. `/goal` 本身就是 session-scoped 的 prompt-based Stop hook。它與我們自寫的 script-based Stop hook**共用同一份 8-block 預算**，兩個 blocker 互相搶格子，會讓 Q1 的 check-in 設計失準。
+1. `/goal` 本身就是 session-scoped 的 prompt-based Stop hook，與我們自寫的 script-based Stop hook**共用同一份 block 預算**。
+
+   > **2026-08-29 實測修正**（`.verification/2026-08-29/stop-hook-block-cap-measured.md`）：本條原文寫「兩個 blocker 互相搶格子」，**後半是錯的**。實測掛兩支獨立的 always-block hook，**兩支都拿到全部 9 輪**、turn 一樣在第 9 輪結束——上限是**每個 turn 的 Stop 輪數**，不是每支 hook 的 block 次數，沒有誰少拿。正確的說法是：疊 `/goal` **換不到更多步**（共用同一份輪數上限），換到的是**同一輪內兩則 reason 同時注入、指令彼此稀釋**。結論不變，理由要改。同次實測也定案了上限本身：hook 被呼叫 9 次、第 9 次的 block 不被採納 = 實際可用 8 次續推。
 2. `/goal` 的評估者不跑指令、不讀檔、沒有狀態記憶，只讀 transcript。它取代不了狀態機——現行 SKILL.md 3f 也承認這點，才會補一句「每次 transition 後跑一次 `index` 把狀態 surface 給評估者」。這條建議實測冗餘且有害（每輪多一次呼叫、多 ~500 chars、而且又是一次 LLM 自願行為）。狀態機接手後它完全沒有存在理由。
 3. 一個 session 只能一個 `/goal`，佔掉之後其他需求（例如同 session 想跑 figma 視覺 gate）就沒得用。
 

@@ -293,7 +293,7 @@ Renderer 放在 Python（Layer 2）而非 shell，wrapper 只負責 exec——�
 2. `/goal` 的評估者不跑指令、不讀檔、沒有狀態記憶，只讀 transcript。它取代不了狀態機——現行 SKILL.md 3f 也承認這點，才會補一句「每次 transition 後跑一次 `index` 把狀態 surface 給評估者」。這條建議實測冗餘且有害（每輪多一次呼叫、多 ~500 chars、而且又是一次 LLM 自願行為）。狀態機接手後它完全沒有存在理由。
 3. 一個 session 只能一個 `/goal`，佔掉之後其他需求（例如同 session 想跑 figma 視覺 gate）就沒得用。**（仍成立，且是選擇模式 B 的第二個正當理由——同 session 要跑 figma 視覺 gate 時把 `/goal` 讓出來。）**
 
-> **理由 2 的現況**：仍成立，但**不構成移除 `/goal` 的理由**——它證明的是「`/goal` 取代不了狀態機」，而模式 A 從來沒有要它取代：DAG 順序仍由 `plan_runner.py` 給，`/goal` 只提供續推力道。補法是把「下一輪先跑 `next`」寫進 goal 條件本身（評估者每輪重述，而 `next` 讀磁碟上的 state file，不依賴 transcript）。原文附帶批評的「每次 transition 後跑 `index`」確實是反模式，那條維持不採用——`complete` 的 output 開頭已經是 `Progress: N/M`，評估者要的判定資訊本來就在 transcript 裡。
+> **理由 2 的現況**：仍成立，但**不構成移除 `/goal` 的理由**——它證明的是「`/goal` 取代不了狀態機」，而模式 A 從來沒有要它取代：DAG 順序仍由 `plan_runner.py` 給，`/goal` 只提供續推力道。補法是把「下一輪先跑 `next`」寫進 goal 條件本身（評估者每輪重述，而 `next` 讀磁碟上的 state file，不依賴 transcript）。原文附帶批評的「每次 transition 後跑 `index`」確實是反模式，那條維持不採用——`complete` 的 stdout 首行是 `# completed: <step>`，其內嵌 state view 區塊已含 `Progress: N/M`，評估者要的判定資訊本來就在 transcript 裡。
 
 `figma-verify` Step 4.5 用 `/goal` 做 Haiku 視覺比對，屬於「model-evaluated check」，正是官方說 `/goal` 該做的事，完全不動。
 

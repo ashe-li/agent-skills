@@ -150,7 +150,12 @@ cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%Y%m%d%H%M%S)
 python3 -c "import json; json.load(open(__import__('os').path.expanduser('~/.claude/settings.json')))" && echo "JSON OK"
 
 rm -f ~/.claude/hooks/plan-run-stop.sh
-python3 ~/Documents/agent-skills/scripts/plan_runner.py doctor
+
+# 驗證用「東西不在了」的直接檢查，**不要跑 doctor**：移除之後 doctor 依 S1.4 的
+# 契約本來就會對「Stop hook 已註冊」「wrapper 存在且可執行」報 FAIL，拿它當移除
+# 的判準會讓一次成功的移除看起來像壞掉。doctor 留到「還原安裝」之後再跑。
+grep -c "plan-run-stop" ~/.claude/settings.json   # 預期 0
+test ! -e ~/.claude/hooks/plan-run-stop.sh && echo "wrapper removed"
 ```
 
 `~/.claude/plan-run/` 是**狀態不是安裝**：裡面是進行中的 pointer（lease、暫停旗標、

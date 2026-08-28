@@ -509,20 +509,27 @@ _LOCK_RETRY_SLEEP = 0.025
 
 @contextlib.contextmanager
 def exclusive_lock(lock_path: Path) -> Iterator[bool]:
-    """Best-effort exclusive advisory lock, yielding whether it was taken.
+    """Exclusive advisory lock. Yields whether the caller may safely write.
 
     Serializes the read-decide-write sequences that two sessions sharing a
-    cwd can otherwise interleave: both observing the same expired lease and
+    plan can otherwise interleave: both observing the same expired lease and
     both emitting the same ready step, or both reading a step as `pending`
     before either persists `in_progress`. `os.replace` alone only rules out
     *torn* files, not lost updates.
 
-    Never raises and never blocks indefinitely: no fcntl, an unopenable
-    lock file, or a holder that outlasts the retry budget all yield False
-    and run the body anyway.
+    Yields True when the lock is held, and also when this platform has no
+    `fcntl` at all — there is no contention mechanism to respect there, so
+    refusing to write would break the tool rather than protect it.
+
+    Yields **False** when another holder outlasted the retry budget, or the
+    lock file cannot be opened. Callers must then **not write**: proceeding
+    unlocked would reintroduce exactly the lost update this exists to
+    prevent (a dropped lease, a reset block counter, a step handed out
+    twice). Never raises and never blocks indefinitely — the retry budget is
+    bounded because this runs inside a Stop hook, which must not hang a turn.
     """
     if fcntl is None:
-        yield False
+        yield True
         return
     acquired = False
     try:
@@ -2707,6 +2714,18 @@ def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDeci
     return decision
 
 
+def _probe_governing_pointer(cwd: str) -> ResolvedPointer | None:
+    """Which pointer governs `cwd`, read-only and never raising.
+
+    Only its *identity* is used — the data is re-read under the lock, so a
+    pointer that changes between this probe and the lock is not a problem.
+    """
+    try:
+        return resolve_pointer_for_hook(cwd)
+    except (OSError, ValueError):
+        return None
+
+
 def _run_hook_stop() -> None:
     hook_input = _read_hook_input()
     raw_cwd = hook_input.get("cwd")
@@ -2714,18 +2733,30 @@ def _run_hook_stop() -> None:
     if cwd is None:
         _emit_hook_output(decide_hook_action(hook_input, None, None))
         return
-    try:
-        lock_path = pointer_lock_path_for(cwd)
-        governed = pointer_path_for(cwd).exists()
-    except (OSError, ValueError):
-        _emit_hook_output(_decide_and_persist(hook_input, cwd))
-        return
-    if not governed:
-        # No pointer governs this cwd: nothing to serialize, and taking the
+
+    # Which pointer governs a cwd is a *walk*, not a hash of the cwd: a hook
+    # fired in `repo/subdir` is governed by the pointer attached at `repo`.
+    # Locking a cwd-derived path would therefore let two sessions in two
+    # subdirectories of one repo write the same pointer under two different
+    # locks -- and would skip locking entirely for the subdirectory, whose
+    # own hash has no file. So: resolve first to learn the pointer's
+    # identity, lock *that*, then resolve again under the lock so the
+    # decision is made on the state the lock actually protects.
+    probe = _probe_governing_pointer(cwd)
+    if probe is None:
+        # No pointer governs this cwd: nothing to serialize, and taking a
         # lock would create a file in a directory we promise not to touch.
         _emit_hook_output(_decide_and_persist(hook_input, cwd))
         return
-    with exclusive_lock(lock_path):
+
+    with exclusive_lock(probe.path.with_suffix(".lock")) as may_write:
+        if not may_write:
+            # Another session holds this pointer, so it is driving this turn.
+            # Writing anyway would drop its lease or hand out the same step
+            # twice, which is the whole failure this lock exists to stop.
+            # Allow, silently, and leave the pointer untouched.
+            _emit_hook_output(HookDecision(decision=HOOK_ALLOW, silent=True))
+            return
         decision = _decide_and_persist(hook_input, cwd)
     # Printed outside the lock: emitting is pure stdout and holding the lock
     # across it only widens the window other sessions wait on.
@@ -2899,7 +2930,14 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    with exclusive_lock(state_lock_path_for(Path(args.plan).resolve())):
+    plan_path = Path(args.plan).resolve()
+    # Establishes that the state (and therefore its directory) exists, so a
+    # failure to take the lock below means contention, not a missing dir.
+    _require_state(plan_path)
+    with exclusive_lock(state_lock_path_for(plan_path)) as may_write:
+        if not may_write:
+            emit({"error": "State is locked by another process. Retry in a moment."})
+            return 1
         return _cmd_start_locked(args)
 
 

@@ -77,14 +77,14 @@
 
 ### Phase 1: 控制流落地（Layer 1 hook + Layer 2 後端）
 
-- [ ] **S1.1** — Pointer registry 與 active-plan 解析
+- [x] **S1.1** — Pointer registry 與 active-plan 解析
   - Files: scripts/plan_runner.py
   - Action: 新增 pointer 模組。位置 `~/.claude/plan-run/active/<sha256(realpath(cwd))[:16]>.json`（目錄 mode 0700），schema `{schema_version:1, plan_path, repo_root, cwd, created_at, created_by_session, driver_session_id, driver_transcript_path, last_seen_at, last_advance_at, paused, consecutive_blocks, bg_poll_count, nag_counts, checkpoint_pending, completion_announced, warned_at}`。實作四個函式：`pointer_path_for(cwd)`、`resolve_pointer(cwd)`（cwd realpath 起往上找最多 8 層至 `$HOME` 停；另嘗試 `git rev-parse --path-format=absolute --git-common-dir` 的 parent，涵蓋 worktree 內 cwd；任一 git 呼叫失敗即忽略）、`write_pointer_atomic()`（tmp + `os.replace`）、`validate_pointer()`（`schema_version` 相符、`plan_path` 為絕對路徑且 `.md`、resolve 後存在且是 regular file、state file 存在且 JSON 可解析且含 `steps` dict；任一不符回傳 `INVALID` 而非 raise）。**同一 cwd 只允許一個 active plan**：`attach` 遇既有 pointer 指向不同 plan 時報錯並提示 `detach`
   - Dependencies: []
   - Risk: 往上找 pointer 可能命中祖先層的舊 pointer；用「找到第一個有效的就停 + `last_advance_at` 過期即靜默」壓住
   - Token: 【1 × Sonnet × ~14K】
 
-- [ ] **S1.2** — Hook 決策核心 `hook-stop`
+- [x] **S1.2** — Hook 決策核心 `hook-stop`
   - Files: scripts/plan_runner.py
   - Action: 新增 `hook-stop` 子命令：從 stdin 讀 Stop hook JSON，stdout 印決策 JSON，一律 `exit 0`。最外層 `try/except BaseException` → 印 `{}`。決策表按序求值、first match wins：(0) `hook_event_name != "Stop"` → allow；(1) 無 pointer → allow **且不印任何東西**；(2) `paused` → allow；(3) pointer/state 驗證失敗 → allow + 一次性 `systemMessage`（設 `warned_at`，不刪 pointer）；(4) lease 仲裁：`driver_session_id` 非本 session 且（driver transcript mtime 距今 < 120s 或 `last_seen_at` 距今 < 900s）→ allow（另一 session 正在推）；否則接手成為 driver 並更新 `driver_*`/`last_seen_at`；(5) `state.updated_at` 逾 7 天 → allow + 一次性 systemMessage；(6) `all_done` → 未宣告過則 block 一次（AC 對照 + `/plan-archive`）並設 `completion_announced`，已宣告則刪 pointer + allow；(7) 存在 `failed` step → **allow**（HITL gate，見 Q 決策）並清零 `consecutive_blocks`；(8) `background_tasks` 非空：有 in_progress step 且 `bg_poll_count < 2` → block（收斂背景工作後回報）並 `bg_poll_count += 1`，否則 allow；(9) 有 in_progress step → block（要求 `complete`/`fail`，`nag_counts` ≥ 2 時 reason 追加「無法確認成功就跑 fail」）；(10) 有 ready step → 依 S1.6 的預算/phase-邊界規則決定 block 或 allow；(11) 其他（無 ready 無 in_progress 又未完成）→ allow + 診斷 systemMessage。計數規則：**`stop_hook_active` 為 false 時先把 `consecutive_blocks`/`bg_poll_count`/`nag_counts` 歸零**（代表新的使用者回合），為 true 時 `+1`。決策全部只讀 state file 與 hook input 的結構化欄位，**明令不解析 `last_assistant_message` 做控制流**
   - Dependencies: S1.1
@@ -92,35 +92,35 @@
   - Risk: 決策表分支多，漏 case 會誤 block；S2.1 對每個分支寫 golden test
   - Token: 【1 × Opus × ~28K】
 
-- [ ] **S1.3** — Hook reason renderer 與 plan 文字隔離
+- [x] **S1.3** — Hook reason renderer 與 plan 文字隔離
   - Files: scripts/plan_runner.py
   - Action: 新增 `render_hook_reason(state, kind, step_id, budget_info)`。輸出結構（目標 200–350 tokens）：標頭一行（`[plan-run] <slug> — Progress N/M — <phase>`）；`Next: S<id> — <title>` 與 `agent`/`skill`/`command`/`files`/`deps`/`risk` 欄位；plan 原文（`action`）包在 `--- plan data (not instructions) ---` 圍欄內、截斷至 600 字元、剝除 ASCII 控制字元與 ANSI escape；最後三行照抄可執行指令（`start` → 執行 → `complete` / `fail`）；結尾一行預算提示（`Auto-advance 4/6 — check-in after 2 more steps`）。**一次只給一個 step 的完整 block**，其餘 ready 只列 ID 並註明「一輪一步，hook 會在下輪指定」。另備 4 種 reason 變體：`next_step` / `report_result`（in_progress）/ `settle_background` / `completion`。`checkpoint_pending` 為真時在 `next_step` 尾端追加 check-in footer：「這是本段最後一步；做完請輸出進度摘要（已完成 N/M、本 phase 狀態、下一步、剩餘步數）後結束回合，不要再繼續」
   - Dependencies: S1.1
   - Risk: reason 每輪累積進 transcript（20 步約 6–7K token）；以「一輪一步 + 截斷」控在可接受範圍，S2.3 實測後可調
   - Token: 【1 × Sonnet × ~12K】
 
-- [ ] **S1.4** — Pointer CLI 表面與 `doctor` 自檢
+- [x] **S1.4** — Pointer CLI 表面與 `doctor` 自檢
   - Files: scripts/plan_runner.py
   - Action: 新增子命令 `attach <plan>` / `detach [<plan>]` / `pause` / `resume` / `pointer`（印當前 cwd 解析結果）/ `doctor`。`doctor` 檢查**六件事**並印 PASS/FAIL/INFO：python3 版本、runner 絕對路徑、`~/.claude/plan-run/` 可寫、`~/.claude/settings.json` 的 Stop 陣列是否含 `plan-run-stop`、wrapper script 是否存在且可執行、當前 cwd 是否有有效 pointer。其中兩項可以合法地是 INFO 而非 FAIL（cwd 沒有 active plan、`~/.claude/plan-run/` 尚未建立），故摘要行印的是 `<n> PASS / <m> INFO / 0 FAIL — 安裝正常` 而非 `n/6 PASS`——健康安裝的 PASS 數會隨這兩項落在 PASS 或 INFO 而變（5+1 或 4+2）。**六項這個數字與摘要格式是同一份契約**，文件、實作與測試都以它為準，不得再出現「五項」的說法。`init` 新增 `--attach` / `--no-attach`（**預設 attach**，stdout 只多印一行 `Attached: <pointer path>`，其餘輸出零變更）；`attach` 時若偵測到 hook 未安裝，額外印一段 fallback 提示指向 `docs/hooks-setup.md`。`start` 新增可選 `--session-id`（寫入 step 的 `session_id` 欄位，僅供 audit）
   - Dependencies: S1.1
   - Risk: `init` 預設 attach 是行為變更；以「stdout 既有區塊不變」與 `--no-attach` 逃生口界定，並在 CHANGELOG 明列
   - Token: 【1 × Sonnet × ~10K】
 
-- [ ] **S1.5** — Wrapper script 與 `settings.json` 安裝
+- [x] **S1.5** — Wrapper script 與 `settings.json` 安裝
   - Files: scripts/hooks/plan-run-stop.sh
   - Action: 在 repo 內新增範本 `scripts/hooks/plan-run-stop.sh`（使用者複製到 `~/.claude/hooks/`）。內容極薄：不使用 `set -e`；`AGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$HOME/Documents/agent-skills}"`；runner 或 python3 不存在即 `exit 0`；`exec python3 "$AGENT_SKILLS_DIR/scripts/plan_runner.py" hook-stop`。**不做任何 stdin 解析、不做字串內插**（避免路徑注入）。settings.json 安裝走手動 additive edit：備份 → 在 `hooks.Stop` 陣列**末端**追加一個物件 `{"hooks":[{"type":"command","command":"bash ~/.claude/hooks/plan-run-stop.sh","timeout":10}]}`——這是**文件要寫的形式**，也是 `doctor` 唯一驗得到的依賴（`~/.claude/hooks/plan-run-stop.sh` 與 runner）。本機另有 observability 的 `wrap.sh` 可加在前面取事件，但那是本機資產、不在 `doctor` 的檢查範圍，不得寫進安裝文件 → `python3 -c "import json;json.load(open(...))"` 驗證 → `plan_runner.py doctor` 確認。**不寫程式自動改 settings.json**。**開發期指向規定（本案在 sibling worktree 施工，必須明訂）**：`AGENT_SKILLS_DIR` 的預設值 `$HOME/Documents/agent-skills` 指的是**主 repo**，而主 repo 在合併前不含 `hook-stop` 子命令。故 Phase 2 所有實跑 hook 的 step（S2.3/S2.4/S2.5/S2.7）開跑前一律 `export AGENT_SKILLS_DIR=<本 worktree 絕對路徑>`，並以 `bash ~/.claude/hooks/plan-run-stop.sh </dev/null; echo $?` 搭配 `python3 "$AGENT_SKILLS_DIR/scripts/plan_runner.py" hook-stop --help` 確認**確實跑到 worktree 的新版**再開始測；測畢 `unset AGENT_SKILLS_DIR`。注意這與「推進本 plan 的迴圈用主 repo 腳本」不衝突——**推進迴圈用主 repo（穩定版），被測的 hook 指 worktree（新版）**，兩者刻意分離
   - Dependencies: S1.2, S1.3
   - Risk: 手改全域設定可能破壞既有 4 個 hook；備份 + JSON 驗證 + doctor 三道確認。另一風險是 `AGENT_SKILLS_DIR` 未指向 worktree 導致 Phase 2 整批在測舊碼卻誤判為通過——故每個實跑 step 的第一個動作都是「確認跑到的是 worktree 版」，未確認即視為該 step 未開始
   - Token: 【1 × Sonnet × ~8K】
 
-- [ ] **S1.6** — 8-block 預算與 phase 邊界 check-in
+- [x] **S1.6** — 8-block 預算與 phase 邊界 check-in
   - Files: scripts/plan_runner.py
   - Action: 實作 `decide_budget(pointer, state, ready_step)`：`BLOCK_BUDGET` 預設 6（env `PLAN_RUN_BLOCK_BUDGET` 可覆寫，上限硬夾在 7，**不得 ≥ 8、不得碰 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`**）；`PHASE_MIN` 預設 3。規則：`consecutive_blocks >= BLOCK_BUDGET` → allow（自然收尾，讓上一輪的摘要成為使用者看到的最後一則訊息）；`consecutive_blocks == BLOCK_BUDGET - 1` → block 但設 `checkpoint_pending`（S1.3 footer 生效）；若「完成本 ready step 後該 phase 全數 completed/skipped」且 `consecutive_blocks >= PHASE_MIN` → 同樣設 `checkpoint_pending`，**讓停點落在 phase 邊界而非中途**。allow 時把 `consecutive_blocks` 留著不清零（由 `stop_hook_active=false` 清），確保不會出現「allow 後立刻又滿血 block 6 次」
   - Dependencies: S1.1
   - Risk: 我方計數與 harness 內部計數可能不同步（mempal 也會消耗上限）；預算 6 保留 2 格 headroom 即為此
   - Token: 【1 × Sonnet × ~9K】
 
-- [ ] **S1.7** — Layer 2 退化：`_format_step_action_block` 三行化
+- [x] **S1.7** — Layer 2 退化：`_format_step_action_block` 三行化
   - Files: scripts/plan_runner.py
   - Action: 砍掉模板裡的 TaskCreate 行與 `complete/fail` 尾巴的 `+ TaskUpdate(...)`，改為三行：`1. plan_runner.py start <plan> <id>` / `2. <依 agent|command|skill 執行>` / `3. ok: complete ... | err: fail ... --reason=<msg>`。**`## Required sync` 與 `## Next hints` 兩個條件式區塊保持原樣不動**（它們只在 task_id 存在時輸出，是 PR 57 的既有契約，動了就是回歸）
   - Dependencies: []
@@ -129,49 +129,49 @@
 
 ### Phase 2: 品質保障
 
-- [ ] **S2.1** — Hook 決策表單元測試
+- [x] **S2.1** — Hook 決策表單元測試
   - Files: scripts/tests/test_plan_run_hook.py
   - Action: 用 stdlib `unittest` + `tempfile`（repo 目前無測試框架，不引入新依賴；以 `python3 -m unittest discover scripts/tests` 執行）。對 S1.2 決策表每個分支各一則 golden test，輸入為合成的 Stop hook JSON + 合成 state file，assert stdout JSON 的 `decision` 與 `reason` 是否含關鍵字串。必測 case：無 pointer→靜默 allow、paused→allow、state 損毀（截斷 JSON / 缺 `steps` / 未知 `schema_version`）→allow 且不 raise、plan 檔被刪→allow、failed step 存在→allow、in_progress→block 且 reason 含 step id、`background_tasks` 非空 ×（有/無 in_progress）×（poll 0/1/2）、lease 被他人持有→allow、lease 過期→接手 block、`stop_hook_active` false→計數歸零、預算 5→`checkpoint_pending`、預算 6→allow、phase 邊界提前 checkpoint、`all_done` 首次→block／第二次→刪 pointer、cwd 在 worktree 內→仍解析得到 pointer
   - Dependencies: S1.2, S1.3, S1.6
   - Risk: 測試把實作細節寫死導致重構困難；斷言只針對 `decision` 與 reason 關鍵片段，不逐字比對全文
   - Token: 【1 × Sonnet（`agents/tdd-guide.md` 檢查清單）× ~20K】
 
-- [ ] **S2.2** — 既有子命令回歸測試
+- [x] **S2.2** — 既有子命令回歸測試
   - Files: scripts/tests/test_plan_runner_regression.py
   - Action: 對 12 個既有子命令（`init`/`next`/`start`/`complete`/`fail`/`skip`/`status`/`index`/`dag`/`normalize`/`set-parent`/`reset`）逐一比對 stdout 契約。強制 assertion：`complete` 無 task_id 時輸出**不得**含 `## Required sync`；有 task_id 時**必須**含且含 `TaskUpdate(...)`；`complete` 的 stdout 第一行仍為 `# completed: <step>`，其內嵌 state view 區塊首行仍為 `Progress: N/M`，且該行之後（有 parent task 時中間隔一行 `Parent task:`）緊接 `pending:X | completed:Y` 計數行；`init --no-attach` 的 stdout 與 base commit `e745670` 逐字元相同（先在 base 產 golden 檔）；非法轉移（`completed → pending`）仍被拒；`normalize` 仍 idempotent
   - Dependencies: S1.4, S1.7
   - Risk: golden 檔含絕對路徑造成環境相依；產生時把 plan 路徑正規化後再比對
   - Token: 【1 × Sonnet × ~14K】
 
-- [ ] **S2.3** — 沙箱 E2E：20-step plan 全程推進
+- [x] **S2.3** — 沙箱 E2E：20-step plan 全程推進
   - Files: .verification/2026-08-26/
   - Action: 把 `~/Documents/knowledge-base/plans/active/google-news-traffic-recovery.md` **複製**到一次性沙箱目錄（絕不動原 plan 與其 state；原 state 現況 completed 15 / pending 4 / in_progress 1），`init --attach` 後開一個新 session，以「每個 step 用一行 echo 假執行」的方式跑完 20 步。**開跑前置（不可省）**：`export AGENT_SKILLS_DIR=<worktree 絕對路徑>` 並確認 `hook-stop` 子命令存在於該路徑的 `plan_runner.py`——否則 hook 會落到主 repo 的舊版，AC1/AC2/AC3/AC5 產出的會是假證據。記錄：LLM 是否曾主動查狀態（應為 0 次）、每次 hook block 的 reason、check-in 落點是否對齊 phase 邊界、交叉依賴 `S4.2 <- S4.1,S3.4` 是否被正確擋住直到兩者皆 completed、全程 reason 累積 token。另跑兩個變體：(a) 中途 `/clear` 開新 session，驗證第一輪結束就自動接上；(b) 中途讓某 step `fail`，驗證 turn 正常結束、`AskUserQuestion` 三選一出現、hook 不 block
   - Dependencies: S1.5, S2.1, S2.2
   - Risk: 沙箱 cwd 的 pointer 若忘了 detach 會殘留干擾後續 session；驗收腳本結尾強制 `detach` 並 `pointer` 確認為空。`AGENT_SKILLS_DIR` 若忘了還原，之後所有 session 的 hook 都會綁在 worktree 上（worktree 刪除後即全域故障）；收尾強制 `unset` 並重跑一次 `doctor` 確認指回主 repo
   - Token: 【1 × Opus 主線驅動 + 1 × Haiku 記錄整理 × ~45K】
 
-- [ ] **S2.4** — 多 Stop hook 共存實測
+- [x] **S2.4** — 多 Stop hook 共存實測
   - Files: .verification/2026-08-26/
   - Action: 回答 Q6。**同 S2.3 的 `AGENT_SKILLS_DIR` 指向規定與收尾還原**。實測三題：(1) 讓 mempal-save 與 plan-run 在同一次 Stop 同時 block（暫時把 mempal `SAVE_INTERVAL` 調到 1，測後還原），觀察 Claude 實際收到哪一則 reason、是否兩則都到；(2) 驗證 `wrap.sh stop:plan-run` 是否原樣轉送我們的 JSON（比對直接呼叫與經 wrap 的輸出）；(3) 驗證輸出格式——先測本機已被 mempal 實證可行的 **top-level `{"decision":"block","reason":...}`**，再測 `hookSpecificOutput` 巢狀版與 `additionalContext`（官方 docs 有已知記載錯誤，見 issue #65495），把實測結果寫成表存證，據此決定最終輸出形狀。另驗證「連續 block 期間 mempal 因 `stop_hook_active=true` 早退、check-in 讓它恢復計數」的假設
   - Dependencies: S1.5
   - Risk: 動 mempal 設定後忘了還原；步驟寫成「改→測→還原→diff 確認還原」四段
   - Token: 【1 × Sonnet × ~16K】
 
-- [ ] **S2.5** — 零影響驗證
+- [x] **S2.5** — 零影響驗證
   - Files: .verification/2026-08-26/
   - Action: **同 S2.3 的 `AGENT_SKILLS_DIR` 指向規定與收尾還原**。在三種沒有 active plan 的 cwd（`~/Documents/agent-skills`、任一無關 repo、`$HOME`）各開 session 跑一輪，驗證：hook 完全靜默（stdout 空或 `{}`）、turn 正常結束、4 個既有 Stop hook 的 observability 事件照常寫入（查 `~/.claude/observability` 的 events.jsonl 或用 `/obs`）、hook 執行耗時 < 200ms。另測「同 cwd 兩個 session 並行」：第二個 session 應因 lease 未過期而不 block
   - Dependencies: S1.5
   - Risk: 「靜默」若靠 stderr 印訊息仍會污染；明確規定無 pointer 時 stdout/stderr 皆不輸出
   - Token: 【1 × Sonnet × ~10K】
 
-- [ ] **S2.6** — Security review（scoped）
+- [x] **S2.6** — Security review（scoped）
   - Files: .verification/2026-08-26/
   - Action: 先跑 `/code-review` 過 diff，再跑 `/security-review-scoped`。指定審查面：wrapper script 的 shell 執行面（無 `eval`、無未引號變數、fail-open 路徑）、`resolve_pointer` 的 `git rev-parse` subprocess（argv list、`shell=False`、timeout、例外全吞、輸出路徑走同一套驗證）、`plan_path` 路徑驗證（絕對路徑 + resolve 後前綴檢查 + symlink escape）、pointer 目錄權限 0700 與原子寫入、plan.md 文字注入 `reason` 的 prompt-injection 隔離是否有效、hook 是否可能寫入 plan 目錄以外的檔案、`settings.json` 安裝步驟是否可能覆寫既有 hook
   - Dependencies: S1.5, S1.4
   - Risk: 對小 diff 發動全 repo 掃描浪費 token；`/security-review-scoped` 本身就以 diff 規模定預算
   - Token: 【1 × Sonnet × ~18K】
 
-- [ ] **S2.7** — 解除安裝可逆性驗證（AC10 的產出證據）
+- [x] **S2.7** — 解除安裝可逆性驗證（AC10 的產出證據）
   - Files: .verification/2026-08-26/
   - Action: 對「安裝」的三道確認做對稱的「解除安裝」驗證，**必須排在 S2.3/S2.4/S2.5 之後**（它們需要 hook 在位）。步驟：① 先備份 `settings.json` ② 依既定移除步驟操作（從 `hooks.Stop` 陣列移除 **command 字串含 `plan-run-stop` 的那個物件——以指令內容比對，不得以陣列位置指定**，因為安裝後使用者隨時可能新增或重排 hook；找不到即視為未安裝，不刪任何東西。再刪除 `~/.claude/hooks/plan-run-stop.sh`——逐一列明確路徑，不用萬用字元）。**`~/.claude/plan-run/` 是狀態不是安裝**：它存的是進行中的 pointer（lease、暫停旗標、計數器），解除安裝不刪它；本次驗證要先備份再刪、驗完還原，否則「可逆」只涵蓋安裝、不涵蓋進行中的 plan③ `python3 -c "import json;d=json.load(open(...));print(len(d['hooks']['Stop']))"` 確認回到 **4** 且四個既有 hook 的 command 字串與備份逐字相同 ④ 開一個新 session 跑一輪，確認 turn 正常結束、4 個既有 hook 的 observability 事件照常寫入 ⑤ 確認 `plan_runner.py` 的 12 個既有子命令仍可手動使用（跑一次 `status`）⑥ **還原安裝**並重跑 `doctor` 確認 5 個 hook 在位。全程輸出存 `.verification/2026-08-26/uninstall-reversibility.md`。此步實測定案的移除步驟即為 S3.2 要寫進文件的內容
   - Dependencies: S2.3, S2.4, S2.5
@@ -180,35 +180,35 @@
 
 ### Phase 3: 文件同步
 
-- [ ] **S3.1** — `plan-run/SKILL.md` 重寫至 ~130 行
+- [x] **S3.1** — `plan-run/SKILL.md` 重寫至 ~130 行
   - Files: plan-run/SKILL.md
   - Action: 依需求的可砍項逐條落實。**改寫第一條設計原則為誠實版**：「控制流在 Stop hook：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要把下一步注入回來；LLM 不需要（也不應該）主動想起查狀態，只負責執行被指定的 step 並回報結果」。刪除：3f `/goal` 整節、3f 的 `index` surface 建議、Step 2「建立父 task」整節（降為 Step 1 一行註腳）、3b reconcile 五步壓成一句條件式、3a/3c「什麼時候跑哪個指令」教學。新增：一節「前置：安裝 Stop hook（一次性）」指向 `docs/hooks-setup.md`、一節精簡的「hook 未安裝時的手動退化模式」（本 repo 是公開 repo，不能假設所有人都裝了）。**修正 Plan 格式約束表**：Phase 標頭實際 regex 是 `^###\s+(.+)$`，破折號/冒號/全形冒號皆可（真實 plan 用 `### Phase 1 — 診斷`），現表寫「只認冒號」是錯的。frontmatter 的 `description` 同步改寫（不再宣稱 Python 決定下一步，改為 Stop hook 驅動）。完成後跑 `python3 scripts/check_skill.py --files plan-run/SKILL.md --repo-dir .`
   - Dependencies: S2.3
   - Risk: 砍過頭導致 hook 未安裝的使用者無路可走；退化模式一節為不可裁剪項
   - Token: 【1 × Opus × ~22K】
 
-- [ ] **S3.2** — `docs/hooks-setup.md` 新增 Stop hook 章節
+- [x] **S3.2** — `docs/hooks-setup.md` 新增 Stop hook 章節
   - Files: docs/hooks-setup.md
   - Action: 沿用既有「1. 建立 hook script → 2. 設定 settings.json → 3. Rule」三段格式，新增第二篇。必含：完整 wrapper script、**additive 安裝步驟**（備份 → 追加到 `Stop` 陣列末端 → JSON 驗證 → `doctor`）、與既有 4 個 Stop hook 共存的說明（含 S2.4 實測結論）、`pause`/`resume`/`detach`/`doctor` 用法、專案層 `.claude/settings.json` 的低風險替代安裝路徑、**移除方式（逐字採用 S2.7 實測定案的步驟，不得自行改寫）**、`AGENT_SKILLS_DIR` 的用途與「指向非預設路徑時該路徑消失即全域失效」的警語、以及一段「為什麼不提高 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`」的說明
   - Dependencies: S1.5, S2.4, S2.5, S2.7
   - Risk: 文件寫的 JSON 片段被使用者整段覆蓋既有設定；範例明確標成「追加到現有陣列」並附前後對照
   - Token: 【1 × Sonnet × ~12K】
 
-- [ ] **S3.3** — README 與 `/design` 的 `/goal` 敘述更正
+- [x] **S3.3** — README 與 `/design` 的 `/goal` 敘述更正
   - Files: README.md, design/SKILL.md
   - Action: README 第 51、74、145、405–420 行拿掉「可與 `/goal` 複合 / `/plan-run` + `/goal` 自動推進」，改為「Stop hook 驅動自動推進」；`/plan-run` Features 區塊第一條同步改成誠實版；Hook 段落補指向新章節。`design/SKILL.md` 的推進方式建議（1a/1b 兩案）收斂為單一案：`/plan-run`（hook 驅動），移除 `/goal` 包外層的 1b。**`figma-verify` 的 `/goal` 用法完全不動**（那是視覺 gate，與 DAG driving 無關）
   - Dependencies: S3.1
   - Risk: 漏改造成文件互相矛盾；以 `grep -rn "/goal" --include="*.md"` 出清後逐行判定 keep/change
   - Token: 【1 × Sonnet × ~10K】
 
-- [ ] **S3.4** — CHANGELOG 與版本判定
+- [x] **S3.4** — CHANGELOG 與版本判定
   - Files: CHANGELOG.md
   - Action: 在 `[Unreleased]` 加 `Added`（Stop hook 控制流、pointer registry、`hook-stop`/`attach`/`detach`/`pause`/`resume`/`doctor`）、`Changed`（SKILL.md 191→~130、`init` 預設 attach、action 模板三行化、`/goal` 退出 plan-run driving）、`Fixed`（Plan 格式約束表 Phase 標頭 regex 記載錯誤）。依 `VERSIONING.md` 判定位階：**MINOR**（`/goal` 複合用法屬文件建議而非對外介面、plan 格式契約未變、既有子命令 stdout 未變）；若 S2.2 發現任何既有 stdout 契約被迫改動，升級為 MAJOR 並在此步提出
   - Dependencies: S3.1, S3.2, S3.3
   - Risk: 版本位階誤判；判準寫在此步的驗收條件中
   - Token: 【1 × Sonnet × ~7K】
 
-- [ ] **S3.5** — 文件審查與安裝副本同步
+- [x] **S3.5** — 文件審查與安裝副本同步
   - Files: plan-run/SKILL.md, docs/hooks-setup.md, README.md
   - Action: 派 `agents/doc-reviewer.md` 審查三份文件（一致性、可執行性、有無殘留「LLM 自願呼叫」語意）。另處理探勘期發現的問題：`~/.claude/skills/plan-run` 是 symlink 但指向 `~/.agents/skills/plan-run/`（**不是 repo**），內容為 190 行過期副本、無 PR 57 內容；需重新安裝或改為指向 repo，並在 README Install 段補一句「安裝後用 `diff` 確認副本與 repo 一致」。順帶記錄跨 repo follow-up：`~/.claude/skills/dispatch-loop/SKILL.md` 提到 `/plan-run + /goal`，屬 knowledge-base 資產，本 plan 不改，列入 Review Notes
   - Dependencies: S3.4, S2.6

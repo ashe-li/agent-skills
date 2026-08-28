@@ -280,7 +280,7 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 > 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
 > 3. **暫不開始** — 結束 `/design`，由使用者另行決定時機
 
-> **選項 1 的前置與例外**：需先裝好 Stop hook（見 `docs/hooks-setup.md`），未裝時仍可用但退回手動模式。對 plan 不確定或有高風險不可逆 step 時，可暫停自動推進逐步確認——兩者的操作都在 `/plan-run` 文件裡。
+> **選項 1 的前置與例外**：需先裝好 Stop hook（見 `docs/hooks-setup.md`），未裝時仍可用但退回手動模式。另外自動推進只認 `$HOME` 底下的 plan 路徑——plan 落在 `$HOME` 之外時 `init` 掛不上 pointer，一樣退回手動模式。對 plan 不確定或有高風險不可逆 step 時，可暫停自動推進逐步確認——這些操作都在 `/plan-run` 文件裡。
 
 **若選 1（`/plan-run`）：**
 

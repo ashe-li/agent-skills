@@ -137,20 +137,21 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py doctor
 確認 `doctor` 顯示的 runner 路徑已經指回主 repo checkout（`~/Documents/agent-skills`），
 不再是 worktree 路徑。
 
-## 4. 移除方式（先給一版；S2.7 實測後定案，屆時 S3.2 會取代本節）
+## 4. 移除方式
+
+完整步驟（含備份、驗證表、狀態保留與否的取捨）見
+[`docs/hooks-setup.md` 的「8. 移除」](../../docs/hooks-setup.md#8-移除)。摘要：
 
 ```bash
-# 1. 從 ~/.claude/settings.json 的 hooks.Stop 陣列移除 command 含
-#    "plan-run-stop.sh" 的那個物件（只刪這一個，其餘 4 個既有 hook 不動）
 cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%Y%m%d%H%M%S)
-# 手動編輯 ~/.claude/settings.json，刪除該物件後：
+# 手動編輯 ~/.claude/settings.json：移除 hooks.Stop 陣列中 command 字串含
+# "plan-run-stop" 的那個物件——**用指令內容比對，不要數第幾個**，安裝後
+# 使用者隨時可能加入或重排其他 hook。找不到就代表沒裝，不要刪任何東西。
 python3 -c "import json; json.load(open(__import__('os').path.expanduser('~/.claude/settings.json')))" && echo "JSON OK"
 
-# 2. 移除 wrapper script
 rm -f ~/.claude/hooks/plan-run-stop.sh
-
-# 3. 確認
 python3 ~/Documents/agent-skills/scripts/plan_runner.py doctor
 ```
 
-本節為暫定版本，S2.7 實測後會由 `docs/hooks-setup.md`（S3.2 範圍）取代成正式版本。
+`~/.claude/plan-run/` 是**狀態不是安裝**：裡面是進行中的 pointer（lease、暫停旗標、
+計數器）。解除安裝不需要刪它；刪了就等於放棄所有進行中 plan 的跨 session 續推。

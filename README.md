@@ -430,7 +430,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 - **控制流在 Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要注入下一步。對比「用文字請 LLM 自願呼叫腳本」——後者的第一層控制流仍在模型手上
 - **LLM 只負責執行**：把 hook 指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
-- **跨 session 續推**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上
+- **跨 session 續推**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下——之外的路徑掛不上 pointer，退回手動模式）
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
 - **Token 策略三層**：

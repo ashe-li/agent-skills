@@ -273,7 +273,17 @@ Renderer 放在 Python（Layer 2）而非 shell，wrapper 只負責 exec——�
 
 ### Q5. `/goal` 在新架構下的角色
 
-**決策：`/plan-run` 全面移除 `/goal`；`/goal` 在本 repo 只保留 `figma-verify` 的視覺 gate 用途。**
+**原決策：`/plan-run` 全面移除 `/goal`。**
+
+> **2026-08-29 推翻，改為「`/goal` 是預設、Stop hook 是選配」**（使用者裁決 + 實測）。
+> 兩項實測把原決策的事實基礎抽掉了：①`/goal` 拿到的續推輪數與自寫 Stop hook **完全
+> 相同（各 9 輪）**，「hook 比較能跑久」不成立；②端對端跑 5-step / 含交叉依賴的 plan，
+> **純 `/goal` 驅動 5/5 完成、依賴順序正確**（`init --no-attach` 確認 pointer 為空，
+> 排除 hook 干擾），證據 `.verification/2026-08-29/goal-driven-plan-run-equivalence.md`。
+> 兩者唯一實質差異是**跨 session 續推**：hook 有 pointer 檔自動接上，`/goal` 隨 session
+> 消失需重下一次（state file 仍在，不是資料遺失）。既然差異只有這一項、而模式 A 零安裝，
+> 預設順序反過來：**`/goal` 為主，Stop hook 留給會跨 session 的長 plan**。
+> 下方三條原理由的現況見各條註記。
 
 三個理由，按份量排：
 
@@ -281,7 +291,9 @@ Renderer 放在 Python（Layer 2）而非 shell，wrapper 只負責 exec——�
 
    > **2026-08-29 實測修正**（`.verification/2026-08-29/stop-hook-block-cap-measured.md`）：本條原文寫「兩個 blocker 互相搶格子」，**後半是錯的**。實測掛兩支獨立的 always-block hook，**兩支都拿到全部 9 輪**、turn 一樣在第 9 輪結束——上限是**每個 turn 的 Stop 輪數**，不是每支 hook 的 block 次數，沒有誰少拿。正確的說法是：疊 `/goal` **換不到更多步**（共用同一份輪數上限），換到的是**同一輪內兩則 reason 同時注入、指令彼此稀釋**。結論不變，理由要改。同次實測也定案了上限本身：hook 被呼叫 9 次、第 9 次的 block 不被採納 = 實際可用 8 次續推。
 2. `/goal` 的評估者不跑指令、不讀檔、沒有狀態記憶，只讀 transcript。它取代不了狀態機——現行 SKILL.md 3f 也承認這點，才會補一句「每次 transition 後跑一次 `index` 把狀態 surface 給評估者」。這條建議實測冗餘且有害（每輪多一次呼叫、多 ~500 chars、而且又是一次 LLM 自願行為）。狀態機接手後它完全沒有存在理由。
-3. 一個 session 只能一個 `/goal`，佔掉之後其他需求（例如同 session 想跑 figma 視覺 gate）就沒得用。
+3. 一個 session 只能一個 `/goal`，佔掉之後其他需求（例如同 session 想跑 figma 視覺 gate）就沒得用。**（仍成立，且是選擇模式 B 的第二個正當理由——同 session 要跑 figma 視覺 gate 時把 `/goal` 讓出來。）**
+
+> **理由 2 的現況**：仍成立，但**不構成移除 `/goal` 的理由**——它證明的是「`/goal` 取代不了狀態機」，而模式 A 從來沒有要它取代：DAG 順序仍由 `plan_runner.py` 給，`/goal` 只提供續推力道。補法是把「下一輪先跑 `next`」寫進 goal 條件本身（評估者每輪重述，而 `next` 讀磁碟上的 state file，不依賴 transcript）。原文附帶批評的「每次 transition 後跑 `index`」確實是反模式，那條維持不採用——`complete` 的 output 開頭已經是 `Progress: N/M`，評估者要的判定資訊本來就在 transcript 裡。
 
 `figma-verify` Step 4.5 用 `/goal` 做 Haiku 視覺比對，屬於「model-evaluated check」，正是官方說 `/goal` 該做的事，完全不動。
 
@@ -397,8 +409,8 @@ hook 注入的 `reason` 會以 harness 的權威被當成 LLM 的下一個指令
   - 驗收：**PASS** — 三個無 active plan 的 cwd 各跑一輪，stdout **與 stderr 皆 0 bytes**、exit 0、耗時中位數 69ms（n=15）；四個既有 Stop hook 觸發次數與新 hook 一致；lease 仲裁擋下同 cwd 的第二個 session。證據：`zero-impact.md`
 - [ ] **AC5｜8-block 行為可觀察且有意義**：20 步跑完的過程中至少出現 2 次 check-in；每次 check-in 前一輪 Claude 都輸出了進度摘要（含 N/M 與下一步）；**沒有任何一次是被 harness 強制打斷**（連續 block 數不曾達 8）；至少 1 次 check-in 落在 phase 邊界。
   - 驗收：**PARTIAL，未結案** — 四項子條件中三項有直接證據：每輪推進正好 6 步 = `BLOCK_BUDGET`、**連續 block 數不曾達 8**、phase 邊界 check-in 觸發 **3 次**（≥2 且 ≥1 落在 phase 邊界）。第四項「每次 check-in 前一輪都輸出含 `N/M` 與下一步的進度摘要」**未取得逐輪 transcript 證據，也未補驗**，故本條不勾。補法：重跑一次 20-step 沙箱並逐次 check-in 存下前一輪輸出
-- [x] **AC6｜SKILL.md 行數與砍除項對照可驗**：`wc -l plan-run/SKILL.md` ≤ 145（原訂 ≤135，review 回應階段補入 doctor FAIL 分流、`$HOME` 路徑限制、「hook 指定的 step 不必逐步問」三段後放寬；對照 base 的 191 行仍是淨減）；`grep -c "/goal" plan-run/SKILL.md` = 0；`grep -c "TaskCreate" plan-run/SKILL.md` ≤ 1（僅 frontmatter）；不再出現「LLM 不負責『下一步是什麼』的判斷」；Plan 格式約束表的 Phase 標頭列已改為與 `^###\s+(.+)$` 相符的敘述；`python3 scripts/check_skill.py --files plan-run/SKILL.md --repo-dir .` 通過。
-  - 驗收：**PASS** — `wc -l` = **140** ≤145（review 回應前為 134）；`grep -c "/goal"` = 0；`grep -c "TaskCreate"` = 1（僅 frontmatter）；禁用語 0；Phase 標頭列已改為與 parser regex 相符的敘述並區分 parser 與 normalize；`check_skill.py` PASS（25.0）
+- [x] **AC6｜SKILL.md 行數與砍除項對照可驗**：`wc -l plan-run/SKILL.md` ≤ 180（原訂 ≤135 → review 回應放寬到 145 → `/goal` 改為預設模式後補入「兩個機制職責不同」對照表、模式選擇、Step 1.5 的 `/goal` 配方後放寬到 180；對照 base 的 191 行仍是淨減）；`grep -c "/goal" plan-run/SKILL.md` > 0（**2026-08-29 反轉**：原訂為 0，即「SKILL.md 不得出現 `/goal`」；改為 `/goal` 是預設模式後這條斷言方向相反，現要求它必須出現且是 Step 1.5 的主路徑）；`grep -c "TaskCreate" plan-run/SKILL.md` ≤ 1（僅 frontmatter）；不再出現「LLM 不負責『下一步是什麼』的判斷」；Plan 格式約束表的 Phase 標頭列已改為與 `^###\s+(.+)$` 相符的敘述；`python3 scripts/check_skill.py --files plan-run/SKILL.md --repo-dir .` 通過。
+  - 驗收：**PASS** — `wc -l` = **176** ≤180（134 → 140 → 176，仍低於 base 的 191）；`grep -c "/goal"` > 0（Step 1.5 主路徑）；`grep -c "TaskCreate"` = 1（僅 frontmatter）；禁用語 0；Phase 標頭列已改為與 parser regex 相符的敘述並區分 parser 與 normalize；`check_skill.py` PASS（25.0）
 - [x] **AC7｜既有 `plan_runner.py` 子命令零回歸**：`python3 -m unittest discover scripts/tests` 全綠。其中至少含：`complete` 無 task_id 時輸出不含 `## Required sync`、有 task_id 時含且含 `TaskUpdate(`；`complete` 的 stdout 首行為 `# completed: <step>`，其內嵌 state view 區塊首行為 `Progress: N/M`、之後緊接 `pending:X | completed:Y`（有 parent task 時中間隔一行 `Parent task:`）；`init --no-attach` stdout 與 base `e745670` 的 golden 檔一致；非法轉移仍被拒；`normalize` 仍 idempotent。
   - 驗收：**PASS** — `python3 -m unittest discover scripts/tests` **104 則全綠**，含 `init --no-attach` 對 base `e745670` golden 的逐位元組比對
 - [x] **AC8｜多 hook 共存有實測結論**：S2.4 產出一張表，明確記載「兩個 hook 同時 block 時 Claude 實際收到哪一則 reason」「`wrap.sh` 是否原樣轉送 JSON」「top-level vs `hookSpecificOutput` 哪個形狀在本機 v2.1.2xx 有效」，並據此定案 hook 的輸出形狀。

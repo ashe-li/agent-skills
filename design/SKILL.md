@@ -279,7 +279,7 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 > 1. **`/plan-run`** — 推進順序由狀態機決定、不會跳步；不需要每個 step 手動催，也會定期停下來讓你確認。預設用內建 `/goal` 提供續推力道（零安裝），跨 session 的長 plan 可改掛 Stop hook。失敗時仍以 `AskUserQuestion` 交還給人決定
 > 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
 > 3. **暫不開始** — 結束 `/design`，由使用者另行決定時機
-
+>
 > **選項 1 的前置與例外**：預設模式零安裝（`init --no-attach` + 一道 `/goal`）。只有需要**跨 session 續推**時才要裝 Stop hook（見 `docs/hooks-setup.md`），而那條路徑只認 `$HOME` 底下的 plan——落在 `$HOME` 之外時掛不上 pointer，用預設模式即可。對 plan 不確定或有高風險不可逆 step 時，可暫停自動推進逐步確認——這些操作都在 `/plan-run` 文件裡。
 
 **若選 1（`/plan-run`）：**

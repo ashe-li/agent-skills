@@ -421,16 +421,21 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
-### `/plan-run` — Plan DAG 推進器（控制流在 Stop hook）
+### `/plan-run` — Plan DAG 推進器
 
-依照 `plan.md` 的 Dependencies DAG 推進實作。控制流掛在 Claude Code 官方的 **Stop hook** 上：harness 每輪結束時強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要把下一步注入回模型——LLM 不需要（也不應該）主動想起查狀態。安裝步驟見 [`docs/hooks-setup.md`](docs/hooks-setup.md) 的「Plan DAG 推進 Stop Hook」章節；未安裝時 `/plan-run` 仍可用，但退回手動模式。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）。
+依照 `plan.md` 的 Dependencies DAG 推進實作。**順序、依賴、跨 session 記憶都在 state file**（`plan_runner.py`）；讓它一輪接一輪跑下去的推力有兩種來源：
+
+- **模式 A（預設，零安裝）** — 內建 `/goal`。`init --no-attach` 後下一道 `/goal` 就開始跑，終止條件用 `plan_runner.py` 自己印的 `Progress: N/N`
+- **模式 B（選配）** — Claude Code 官方的 **Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，讀 state 決定要不要注入下一步。**值得裝的唯一理由是跨 session 續推**（pointer 檔自動接上，不必重下指令）。安裝見 [`docs/hooks-setup.md`](docs/hooks-setup.md)
+
+實測兩種模式**一輪拿到的續推輪數相同**（9 輪，見下），差別只在跨 session。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）。
 
 <details>
 <summary>Features</summary>
 
-- **控制流在 Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要注入下一步。對比「用文字請 LLM 自願呼叫腳本」——後者的第一層控制流仍在模型手上
-- **LLM 只負責執行**：把 hook 指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
-- **跨 session 續推**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下——之外的路徑掛不上 pointer，退回手動模式）
+- **職責分離**：`plan_runner.py` + state file 決定「下一步做什麼」（依賴解析、順序、非法轉移驗證）；`/goal` 或 Stop hook 只決定「還要不要再跑一輪」。搞混這條分界就會誤以為換驅動器能換到別的東西
+- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **跨 session 續推（模式 B 專屬）**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下）。模式 A 的 state file 一樣還在，只是要重下一次 `/goal`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
 - **Token 策略三層**：

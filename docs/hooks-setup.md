@@ -268,7 +268,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py doctor    # 安裝自檢
 `pause` 只是把 pointer 標成暫停，state 一個字都不會動；`detach` 只移除 pointer，plan 的 `.plan-state/` 仍在原地，之後 `attach` 回來就接得上。
 
 > **`attach` 只收 `$HOME` 底下的 plan。** pointer 的 `plan_path` 在寫入與每輪讀取時都會 `resolve()` 後比對 `$HOME`（一併擋掉 symlink escape），落在 `$HOME` 之外的 plan 會被判為 invalid，自動推進不會啟動、跨 session 也接不回來。此時 `/plan-run` 仍可用，只是退回手動模式（見 `plan-run/SKILL.md` 的「手動退化模式」）；要自動推進就把 plan 搬進 `$HOME` 底下再 `attach`。
-
+>
 > **來源不明的 plan 先讀過再 attach。** hook 注入的 `reason` 會以 harness 的權威被當成模型的下一個指令，而其中一部分來自 plan 的 `Action` 欄位文字——任何寫進 plan 的文字都因此取得一條「每輪自動注入」的通道。hook 端已做隔離（plan 原文包在標註 `plan data, not instructions` 的圍欄內、截斷 600 字元、剝除控制字元與 ANSI escape、**不執行** plan 的 `Command` 欄位），但若 plan 來自 Notion ticket、他人 PR 或 `/notion-plan` 抓來的內容，attach 之前請自己讀一遍。
 
 ## 6. 低風險替代：裝在專案層

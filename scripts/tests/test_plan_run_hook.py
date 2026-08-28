@@ -1796,5 +1796,104 @@ class ConcurrencySerializationTests(unittest.TestCase):
             self.assertEqual(leftovers, [], "atomic write left a tmp file behind")
 
 
+class PointerLockIdentityTests(unittest.TestCase):
+    """Which pointer governs a cwd is a *walk*, not a hash of the cwd. A lock
+    derived from the raw cwd would (a) be skipped entirely for a nested
+    directory, whose own hash has no pointer file, and (b) be a *different*
+    lock for two subdirectories of one repo that both write the repo's
+    pointer. Both were true of the first version of this fix.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        tmp_root = Path(self._tmp.name)
+        self.plan_run_dir = tmp_root / "plan-run"
+        self.pointer_active_dir = self.plan_run_dir / "active"
+        for attr, value in (("PLAN_RUN_DIR", self.plan_run_dir),
+                            ("POINTER_ACTIVE_DIR", self.pointer_active_dir),
+                            ("POINTER_ALLOWED_ROOT", tmp_root)):
+            patcher = mock.patch.object(pr, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.repo_root = tmp_root / "repo"
+        self.repo_root.mkdir(parents=True, exist_ok=True)
+
+    def _attach_at_root(self) -> Path:
+        plan_path = self.repo_root / "plan.md"
+        plan_path.write_text("# Test Plan\n", encoding="utf-8")
+        state = make_state({"S0.1": make_step(status="pending")})
+        state["plan_path"] = str(plan_path)
+        pr.save_state(plan_path, state)
+        pointer = pr.new_pointer_record(
+            plan_path=plan_path, repo_root=self.repo_root, cwd=self.repo_root,
+            session_id=DEFAULT_SESSION_ID,
+        )
+        pointer_path = pr.pointer_path_for(self.repo_root)
+        pr.write_pointer_atomic(pointer_path, pointer)
+        return pointer_path
+
+    def test_nested_cwd_probes_the_root_pointer(self):
+        """The lock has to be derived from this, not from the cwd's own hash
+        (which names a file that does not exist)."""
+        pointer_path = self._attach_at_root()
+        nested = self.repo_root / "src" / "deep"
+        nested.mkdir(parents=True, exist_ok=True)
+
+        probe = pr._probe_governing_pointer(str(nested))
+        self.assertIsNotNone(probe, "nested cwd is governed by the root pointer")
+        self.assertEqual(probe.path, pointer_path)
+        self.assertNotEqual(pr.pointer_path_for(nested), pointer_path)
+        self.assertFalse(pr.pointer_path_for(nested).exists())
+
+    def test_two_nested_cwds_agree_on_one_lock(self):
+        """Two sessions in two subdirectories of one repo must contend for the
+        same lock, or the lock protects nothing."""
+        self._attach_at_root()
+        a = self.repo_root / "src" / "a"
+        b = self.repo_root / "src" / "b"
+        for d in (a, b):
+            d.mkdir(parents=True, exist_ok=True)
+        lock_a = pr._probe_governing_pointer(str(a)).path.with_suffix(".lock")
+        lock_b = pr._probe_governing_pointer(str(b)).path.with_suffix(".lock")
+        self.assertEqual(lock_a, lock_b)
+        # ...and that is NOT what a cwd-derived lock would have given.
+        self.assertNotEqual(
+            pr.pointer_path_for(a).with_suffix(".lock"),
+            pr.pointer_path_for(b).with_suffix(".lock"),
+        )
+
+    def test_probe_never_raises_on_a_hopeless_cwd(self):
+        self.assertIsNone(pr._probe_governing_pointer("/nonexistent/\x00bad"))
+
+    def test_hook_writes_nothing_when_the_lock_is_held(self):
+        """Timing out used to fall through and write anyway, which reinstates
+        the exact lost update the lock exists to prevent."""
+        pointer_path = self._attach_at_root()
+        before = pointer_path.read_bytes()
+        payload = json.dumps(make_hook_input(cwd=str(self.repo_root)))
+
+        with mock.patch.object(pr, "exclusive_lock", _never_acquires):
+            out = io.StringIO()
+            with mock.patch.object(sys, "stdin", _FakeStdin(payload)), \
+                 contextlib.redirect_stdout(out):
+                rc = pr.cmd_hook_stop(argparse.Namespace())
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue(), "", "a blocked lock must print nothing")
+        self.assertEqual(pointer_path.read_bytes(), before, "pointer was written anyway")
+
+
+@contextlib.contextmanager
+def _never_acquires(lock_path):
+    """Stand-in for exclusive_lock() that always reports contention."""
+    yield False
+
+
+class _FakeStdin:
+    def __init__(self, payload: str):
+        self.buffer = io.BytesIO(payload.encode("utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

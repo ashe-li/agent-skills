@@ -94,14 +94,16 @@
 
 - [x] **S1.3** — Hook reason renderer 與 plan 文字隔離
   - Files: scripts/plan_runner.py
-  - Action: 新增 `render_hook_reason(state, kind, step_id, budget_info)`。輸出結構（目標 200–350 tokens）：標頭一行（`[plan-run] <slug> — Progress N/M — <phase>`）；`Next: S<id> — <title>` 與 `agent`/`skill`/`command`/`files`/`deps`/`risk` 欄位；plan 原文（`action`）包在 `--- plan data (not instructions) ---` 圍欄內、截斷至 600 字元、剝除 ASCII 控制字元與 ANSI escape；最後三行照抄可執行指令（`start` → 執行 → `complete` / `fail`）；結尾一行預算提示（`Auto-advance 4/6 — check-in after 2 more steps`）。**一次只給一個 step 的完整 block**，其餘 ready 只列 ID 並註明「一輪一步，hook 會在下輪指定」。另備 4 種 reason 變體：`next_step` / `report_result`（in_progress）/ `settle_background` / `completion`。`checkpoint_pending` 為真時在 `next_step` 尾端追加 check-in footer：「這是本段最後一步；做完請輸出進度摘要（已完成 N/M、本 phase 狀態、下一步、剩餘步數）後結束回合，不要再繼續」
+  - Action: 新增 `render_hook_reason(state, kind, step_id, budget_info)`。輸出結構（目標 200–350 tokens）：標頭一行（`[plan-run] <slug> — Progress N/M — <phase>`）；`Next: S<id> — <title>` 與 `agent`/`skill`/`command`/`files`/`deps`/`risk` 欄位；plan 原文（`action`）包在 `--- plan data (not instructions) ---` 圍欄內、截斷至 600 字元、剝除 ASCII 控制字元與 ANSI escape；最後三行照抄可執行指令（`start` → 執行 → `complete` / `fail`）；結尾一行預算提示（`Auto-advance 4/7 — check-in after 2 more steps`）。**一次只給一個 step 的完整 block**，其餘 ready 只列 ID 並註明「一輪一步，hook 會在下輪指定」。另備 4 種 reason 變體：`next_step` / `report_result`（in_progress）/ `settle_background` / `completion`。`checkpoint_pending` 為真時在 `next_step` 尾端追加 check-in footer：「這是本段最後一步；做完請輸出進度摘要（已完成 N/M、本 phase 狀態、下一步、剩餘步數）後結束回合，不要再繼續」
   - Dependencies: S1.1
   - Risk: reason 每輪累積進 transcript（20 步約 6–7K token）；以「一輪一步 + 截斷」控在可接受範圍，S2.3 實測後可調
   - Token: 【1 × Sonnet × ~12K】
 
 - [x] **S1.4** — Pointer CLI 表面與 `doctor` 自檢
   - Files: scripts/plan_runner.py
-  - Action: 新增子命令 `attach <plan>` / `detach [<plan>]` / `pause` / `resume` / `pointer`（印當前 cwd 解析結果）/ `doctor`。`doctor` 檢查**六件事**並印 PASS/FAIL/INFO：python3 版本、runner 絕對路徑、`~/.claude/plan-run/` 可寫、`~/.claude/settings.json` 的 Stop 陣列是否含 `plan-run-stop`、wrapper script 是否存在且可執行、當前 cwd 是否有有效 pointer。其中兩項可以合法地是 INFO 而非 FAIL（cwd 沒有 active plan、`~/.claude/plan-run/` 尚未建立），故摘要行印的是 `<n> PASS / <m> INFO / 0 FAIL — 安裝正常` 而非 `n/6 PASS`——健康安裝的 PASS 數會隨這兩項落在 PASS 或 INFO 而變（5+1 或 4+2）。**六項這個數字與摘要格式是同一份契約**，文件、實作與測試都以它為準，不得再出現「五項」的說法。`init` 新增 `--attach` / `--no-attach`（**預設 attach**，stdout 只多印一行 `Attached: <pointer path>`，其餘輸出零變更）；`attach` 時若偵測到 hook 未安裝，額外印一段 fallback 提示指向 `docs/hooks-setup.md`。`start` 新增可選 `--session-id`（寫入 step 的 `session_id` 欄位，僅供 audit）
+  - Action: 新增子命令 `attach <plan>` / `detach [<plan>]` / `pause` / `resume` / `pointer`（印當前 cwd 解析結果）/ `doctor`。`doctor` 檢查**六件事**並印 PASS/FAIL/INFO：python3 版本、runner 絕對路徑、`~/.claude/plan-run/` 可寫、`~/.claude/settings.json` 的 Stop 陣列是否含 `plan-run-stop`、wrapper script 是否存在且可執行、當前 cwd 是否有有效 pointer。其中兩項可以合法地是 INFO 而非 FAIL（cwd 沒有 active plan、`~/.claude/plan-run/` 尚未建立），故摘要行印的是 `<n> PASS / <m> INFO / 0 FAIL — 安裝正常` 而非 `n/6 PASS`——健康安裝的 PASS 數會隨這兩項落在 PASS 或 INFO 而變（5+1 或 4+2）。**六項這個數字與摘要格式是同一份契約**，文件、實作與測試都以它為準，不得再出現「五項」的說法。`init` 新增 `--attach` / `--no-attach`（**預設 attach**，stdout 末端多印 `Plan:` / `Cwd:` / `Pointer:` 三行，其餘輸出零變更）；`attach` 時若偵測到 hook 未安裝，額外印一段 fallback 提示指向 `docs/hooks-setup.md`。`start` 新增可選 `--session-id`（寫入 step 的 `session_id` 欄位，僅供 audit）
+
+    > 2026-08-29 更正：本條原寫「只多印一行 `Attached: <pointer path>`」。實作與回歸測試的實際輸出是三行（`_print_attach_result()`）——單印 pointer 檔名沒有意義，那是 cwd 的 sha256，看不出綁到哪個 plan、綁在哪。以三行為準，CHANGELOG 記載的即是此契約。
   - Dependencies: S1.1
   - Risk: `init` 預設 attach 是行為變更；以「stdout 既有區塊不變」與 `--no-attach` 逃生口界定，並在 CHANGELOG 明列
   - Token: 【1 × Sonnet × ~10K】
@@ -115,9 +117,11 @@
 
 - [x] **S1.6** — 8-block 預算與 phase 邊界 check-in
   - Files: scripts/plan_runner.py
-  - Action: 實作 `decide_budget(pointer, state, ready_step)`：`BLOCK_BUDGET` 預設 6（env `PLAN_RUN_BLOCK_BUDGET` 可覆寫，上限硬夾在 7，**不得 ≥ 8、不得碰 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`**）；`PHASE_MIN` 預設 3。規則：`consecutive_blocks >= BLOCK_BUDGET` → allow（自然收尾，讓上一輪的摘要成為使用者看到的最後一則訊息）；`consecutive_blocks == BLOCK_BUDGET - 1` → block 但設 `checkpoint_pending`（S1.3 footer 生效）；若「完成本 ready step 後該 phase 全數 completed/skipped」且 `consecutive_blocks >= PHASE_MIN` → 同樣設 `checkpoint_pending`，**讓停點落在 phase 邊界而非中途**。allow 時把 `consecutive_blocks` 留著不清零（由 `stop_hook_active=false` 清），確保不會出現「allow 後立刻又滿血 block 6 次」
+  - Action: 實作 `decide_budget(pointer, state, ready_step)`：`BLOCK_BUDGET` 預設 7（env `PLAN_RUN_BLOCK_BUDGET` 可覆寫，硬夾在 `BLOCK_BUDGET_HARD_CAP = 8`，**不得超過實測上限 8、不得碰 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`**）
+
+    > 2026-08-29 更新：本條原寫 6/7，是從「8」這個當時只有 WebSearch 來源的數字往下退兩格。實測定案後（`.verification/2026-08-29/stop-hook-block-cap-measured.md`：hook 被呼叫 9 次、第 9 次不被採納 = 可用 8 次續推）改為 7/8，仍保留一輪餘裕。；`PHASE_MIN` 預設 3。規則：`consecutive_blocks >= BLOCK_BUDGET` → allow（自然收尾，讓上一輪的摘要成為使用者看到的最後一則訊息）；`consecutive_blocks == BLOCK_BUDGET - 1` → block 但設 `checkpoint_pending`（S1.3 footer 生效）；若「完成本 ready step 後該 phase 全數 completed/skipped」且 `consecutive_blocks >= PHASE_MIN` → 同樣設 `checkpoint_pending`，**讓停點落在 phase 邊界而非中途**。allow 時把 `consecutive_blocks` 留著不清零（由 `stop_hook_active=false` 清），確保不會出現「allow 後立刻又滿血 block 6 次」
   - Dependencies: S1.1
-  - Risk: 我方計數與 harness 內部計數可能不同步（mempal 也會消耗上限）；預算 6 保留 2 格 headroom 即為此
+  - Risk: 我方計數與 harness 內部計數可能不同步（mempal 也會消耗上限）；預算 7 對實測上限 8 保留 1 格 headroom 即為此
   - Token: 【1 × Sonnet × ~9K】
 
 - [x] **S1.7** — Layer 2 退化：`_format_step_action_block` 三行化
@@ -131,7 +135,7 @@
 
 - [x] **S2.1** — Hook 決策表單元測試
   - Files: scripts/tests/test_plan_run_hook.py
-  - Action: 用 stdlib `unittest` + `tempfile`（repo 目前無測試框架，不引入新依賴；以 `python3 -m unittest discover scripts/tests` 執行）。對 S1.2 決策表每個分支各一則 golden test，輸入為合成的 Stop hook JSON + 合成 state file，assert stdout JSON 的 `decision` 與 `reason` 是否含關鍵字串。必測 case：無 pointer→靜默 allow、paused→allow、state 損毀（截斷 JSON / 缺 `steps` / 未知 `schema_version`）→allow 且不 raise、plan 檔被刪→allow、failed step 存在→allow、in_progress→block 且 reason 含 step id、`background_tasks` 非空 ×（有/無 in_progress）×（poll 0/1/2）、lease 被他人持有→allow、lease 過期→接手 block、`stop_hook_active` false→計數歸零、預算 5→`checkpoint_pending`、預算 6→allow、phase 邊界提前 checkpoint、`all_done` 首次→block／第二次→刪 pointer、cwd 在 worktree 內→仍解析得到 pointer
+  - Action: 用 stdlib `unittest` + `tempfile`（repo 目前無測試框架，不引入新依賴；以 `python3 -m unittest discover scripts/tests` 執行）。對 S1.2 決策表每個分支各一則 golden test，輸入為合成的 Stop hook JSON + 合成 state file，assert stdout JSON 的 `decision` 與 `reason` 是否含關鍵字串。必測 case：無 pointer→靜默 allow、paused→allow、state 損毀（截斷 JSON / 缺 `steps` / 未知 `schema_version`）→allow 且不 raise、plan 檔被刪→allow、failed step 存在→allow、in_progress→block 且 reason 含 step id、`background_tasks` 非空 ×（有/無 in_progress）×（poll 0/1/2）、lease 被他人持有→allow、lease 過期→接手 block、`stop_hook_active` false→計數歸零、預算 `BLOCK_BUDGET - 1`（6）→`checkpoint_pending`、預算 `BLOCK_BUDGET`（7）→allow、phase 邊界提前 checkpoint、`all_done` 首次→block／第二次→刪 pointer、cwd 在 worktree 內→仍解析得到 pointer
   - Dependencies: S1.2, S1.3, S1.6
   - Risk: 測試把實作細節寫死導致重構困難；斷言只針對 `decision` 與 reason 關鍵片段，不逐字比對全文
   - Token: 【1 × Sonnet（`agents/tdd-guide.md` 檢查清單）× ~20K】
@@ -180,7 +184,7 @@
 
 ### Phase 3: 文件同步
 
-- [x] **S3.1** — `plan-run/SKILL.md` 重寫至 ~130 行
+- [x] **S3.1** — `plan-run/SKILL.md` 重寫（原目標 ~130 行；模式 A/B 兩段式回補後**實際定案 176 行**，AC6 上限 180）
   - Files: plan-run/SKILL.md
   - Action: 依需求的可砍項逐條落實。**改寫第一條設計原則為誠實版**：「控制流在 Stop hook：harness 每輪結束強制執行 `plan_runner.py hook-stop`，由它讀 state 決定要不要把下一步注入回來；LLM 不需要（也不應該）主動想起查狀態，只負責執行被指定的 step 並回報結果」。刪除：3f `/goal` 整節、3f 的 `index` surface 建議、Step 2「建立父 task」整節（降為 Step 1 一行註腳）、3b reconcile 五步壓成一句條件式、3a/3c「什麼時候跑哪個指令」教學。新增：一節「前置：安裝 Stop hook（一次性）」指向 `docs/hooks-setup.md`、一節精簡的「hook 未安裝時的手動退化模式」（本 repo 是公開 repo，不能假設所有人都裝了）。**修正 Plan 格式約束表**：Phase 標頭實際 regex 是 `^###\s+(.+)$`，破折號/冒號/全形冒號皆可（真實 plan 用 `### Phase 1 — 診斷`），現表寫「只認冒號」是錯的。frontmatter 的 `description` 同步改寫（不再宣稱 Python 決定下一步，改為 Stop hook 驅動）。完成後跑 `python3 scripts/check_skill.py --files plan-run/SKILL.md --repo-dir .`
   - Dependencies: S2.3

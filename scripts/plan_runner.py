@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -31,9 +32,15 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, Iterator, NamedTuple
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None  # type: ignore[assignment]
 
 STEP_ID_PATTERN = r"S\d+(?:\.\d+)?[a-z]?"
 
@@ -468,12 +475,90 @@ def load_state(plan_path: Path) -> dict[str, Any] | None:
 
 
 def save_state(plan_path: Path, state: dict[str, Any]) -> None:
+    """Persist state atomically: tmp file in the same dir, then os.replace.
+
+    The previous write_text() left a window in which a concurrent reader --
+    the Stop hook of another session runs on every turn -- could read a
+    truncated JSON body and route the plan to the "invalid" branch.
+    """
     state["updated_at"] = now_iso()
-    state_dir_for(plan_path).mkdir(parents=True, exist_ok=True)
-    state_path_for(plan_path).write_text(
-        json.dumps(state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    state_dir = state_dir_for(plan_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    target = state_path_for(plan_path)
+    payload = json.dumps(state, indent=2, ensure_ascii=False)
+    fd, tmp_name = tempfile.mkstemp(dir=str(state_dir), prefix=f".{target.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        os.replace(tmp_path, target)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
+# Bounded: the hook runs on every Stop event, so waiting on a lock must
+# never be able to hang a turn. After this many attempts we give up the
+# lock and proceed unserialized -- degrading to the previous behaviour is
+# strictly better than a hung session.
+_LOCK_RETRIES = 20
+_LOCK_RETRY_SLEEP = 0.025
+
+
+@contextlib.contextmanager
+def exclusive_lock(lock_path: Path) -> Iterator[bool]:
+    """Best-effort exclusive advisory lock, yielding whether it was taken.
+
+    Serializes the read-decide-write sequences that two sessions sharing a
+    cwd can otherwise interleave: both observing the same expired lease and
+    both emitting the same ready step, or both reading a step as `pending`
+    before either persists `in_progress`. `os.replace` alone only rules out
+    *torn* files, not lost updates.
+
+    Never raises and never blocks indefinitely: no fcntl, an unopenable
+    lock file, or a holder that outlasts the retry budget all yield False
+    and run the body anyway.
+    """
+    if fcntl is None:
+        yield False
+        return
+    acquired = False
+    try:
+        handle = open(lock_path, "a+b")
+    except OSError:
+        # Includes "the directory does not exist yet", which is the correct
+        # answer for a cwd with no pointer: there is nothing to serialize,
+        # and creating the directory would break the write-free guarantee.
+        yield False
+        return
+    try:
+        for attempt in range(_LOCK_RETRIES):
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if attempt < _LOCK_RETRIES - 1:
+                    time.sleep(_LOCK_RETRY_SLEEP)
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        try:
+            handle.close()
+        except OSError:
+            pass
+
+
+def state_lock_path_for(plan_path: Path) -> Path:
+    """Lock file guarding one plan's state. Lives beside the state file so
+    it inherits the same directory lifetime, and is never read as data."""
+    return state_dir_for(plan_path) / f"{plan_path.stem}.state.lock"
 
 
 def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -1028,6 +1113,13 @@ def pointer_path_for(cwd: str | Path) -> Path:
     real = Path(cwd).resolve()
     digest = hashlib.sha256(str(real).encode("utf-8")).hexdigest()[:16]
     return POINTER_ACTIVE_DIR / f"{digest}.json"
+
+
+def pointer_lock_path_for(cwd: str | Path) -> Path:
+    """Lock file guarding one cwd's pointer. Sits next to the pointer file
+    under the same 0700 directory; a `.lock` suffix keeps it out of the
+    `*.json` glob that enumerates pointers."""
+    return pointer_path_for(cwd).with_suffix(".lock")
 
 
 def _ensure_pointer_active_dir() -> Path:
@@ -1765,13 +1857,14 @@ def _render_report_result(
     step = state["steps"][step_id]
     safe_sid = _sanitize_step_id(step_id)
     plan = _quote_plan_path(plan_path)
+    runner = _runner_invocation(plan_path)
     lines = [_hook_reason_header(state, f"step {safe_sid}"), ""]
     lines.extend(_plan_data_lines(state, step))
     lines.append("")
     lines.append(f"{safe_sid} 目前狀態為 in_progress，尚未回報結果。")
     lines.append("請先完成該 step 的實際工作，再回報下列其中一個指令：")
-    lines.append(f"  ok:  plan_runner.py complete {plan} {safe_sid}")
-    lines.append(f"  err: plan_runner.py fail {plan} {safe_sid} --reason=<msg>")
+    lines.append(f"  ok:  {runner} complete {plan} {safe_sid}")
+    lines.append(f"  err: {runner} fail {plan} {safe_sid} --reason=<msg>")
     lines.append("")
     lines.append(_budget_hint_line(budget_info))
     return "\n".join(lines)
@@ -1786,6 +1879,7 @@ def _render_settle_background(
     step = state["steps"].get(step_id) if step_id else None
     safe_sid = _sanitize_step_id(step_id) if step_id else ""
     plan = _quote_plan_path(plan_path)
+    runner = _runner_invocation(plan_path)
     detail = f"step {safe_sid}" if safe_sid else ""
     lines = [_hook_reason_header(state, detail), ""]
     lines.extend(_plan_data_lines(state, step))
@@ -1796,8 +1890,8 @@ def _render_settle_background(
         lines.append("有背景工作尚未收斂。")
     lines.append("請先確認背景工作（agent/subprocess）的實際狀態，收斂後再回報：")
     if step_id:
-        lines.append(f"  ok:  plan_runner.py complete {plan} {safe_sid}")
-        lines.append(f"  err: plan_runner.py fail {plan} {safe_sid} --reason=<msg>")
+        lines.append(f"  ok:  {runner} complete {plan} {safe_sid}")
+        lines.append(f"  err: {runner} fail {plan} {safe_sid} --reason=<msg>")
     lines.append("")
     lines.append(_budget_hint_line(budget_info))
     return "\n".join(lines)
@@ -1906,7 +2000,16 @@ _STUCK_MESSAGE = (
 
 _NAG_ESCALATION_NOTE = (
     "已連續提醒多次：若無法確認該 step 成功，請直接執行 "
-    "`plan_runner.py fail {plan} {step} --reason=<msg>`，不要讓它留在 in_progress。"
+    "`{runner} fail {plan} {step} --reason=<msg>`，不要讓它留在 in_progress。"
+)
+
+# Printed to the *user* when the in_progress nag runs out of budget. Branch
+# (9) used to have no ceiling at all: with `complete`/`fail` never reported
+# it blocked every turn until the harness's own 8-block override cut the
+# turn off -- the exact outcome BLOCK_BUDGET exists to stay clear of.
+_NAG_BUDGET_EXHAUSTED_MESSAGE = (
+    "[plan-run] auto-advance 額度用盡（{used}/{budget}）：`{step}` 仍停在 in_progress，"
+    "complete/fail 一次都沒有被回報。請人工確認該 step 的實際結果後再繼續。"
 )
 
 # (10)'s counterpart to _NAG_ESCALATION_NOTE. A ready step is only still
@@ -2265,7 +2368,7 @@ def _branch_state_abandoned(ctx: _HookContext) -> HookDecision | None:
         return _hook_allow(ctx)
     ctx.update(warned_at=now_iso())
     message = _STATE_ABANDONED_MESSAGE.format(
-        slug=ctx.state.get("slug", "?"),
+        slug=_sanitize_plan_field(ctx.state.get("slug")) or "?",
         days=int(age // 86400),
         plan=_quote_plan_path(ctx.pointer.get("plan_path")),
     )
@@ -2312,11 +2415,22 @@ def _branch_background_tasks(ctx: _HookContext) -> HookDecision | None:
 
 
 def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
-    """(9) A step was started but never reported — demand complete/fail."""
+    """(9) A step was started but never reported — demand complete/fail.
+
+    Bounded by the same budget the ready-step branch uses: without it this
+    branch blocks on every turn for as long as the step stays unreported,
+    which is the harness-forced cutoff we design around, not a check-in.
+    """
     in_progress = _hook_steps_with_status(ctx.state, IN_PROGRESS)
     if not in_progress:
         return None
     budget = _hook_plain_budget(ctx)
+    if budget.consecutive_blocks >= budget.block_budget:
+        return _hook_allow(ctx, system_message=_NAG_BUDGET_EXHAUSTED_MESSAGE.format(
+            used=budget.consecutive_blocks,
+            budget=budget.block_budget,
+            step=_sanitize_step_id(in_progress[0]),
+        ))
     nags = ctx.counter("nag_counts") + 1
     ctx.update(nag_counts=nags)
     # A step in progress is proof the `start` branch (10) asked for was run,
@@ -2326,6 +2440,7 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
     suffix = None
     if nags >= HOOK_NAG_ESCALATE_AT:
         suffix = _NAG_ESCALATION_NOTE.format(
+            runner=_runner_invocation(ctx.pointer.get("plan_path")),
             plan=_quote_plan_path(ctx.pointer.get("plan_path")),
             step=_sanitize_step_id(in_progress[0]),
         )
@@ -2404,7 +2519,7 @@ def _branch_stuck(ctx: _HookContext) -> HookDecision:
         for status in (PENDING, BLOCKED, FAILED)
     )
     message = _STUCK_MESSAGE.format(
-        slug=ctx.state.get("slug", "?"),
+        slug=_sanitize_plan_field(ctx.state.get("slug")) or "?",
         counts=counts,
         plan=_quote_plan_path(ctx.pointer.get("plan_path")),
     )
@@ -2565,15 +2680,42 @@ def _apply_hook_side_effects(
             pass
 
 
-def _run_hook_stop() -> None:
-    hook_input = _read_hook_input()
-    cwd = hook_input.get("cwd")
-    resolved = resolve_pointer_for_hook(cwd) if isinstance(cwd, str) and cwd else None
+def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDecision:
+    """Resolve pointer + state, decide, persist — the sequence that has to
+    be serialized. Two sessions sharing a cwd can otherwise both read the
+    same expired lease and both hand out the same ready step, and the later
+    pointer write silently discards the other's counters.
+    """
+    resolved = resolve_pointer_for_hook(cwd) if cwd else None
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
-
     decision = decide_hook_action(hook_input, pointer, state)
     _apply_hook_side_effects(decision, resolved)
+    return decision
+
+
+def _run_hook_stop() -> None:
+    hook_input = _read_hook_input()
+    raw_cwd = hook_input.get("cwd")
+    cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else None
+    if cwd is None:
+        _emit_hook_output(decide_hook_action(hook_input, None, None))
+        return
+    try:
+        lock_path = pointer_lock_path_for(cwd)
+        governed = pointer_path_for(cwd).exists()
+    except (OSError, ValueError):
+        _emit_hook_output(_decide_and_persist(hook_input, cwd))
+        return
+    if not governed:
+        # No pointer governs this cwd: nothing to serialize, and taking the
+        # lock would create a file in a directory we promise not to touch.
+        _emit_hook_output(_decide_and_persist(hook_input, cwd))
+        return
+    with exclusive_lock(lock_path):
+        decision = _decide_and_persist(hook_input, cwd)
+    # Printed outside the lock: emitting is pure stdout and holding the lock
+    # across it only widens the window other sessions wait on.
     _emit_hook_output(decision)
 
 
@@ -2744,6 +2886,16 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    with exclusive_lock(state_lock_path_for(Path(args.plan).resolve())):
+        return _cmd_start_locked(args)
+
+
+def _cmd_start_locked(args: argparse.Namespace) -> int:
+    """`start` under the state lock, so the read of `pending` and the write
+    of `in_progress` cannot interleave with another session's. Without it
+    two sessions both read `pending` and both "start" the same step; with
+    it the loser gets the ordinary invalid-transition error.
+    """
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
     sid = args.step
@@ -3087,7 +3239,14 @@ def _hook_registered_in_settings() -> bool:
         data = json.loads(SETTINGS_JSON_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    stop_hooks = data.get("hooks", {}).get("Stop", []) if isinstance(data, dict) else []
+    if not isinstance(data, dict):
+        return False
+    # `hooks` is user-editable and nothing guarantees its type: a bare `[]`
+    # or `null` used to raise AttributeError straight past the except clause
+    # below, turning "malformed settings" into a traceback for both
+    # `attach` and `doctor` instead of the documented "not registered".
+    hooks = data.get("hooks")
+    stop_hooks = hooks.get("Stop", []) if isinstance(hooks, dict) else []
     if not isinstance(stop_hooks, list):
         return False
     for entry in stop_hooks:

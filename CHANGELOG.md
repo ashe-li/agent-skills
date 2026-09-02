@@ -2,7 +2,7 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
-## [Unreleased]
+## [v2.1.0] - 2026-09-02
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」逐項核對：指令名未變、未移除任何子命令或旗標、plan 格式契約未變（Phase 標頭那條是**文件記載**錯誤，parser 行為一直如此）、既有子命令的機器可讀輸出（`--format=json`）未變、`init --no-attach` 的 stdout 與 base commit `e745670` 的 golden 檔逐位元組一致。
 >
@@ -25,6 +25,7 @@
 - **`doctor` 全數正常時印「4/6 PASS」**：六項檢查中有兩項天生是 INFO（`~/.claude/plan-run/` 尚未建立、當前 cwd 無 active plan），所以健康的全新安裝永遠印不出 6/6，讀起來像沒過。改為印三個計數並講死判定：`<n> PASS / <m> INFO / 0 FAIL — 安裝正常`（PASS 數會隨那兩項落在 PASS 或 INFO 而變，六項與這個摘要格式是同一份契約）。
 
 ### Added
+- **`rules/` 的情境型規則新增 UserPromptSubmit 觸發式安裝（`scripts/hooks/debug-triage-order-hint.sh`、`scripts/hooks/worktree-prompt-hint.sh`）**：`rules/` 底下的規則一般 symlink 進 `~/.claude/rules/common/`，那是**每個 session 全文載入**。對「每次都要守」的紀律（coding style、輸出格式）合理，但對情境型規則是純浪費——`debug-triage-order` 只在「debug 一個線上回報的 bug」時適用、`worktree-prompt` 只在「開工實作」那一刻適用，其餘 session 付了 token 卻用不到（實測兩份合計約 1,120 tokens）。兩支 hook 提供同樣規則的觸發式版本：每 session 成本 0，命中偵測條件才以 `additionalContext` 注入規則重點。與第二篇的 Stop hook 不同，**這兩支只注入不 block**。設計上高精度優先於高召回——`debug-triage-order-hint` 要**同時**命中「debug 訊號」與「可觀測環境訊號」才觸發（只講「這段程式有 bug」不算，那是本地邏輯題，prod-first probe 不適用），`worktree-prompt-hint` 在已身處 worktree（`.git` 是檔案）時自動跳過；兩者都對 slash command 開頭的訊息不干預。誤報的成本是雜訊，會讓人把整個 hook 關掉。**規則檔本身一字未改**，兩種安裝模式二選一（同時裝會在一個 session 裡看到規則兩次）。安裝、取捨與自檢指令見 `docs/hooks-setup.md` 第三篇。
 - **`/plan-run` 的控制流搬到 Claude Code 官方 Stop hook 上（`scripts/hooks/plan-run-stop.sh` + `plan_runner.py hook-stop`）**：`plan-run/SKILL.md` 原本第一條設計原則寫「DAG 推進邏輯在 Python，LLM 不負責『下一步是什麼』的判斷」，實際上不成立——`plan_runner.py` 在 Claude Code 沒有任何註冊或強制機制，它是一支普通腳本，靠 SKILL.md 的文字請 LLM 自願用 Bash 呼叫；LLM 真正負責的是「要不要去問腳本下一步是什麼」，**控制流第一層仍在模型手上**。本次把那一層交給 harness：Stop hook 每輪結束強制執行，由它讀 state 決定要不要把下一步以 `{"decision":"block","reason":...}` 注入回來。輸出形狀經本機 v2.1.247 四變體實測定案採 **top-level `reason`**（會顯示成 `Stop hook feedback:`，使用者看得見）；實測 `hookSpecificOutput.additionalContext` 雖然也送達模型卻**不寫進 transcript**，控制流工具塞給模型的指令必須可稽核，故不採用。
 - **Pointer registry（`~/.claude/plan-run/active/<sha256(realpath(cwd))[:16]>.json`）**：hook 靠它知道「這個 cwd 現在在推哪份 plan」。目錄 0700、tmp + `os.replace` 原子寫入；plan 路徑必須位於 `$HOME` 之內（沙箱／臨時目錄／外接磁碟上的 plan 一旦綁定，該目錄每一輪都會被它驅動）。跨 session 續推靠這個檔案——`/clear`、compaction、開新 session 之後第一輪結束就自動接上，這是相對官方 Workflow（只能同 session resume）的核心價值。
 - **新子命令**：`hook-stop`（Stop hook 決策入口，從 stdin 讀 hook JSON）、`attach <plan>` / `detach [plan]` / `pause` / `resume` / `pointer`（cwd 的 pointer 控制與檢視）、`doctor`（唯讀安裝自檢，六項 PASS/INFO/FAIL，有 FAIL 時 exit 1 可當 CI gate）。`start` 新增可選 `--session-id`（僅供 audit）。
@@ -528,6 +529,7 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v2.1.0...HEAD
+[v2.1.0]: https://github.com/ashe-li/agent-skills/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/ashe-li/agent-skills/compare/v1.28.0...v2.0.0
 [v1.28.0]: https://github.com/ashe-li/agent-skills/releases/tag/v1.28.0

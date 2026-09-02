@@ -1,11 +1,12 @@
 # Hook 設定
 
-本 repo 有兩個一次性安裝的 hook，彼此獨立，可只裝其中一個：
+本 repo 有三組一次性安裝的 hook，彼此獨立，可只裝其中一部分：
 
 | 章節 | Hook 類型 | 做什麼 | 搭配 |
 |------|-----------|--------|------|
 | [一](#一plan-自動儲存-hookposttooluse) | `PostToolUse` | `ExitPlanMode` 後自動把 plan 存進 `plans/active/` | `/plan-archive` |
 | [二](#二plan-dag-推進-stop-hook) | `Stop` | 每輪結束查 plan state，把下一步注入回模型 | `/plan-run` |
+| [三](#三情境型-rules-的觸發式安裝userpromptsubmit) | `UserPromptSubmit` | 命中情境時注入規則重點，取代常駐 rule | `rules/` |
 
 ---
 
@@ -337,3 +338,87 @@ cp ~/.claude/settings.json ~/.claude/hooks/plan-run-stop.sh ~/.claude/backups/$(
 移除之後 `plan_runner.py` 的既有子命令（`init` / `status` / `next` / `index` / `dag` / `set-parent` / `start` / `complete` / `fail` / `reset` / `skip` / `normalize`）全部仍可手動使用——退回 `/plan-run` 的手動模式，不會壞掉。
 
 **還原時把備份裡的 hook 物件直接取回，不要重新編造**——否則「還原」可能寫進一個長得像但其實不同的物件。還原後補跑一次 `doctor`。
+
+---
+
+# 三、情境型 rules 的觸發式安裝（UserPromptSubmit）
+
+`rules/` 底下的規則，一般用法是 symlink 進 `~/.claude/rules/common/`：
+
+```bash
+ln -s ~/Documents/agent-skills/rules/debug-triage-order.md ~/.claude/rules/common/
+```
+
+這樣做**每個 session 都會全文載入**。對「每次都要守」的紀律（coding style、
+輸出格式）是合理的；但對**情境型**規則就是純浪費——`debug-triage-order` 只在
+「debug 一個線上回報的 bug」時適用，`worktree-prompt` 只在「開工實作」那一刻適用，
+其餘 session 付了 token 卻用不到。
+
+實測：兩份合計約 1,120 tokens，佔某台機器常駐預算的 15%。
+
+## 1. 兩種安裝模式，二選一
+
+| | 常駐 rule | 觸發式 hook |
+|---|---|---|
+| 安裝 | symlink 進 `~/.claude/rules/common/` | 註冊進 `settings.json` 的 `UserPromptSubmit` |
+| 每 session 成本 | 全文（數百 tokens） | **0** |
+| 何時生效 | 一直在 context 裡 | 使用者的訊息命中偵測條件時注入 |
+| 適合 | 每次都要守的紀律 | 情境型、只在特定任務適用 |
+| 風險 | 長 context 稀釋注意力 | 偵測條件漏接就不會提醒 |
+
+**不要兩個都裝**——會在同一個 session 裡看到規則兩次。已用 symlink 裝成常駐的人，
+改裝 hook 前先 `rm ~/.claude/rules/common/<rule>.md`（那是 symlink，
+來源檔在 repo 裡不會被刪）。
+
+## 2. 追加到 `~/.claude/settings.json`
+
+與第一、二篇同樣是 **additive 編輯**——在既有 `hooks.UserPromptSubmit` 陣列的
+`hooks` 末端追加，不可覆蓋或重寫整個陣列。先備份：
+
+```bash
+cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%Y%m%d%H%M%S)
+```
+
+追加的物件：
+
+```json
+{ "type": "command", "command": "bash ~/Documents/agent-skills/scripts/hooks/debug-triage-order-hint.sh" },
+{ "type": "command", "command": "bash ~/Documents/agent-skills/scripts/hooks/worktree-prompt-hint.sh" }
+```
+
+repo 不在預設位置時設 `AGENT_SKILLS_DIR`，hint 訊息裡的規則全文路徑會跟著調整。
+
+## 3. 自檢
+
+每個 hook 都可以直接餵 JSON 測，命中會輸出 `hookSpecificOutput` JSON、不命中無輸出：
+
+```bash
+echo '{"prompt":"線上文章頁圖片壞掉，dev 正常，幫我查"}' \
+  | bash scripts/hooks/debug-triage-order-hint.sh          # 應有輸出
+
+echo '{"prompt":"這段 function 有 bug 幫我修"}' \
+  | bash scripts/hooks/debug-triage-order-hint.sh          # 應無輸出（本地邏輯題）
+
+echo '{"prompt":"幫我實作這個 plan","cwd":"/path/to/normal/repo"}' \
+  | bash scripts/hooks/worktree-prompt-hint.sh             # 應有輸出
+```
+
+**漏接與誤報是兩種不同的失敗**，改偵測條件後兩邊都要跑，只測其中一邊會過度放寬
+或過度收緊。
+
+## 4. 設計原則
+
+1. **只注入 hint，不阻擋。** 走 `additionalContext`，偵測錯了最多是多一段文字，
+   不會擋住任何操作——與第二篇的 Stop hook 不同，那支會 block。
+2. **slash command 開頭一律跳過。** 使用者已明確指定 skill 時不要插話。
+3. **高精度優先於高召回。** `debug-triage-order-hint` 要**同時**命中「debug 訊號」
+   與「可觀測環境訊號」才觸發——只講「這段程式有 bug」不算，那是本地邏輯題，
+   prod-first probe 不適用。誤報的成本是雜訊，會讓人把整個 hook 關掉。
+4. **hint 要自包含。** 訊息本身就帶可執行的重點（三條分流順序、worktree 指令），
+   不能只寫「請參閱某某規則」——那等於沒提醒。
+
+## 5. 移除
+
+從 `~/.claude/settings.json` 的 `UserPromptSubmit` 陣列刪掉對應物件即可；
+`scripts/hooks/*.sh` 留著不影響任何行為（沒有程式會自動執行它們）。
+想改回常駐模式就重新 symlink 進 `~/.claude/rules/common/`。

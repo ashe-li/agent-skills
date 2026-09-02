@@ -32,6 +32,25 @@ npx skills add ashe-li/agent-skills --global
 
 </details>
 
+<details>
+<summary>安裝後確認載入的版本與 repo 一致</summary>
+
+`npx skills add` 安裝的是 GitHub 的**同步快照**，不是你手上的 checkout——PR 合併後不會自動生效，要跑一次 `npx skills update`。改完 skill 就宣稱「已生效」是錯的，驗一下：
+
+```bash
+# 逐支比對安裝端與 repo；有輸出就是落後
+for d in ~/.agents/skills/*/; do s=$(basename "$d")
+  [ -d "<你的 checkout>/$s" ] && \
+    { diff -rq "$d" "<你的 checkout>/$s" >/dev/null 2>&1 || echo "STALE: $s"; }
+done
+```
+
+另外快照**只同步 `SKILL.md`**，同層的 `scripts/` 不會一起下來。所以 SKILL.md 裡引用的 `scripts/plan_runner.py` 指的是 **repo checkout** 的路徑，不是快照——切分支、關掉 PR、清理殘留之後，回頭確認那些被引用的路徑還在。
+
+若你偏好「改 repo 就立刻生效」，可以把 `~/.claude/skills/<name>` 直接 symlink 到 checkout（`ln -sfn <你的 checkout>/<name> ~/.claude/skills/<name>`）。代價是 `npx skills update` 管不到它，而且**主 repo 切分支會連帶換掉生效中的 skill 版本**——要改的正好是當下在用的 skill 時，請在 sibling worktree 施工。
+
+</details>
+
 ## Usage
 
 ```
@@ -57,7 +76,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
-/plan-run <plan.md>        # 依 plan DAG 由狀態機推進實作（可與 /goal 複合）
+/plan-run <plan.md>        # 依 plan DAG 推進實作（Stop hook 每輪注入下一步）
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
 /triage                    # 基於消融數據退役/復原 learned skills
@@ -80,14 +99,14 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | **Deprecated** — Defer/restore ECC skills 減少 init tokens，等 harness 端 ECC plugin 處置定案後移除 |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
-| [`/plan-run`](#plan-run--plan-dag-推進器狀態機-by-code) | 依 plan.md DAG 推進實作，Python 狀態機控制順序；可與 `/goal` 複合 |
+| [`/plan-run`](#plan-run--plan-dag-推進器控制流在-stop-hook) | 依 plan.md DAG 推進實作，控制流在 Stop hook（harness 每輪強制查 state 並注入下一步） |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
-| [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
+| `/triage` | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
-| [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
+| `/learn-eval-deep` | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
 
@@ -151,7 +170,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 0 追蹤預設用回覆內的文字 Step 清單；只有 session 確實有 Task 工具時才詢問是否改用 TaskCreate/TaskUpdate（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)）
 - Step 4b 用 `EnterPlanMode` 呈現計畫（Claude Code 2.1.77+ accept 時自動觸發 session auto-naming），使用者確認後才寫入檔案
 - Step 6 可選進入 worktree 隔離開發
-- Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run` 狀態機（手動）/ `/plan-run` + `/goal` 自動推進
+- Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run`（Stop hook 驅動，裝了 hook 就會自動逐步推進）
 - 不自動執行實作，使用者確認後才開始
 
 </details>
@@ -274,7 +293,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 - 自動偵測待歸檔的 plan（或手動指定檔名）
 - 補充「狀態：完成」標記與驗證結果段落
-- 內建 Hook 設定：`ExitPlanMode` PostToolUse hook 自動存至 `plans/active/`
+- 內建 Hook 設定：`ExitPlanMode` PostToolUse hook 自動存至 `plans/active/`（安裝步驟見 [`docs/hooks-setup.md`](docs/hooks-setup.md)，同一份文件的第二篇是 `/plan-run` 的 Stop hook）
 - 內建 Rule 範本：加入 CLAUDE.md 確保主動歸檔
 
 **目錄規範：** `plans/active/` → 進行中 ｜ `plans/completed/` → 已完成 ｜ `plans/archived/` → 長期封存
@@ -411,22 +430,28 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
-### `/plan-run` — Plan DAG 推進器（狀態機 by code）
+### `/plan-run` — Plan DAG 推進器
 
-依照 `plan.md` 的 Dependencies DAG，由 Python 狀態機決定下一步該執行哪些 step，避免 LLM 自主推進造成漏步、亂序。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）；session 有 Task 工具時，狀態機額外指定 `TaskCreate` 該如何串接，避免 `addBlockedBy` 串錯。
+依照 `plan.md` 的 Dependencies DAG 推進實作。**順序、依賴、跨 session 記憶都在 state file**（`plan_runner.py`）；讓它一輪接一輪跑下去的推力有兩種來源：
+
+- **模式 A（預設，零安裝）** — 內建 `/goal`。`init --no-attach` 後下一道 `/goal` 就開始跑，終止條件用 `plan_runner.py` 自己印的 `Progress: N/N`
+- **模式 B（選配）** — Claude Code 官方的 **Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，讀 state 決定要不要注入下一步。**值得裝的唯一理由是跨 session 續推**（pointer 檔自動接上，不必重下指令）。安裝見 [`docs/hooks-setup.md`](docs/hooks-setup.md)
+
+實測兩種模式**一輪拿到的續推輪數相同**（9 輪，見下），差別只在跨 session。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）。
 
 <details>
 <summary>Features</summary>
 
-- **DAG 推進邏輯在 Python**：`scripts/plan_runner.py` 控制 step 順序、依賴檢查、status transition；LLM 不負責「下一步是什麼」的判斷
-- **LLM 只負責執行**：把 transition 回傳的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **職責分離**：`plan_runner.py` + state file 決定「下一步做什麼」（依賴解析、順序、非法轉移驗證）；`/goal` 或 Stop hook 只決定「還要不要再跑一輪」。搞混這條分界就會誤以為換驅動器能換到別的東西
+- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **跨 session 續推（模式 B 專屬）**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下）。模式 A 的 state file 一樣還在，只是要重下一次 `/goal`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
 - **Token 策略三層**：
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
-- **與 `/goal` 複合**：可設 `/goal plan_runner.py status all_done=true` 讓 DAG 自動推進；step 失敗仍由 HITL gate 把關
+- **每 7 步一次 check-in**：實測 harness 對每個 turn 的 Stop 輪數設上限（9 次呼叫、8 次續推被採納），且該上限由所有 blocker 共用——多掛一支 blocker 不會換到更多輪。hook 主動在第 7 步（或更早的 phase 邊界）停下來留一輪餘裕，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷；`PLAN_RUN_BLOCK_BUDGET=8` 可用滿。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**
 

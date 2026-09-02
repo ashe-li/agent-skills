@@ -4,6 +4,17 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 > 版本策略見 [VERSIONING.md](VERSIONING.md)、變更記錄見 [CHANGELOG.md](CHANGELOG.md)。主線 `v2.x`（ECC 解耦版，只依賴 Claude Code 內建 primitives）；需要 everything-claude-code plugin 的舊版凍結於 `v1.28.0`。
 
+## 情境型 rules 的觸發式安裝
+
+`rules/` 底下的規則一般 symlink 進 `~/.claude/rules/common/`，**每個 session 全文載入**。
+對「每次都要守」的紀律是合理的；但情境型規則（`debug-triage-order` 只在 debug 線上 bug
+時適用、`worktree-prompt` 只在開工那一刻適用）其餘 session 付了 token 卻用不到——
+實測兩份合計約 1,120 tokens。
+
+`scripts/hooks/` 提供同樣規則的 `UserPromptSubmit` 觸發式版本：每 session 成本 0，
+命中情境才注入。兩種模式二選一，安裝與取捨見
+[`docs/hooks-setup.md`](docs/hooks-setup.md) 第三篇。
+
 ## Install
 
 ```bash
@@ -23,6 +34,25 @@ npx skills add ashe-li/agent-skills --global
 
 </details>
 
+<details>
+<summary>安裝後確認載入的版本與 repo 一致</summary>
+
+`npx skills add` 安裝的是 GitHub 的**同步快照**，不是你手上的 checkout——PR 合併後不會自動生效，要跑一次 `npx skills update`。改完 skill 就宣稱「已生效」是錯的，驗一下：
+
+```bash
+# 逐支比對安裝端與 repo；有輸出就是落後
+for d in ~/.agents/skills/*/; do s=$(basename "$d")
+  [ -d "<你的 checkout>/$s" ] && \
+    { diff -rq "$d" "<你的 checkout>/$s" >/dev/null 2>&1 || echo "STALE: $s"; }
+done
+```
+
+另外快照**只同步 `SKILL.md`**，同層的 `scripts/` 不會一起下來。所以 SKILL.md 裡引用的 `scripts/plan_runner.py` 指的是 **repo checkout** 的路徑，不是快照——切分支、關掉 PR、清理殘留之後，回頭確認那些被引用的路徑還在。
+
+若你偏好「改 repo 就立刻生效」，可以把 `~/.claude/skills/<name>` 直接 symlink 到 checkout（`ln -sfn <你的 checkout>/<name> ~/.claude/skills/<name>`）。代價是 `npx skills update` 管不到它，而且**主 repo 切分支會連帶換掉生效中的 skill 版本**——要改的正好是當下在用的 skill 時，請在 sibling worktree 施工。
+
+</details>
+
 ## Usage
 
 ```
@@ -35,6 +65,7 @@ npx skills add ashe-li/agent-skills --global
 /assist <任務>              # 指定任務描述
 /simplify                  # 自動修正程式碼（dead code、命名、nesting）
 /notion-plan <URL>         # Notion 需求 → 實作計畫
+/notion-report <URL>       # 把成果寫回 Notion（API 優先，指定收件對象）
 /worktree                  # 列出所有 worktree 狀態
 /worktree create <name>    # 建立新 worktree
 /worktree cleanup          # 清理已 merge 的 worktree（單 repo 互動）
@@ -48,7 +79,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
-/plan-run <plan.md>        # 依 plan DAG 由狀態機推進實作（可與 /goal 複合）
+/plan-run <plan.md>        # 依 plan DAG 推進實作（Stop hook 每輪注入下一步）
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
 /triage                    # 基於消融數據退役/復原 learned skills
@@ -65,20 +96,21 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
 | [`/simplify`](#simplify--自動修正) | `/code-review` 後自動修正（並行互補模式） |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
+| [`/notion-report`](#notion-report--把成果寫回-notion) | 把成果寫回 Notion，API 優先、無 token 自動退回瀏覽器 |
 | [`/worktree`](#worktree--git-worktree-管理) | Worktree 建立、狀態、清理 |
 | [`/curation`](#curation--learned-skills-品質管控) | 掃描 learned skills 格式、標準化、清理廢棄 |
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
 | [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | **Deprecated** — Defer/restore ECC skills 減少 init tokens，等 harness 端 ECC plugin 處置定案後移除 |
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
-| [`/plan-run`](#plan-run--plan-dag-推進器狀態機-by-code) | 依 plan.md DAG 推進實作，Python 狀態機控制順序；可與 `/goal` 複合 |
+| [`/plan-run`](#plan-run--plan-dag-推進器控制流在-stop-hook) | 依 plan.md DAG 推進實作，控制流在 Stop hook（harness 每輪強制查 state 並注入下一步） |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
-| [`/triage`](#triage--skill-分流管理) | 基於消融實驗退役/復原 learned skills |
+| `/triage` | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
-| [`/learn-eval-deep`](#learn-eval-deep--深度驗證) | 對單一 learned skill 跑三系統客觀評估 |
+| `/learn-eval-deep` | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
 
@@ -142,7 +174,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 0 追蹤預設用回覆內的文字 Step 清單；只有 session 確實有 Task 工具時才詢問是否改用 TaskCreate/TaskUpdate（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)）
 - Step 4b 用 `EnterPlanMode` 呈現計畫（Claude Code 2.1.77+ accept 時自動觸發 session auto-naming），使用者確認後才寫入檔案
 - Step 6 可選進入 worktree 隔離開發
-- Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run` 狀態機（手動）/ `/plan-run` + `/goal` 自動推進
+- Step 7 依複雜度推薦推進方式：LLM 自主推進 / `/plan-run`（Stop hook 驅動，裝了 hook 就會自動逐步推進）
 - 不自動執行實作，使用者確認後才開始
 
 </details>
@@ -219,6 +251,32 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 
 </details>
 
+### `/notion-report` — 把成果寫回 Notion
+
+`/notion-plan` 的反向：那個從 Notion 讀需求進來，這個往 Notion 寫結果出去。
+
+<details>
+<summary>Features</summary>
+
+**兩條寫入路徑，自動選路**（`NOTION_TOKEN` 有值走 API，否則走 browser；`--via` 可強制）：
+
+| 路徑 | 前提 | 代價 |
+|---|---|---|
+| **API**（優先） | 需自建 internal integration，且頁面要加進 Connections | 不開瀏覽器、不注入 snapshot、幾乎不吃 context |
+| **browser**（退路） | 沿用 `/notion-plan` 的 `notion-profile` 登入 session，免 token | 要開瀏覽器，較慢 |
+
+公司型 workspace 常需管理員核准才能建 integration，所以 browser 路徑不是次等品，而是很多人的唯一可行路徑。兩條路的「定對象 → 組稿 → dry-run」完全共用，只有寫入動作不同。
+
+- **依收件對象調整內容**：`--to pm|design|ops|eng`（可多選），各自有該寫與刻意不寫的項目；未指定時以 `AskUserQuestion` 詢問，不自行推測
+- 兩種寫入模式：`--mode append`（預設）／`--mode comment`（僅 API 路徑）
+- 只做 append 與 comment，**不刪除、不覆寫**既有內容
+- 寫入前強制 dry-run 過目，寫入後讀回驗證（browser 路徑另檢查 `occurrences: 1`，防重複寫入）
+- browser 路徑用 synthetic paste event 讓 Notion 自己解析 Markdown，**不碰系統剪貼簿、不需 clipboard 權限**
+
+細節見 [`notion-report/SKILL.md`](notion-report/SKILL.md)。
+
+</details>
+
 ### `/worktree` — Git Worktree 管理
 
 Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
@@ -265,7 +323,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 - 自動偵測待歸檔的 plan（或手動指定檔名）
 - 補充「狀態：完成」標記與驗證結果段落
-- 內建 Hook 設定：`ExitPlanMode` PostToolUse hook 自動存至 `plans/active/`
+- 內建 Hook 設定：`ExitPlanMode` PostToolUse hook 自動存至 `plans/active/`（安裝步驟見 [`docs/hooks-setup.md`](docs/hooks-setup.md)，同一份文件的第二篇是 `/plan-run` 的 Stop hook）
 - 內建 Rule 範本：加入 CLAUDE.md 確保主動歸檔
 
 **目錄規範：** `plans/active/` → 進行中 ｜ `plans/completed/` → 已完成 ｜ `plans/archived/` → 長期封存
@@ -402,22 +460,28 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
-### `/plan-run` — Plan DAG 推進器（狀態機 by code）
+### `/plan-run` — Plan DAG 推進器
 
-依照 `plan.md` 的 Dependencies DAG，由 Python 狀態機決定下一步該執行哪些 step，避免 LLM 自主推進造成漏步、亂序。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）；session 有 Task 工具時，狀態機額外指定 `TaskCreate` 該如何串接，避免 `addBlockedBy` 串錯。
+依照 `plan.md` 的 Dependencies DAG 推進實作。**順序、依賴、跨 session 記憶都在 state file**（`plan_runner.py`）；讓它一輪接一輪跑下去的推力有兩種來源：
+
+- **模式 A（預設，零安裝）** — 內建 `/goal`。`init --no-attach` 後下一道 `/goal` 就開始跑，終止條件用 `plan_runner.py` 自己印的 `Progress: N/N`
+- **模式 B（選配）** — Claude Code 官方的 **Stop hook**：harness 每輪結束強制執行 `plan_runner.py hook-stop`，讀 state 決定要不要注入下一步。**值得裝的唯一理由是跨 session 續推**（pointer 檔自動接上，不必重下指令）。安裝見 [`docs/hooks-setup.md`](docs/hooks-setup.md)
+
+實測兩種模式**一輪拿到的續推輪數相同**（9 輪，見下），差別只在跨 session。推進本身**不依賴 Task 工具**（順序與依賴都在 state file）。
 
 <details>
 <summary>Features</summary>
 
-- **DAG 推進邏輯在 Python**：`scripts/plan_runner.py` 控制 step 順序、依賴檢查、status transition；LLM 不負責「下一步是什麼」的判斷
-- **LLM 只負責執行**：把 transition 回傳的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **職責分離**：`plan_runner.py` + state file 決定「下一步做什麼」（依賴解析、順序、非法轉移驗證）；`/goal` 或 Stop hook 只決定「還要不要再跑一輪」。搞混這條分界就會誤以為換驅動器能換到別的東西
+- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **跨 session 續推（模式 B 專屬）**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下）。模式 A 的 state file 一樣還在，只是要重下一次 `/goal`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
 - **Token 策略三層**：
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
-- **與 `/goal` 複合**：可設 `/goal plan_runner.py status all_done=true` 讓 DAG 自動推進；step 失敗仍由 HITL gate 把關
+- **每 7 步一次 check-in**：實測 harness 對每個 turn 的 Stop 輪數設上限（9 次呼叫、8 次續推被採納），且該上限由所有 blocker 共用——多掛一支 blocker 不會換到更多輪。hook 主動在第 7 步（或更早的 phase 邊界）停下來留一輪餘裕，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷；`PLAN_RUN_BLOCK_BUDGET=8` 可用滿。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**
 
@@ -589,6 +653,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 需要 worktree ───→ /worktree create <name>
 ├─ Worktree 要清理 ─→ /worktree cleanup
 ├─ 有 Notion ticket ─→ /notion-plan <URL>
+├─ 成果要回報進 Notion → /notion-report <URL> --to pm|design|ops|eng
 ├─ Learned skills 要分流 → /triage
 ├─ 技術決策需要深度查驗 → /evidence-check <做法>
 ├─ 高風險決策需迭代驗證 → /verify-evidence-loop <主張>
@@ -643,6 +708,18 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 **適合：** 不確定該用哪個工具
 **不適合：** 已知道要用哪個 skill
+
+### `/notion-report`
+
+```
+/notion-report https://app.notion.com/p/workspace/abc123 --to pm
+/notion-report <URL> --to pm,design         # 多對象，各自分區
+/notion-report <URL> --to ops --mode comment
+/notion-report <URL> --to eng --via browser # 強制走瀏覽器（無 API token 時自動）
+/notion-report <URL> --to eng --dry-run     # 只出稿不寫入
+```
+
+**適合：** 工作做完了，要把結果回報給 PM／設計／營運／工程，且不想開瀏覽器
 
 ### `/notion-plan`
 
@@ -717,5 +794,6 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 | `/update` | Pending | nested agents (`general-purpose` 文件更新 + 審查 + inline pattern 提取) |
 | `/assist` | Pending | 情境分析可測，pipeline 執行會修改專案 |
 | `/notion-plan` | Pending | 依賴外部 Notion 頁面 |
+| `/notion-report` | Pending | 寫入外部 Notion 頁面；API 路徑需 mock，browser 路徑需登入 session |
 
 </details>

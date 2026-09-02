@@ -272,7 +272,7 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 |----------------------|---------|
 | 低（1-3 步、無依賴）| LLM 自主推進 |
 | 中等（4-10 步、有依賴）| `/plan-run`（推薦） |
-| 高（10+ 步、複雜 DAG、多並行）| `/plan-run`（強烈推薦；務必先確認 Stop hook 已安裝） |
+| 高（10+ 步、複雜 DAG、多並行）| `/plan-run`（強烈推薦；會跨 session 的話再掛 Stop hook） |
 
 **選項文案（放進批次詢問的「推進方式」題）：**
 
@@ -285,10 +285,20 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 **若選 1（`/plan-run`）：**
 
 1. normalize 兜底（canonical 格式跑下去是 no-op）：`python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" normalize plans/active/<slug>.md --write`。stderr 顯示 `Wrote normalized plan` → 已 normalize（`.bak` 備份同目錄）；顯示 `WARN: Dependencies prose did not yield step IDs` → 該行需手動補 step ID
-2. 初始化 state：`python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" init plans/active/<slug>.md`。若回 `No steps found in plan`，依回傳 payload 的 `hint` 欄位處理；`warnings` 欄位若僅為 range syntax 已自動展開可忽略
-3. 提示使用者：
+2. 初始化 state（**預設模式 A，零安裝**）：`python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" init plans/active/<slug>.md --no-attach`。若回 `No steps found in plan`，依回傳 payload 的 `hint` 欄位處理；`warnings` 欄位若僅為 range syntax 已自動展開可忽略
+3. 提示使用者（模式 A）。`/goal` 文字逐字取自 `plan-run/SKILL.md` Step 1.5，那三處措辭是刻意的，不要改寫：
    > State 已初始化於 `<state_path>`。
-   > 輸入 `/plan-run plans/active/<slug>.md` 開始推進（上一步的 `init` 已把 cwd 掛上，hook 從下一輪起接手）；隨時可跑 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" status plans/active/<slug>.md` 查看進度。
+   > 下一道指令就會自己跑下去：
+   > ```text
+   > /goal plans/active/<slug>.md 的所有 step 都已 completed 或 skipped——判準是 plan_runner.py 的
+   > 輸出出現 Progress: N/N；或同一個 step 連續 2 輪沒有前進。尚未達成時，下一輪第一個
+   > 動作必須是跑 python3 ~/Documents/agent-skills/scripts/plan_runner.py next plans/active/<slug>.md，
+   > 照它印出的三行做完並回報 complete，不要問使用者是否繼續。
+   >
+   > 現在開始推進，每輪盡量多推幾步。
+   > ```
+   > 隨時可跑 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" status plans/active/<slug>.md` 查看進度。`/clear`、compaction、開新 session 會讓 `/goal` 消失，state file 還在，重下同一道 `/goal` 就接上。
+4. **只有**使用者明確要跨 session 續推、且 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" doctor` 的「Stop hook 已註冊」「wrapper 存在且可執行」兩項都 PASS 時，改走模式 B：把第 2 步的 `--no-attach` 拿掉重跑一次 `init`（冪等，會把 cwd 的 pointer 掛上），提示文改為「hook 從下一輪起接手，**不要**再下 `/goal`」。plan 在 `$HOME` 之外時 pointer 掛不上，維持模式 A。兩種驅動器不可同時開——續推輪數上限由所有 blocker 共用，疊加換不到更多步，只換到互相稀釋的指令。
 
 **若選 2（LLM 自主推進）：** 直接進入標準 implementation flow（plan 仍可隨時切換 `/plan-run`，state machine `init` 是冪等的，未來呼叫不影響）。
 

@@ -3,7 +3,7 @@ name: design
 description: 開發設計 — 自動盤點可用資源，透過 Plan agent 建立完整實作計畫，輸出至 plans/active/<slug>.md 供使用者確認後才進入實作。
 allowed-tools: Bash, Read, Glob, Grep, Edit, Write, Agent, AskUserQuestion, EnterPlanMode, TaskCreate, TaskUpdate, TaskList
 argument-hint: <功能描述或需求>
-redundancy-peers: [assist]
+redundancy-peers: [assist, plan-run]
 ---
 
 # /design — 開發設計
@@ -271,28 +271,35 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 | 複雜度（Step 2 判定）| 推薦選項 |
 |----------------------|---------|
 | 低（1-3 步、無依賴）| LLM 自主推進 |
-| 中等（4-10 步、有依賴）| `/plan-run` 狀態機（手動 / 推薦） |
-| 高（10+ 步、複雜 DAG、多並行）| `/plan-run` + `/goal` 自動推進（強烈推薦） |
+| 中等（4-10 步、有依賴）| `/plan-run`（推薦） |
+| 高（10+ 步、複雜 DAG、多並行）| `/plan-run`（強烈推薦；會跨 session 的話再掛 Stop hook） |
 
 **選項文案（放進批次詢問的「推進方式」題）：**
 
-> 1a. **`/plan-run` 狀態機（手動）** — Python 狀態機決定 DAG 推進順序、session 中斷可續推、不會跳步（依賴關係由狀態機本身維護，Task 工具存在時額外串接 `addBlockedBy`）；每個 step 完成後手動 enter 繼續
-> 1b. **`/plan-run` + `/goal` 自動推進**（強烈推薦於高複雜度）— 同 1a 但用 Claude Code 內建 `/goal` 包外層，狀態機 + evaluator 自動跑到 `all_done=true` 或 N turns；**失敗仍走 Step 3d HITL gate**（不會自動跳過 fail）
+> 1. **`/plan-run`** — 推進順序由狀態機決定、不會跳步；不需要每個 step 手動催，也會定期停下來讓你確認。預設用內建 `/goal` 提供續推力道（零安裝），跨 session 的長 plan 可改掛 Stop hook。失敗時仍以 `AskUserQuestion` 交還給人決定
 > 2. **LLM 自主推進** — 直接在當前 session 開始實作；簡單線性 plan 適用，無狀態機 overhead
 > 3. **暫不開始** — 結束 `/design`，由使用者另行決定時機
+>
+> **選項 1 的前置與例外**：預設模式零安裝（`init --no-attach` + 一道 `/goal`）。只有需要**跨 session 續推**時才要裝 Stop hook（見 `docs/hooks-setup.md`），而那條路徑只認 `$HOME` 底下的 plan——落在 `$HOME` 之外時掛不上 pointer，用預設模式即可。對 plan 不確定或有高風險不可逆 step 時，可暫停自動推進逐步確認——這些操作都在 `/plan-run` 文件裡。
 
-> **1b 何時不適用：** 對 plan 不確定 / 高風險 step、想細看每個 step 的 output、一個 session 已被另一個 `/goal` 佔用。詳見 `/plan-run` Step 3f。
-
-**若選 1a 或 1b（`/plan-run` 手動或自動推進）：**
+**若選 1（`/plan-run`）：**
 
 1. normalize 兜底（canonical 格式跑下去是 no-op）：`python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" normalize plans/active/<slug>.md --write`。stderr 顯示 `Wrote normalized plan` → 已 normalize（`.bak` 備份同目錄）；顯示 `WARN: Dependencies prose did not yield step IDs` → 該行需手動補 step ID
-2. 初始化 state：`python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" init plans/active/<slug>.md`。若回 `No steps found in plan`，依回傳 payload 的 `hint` 欄位處理；`warnings` 欄位若僅為 range syntax 已自動展開可忽略
-3. 提示使用者：
+2. 初始化 state（**預設模式 A，零安裝**）：`python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" init plans/active/<slug>.md --no-attach`。若回 `No steps found in plan`，依回傳 payload 的 `hint` 欄位處理；`warnings` 欄位若僅為 range syntax 已自動展開可忽略
+3. 提示使用者（模式 A）。`/goal` 文字逐字取自 `plan-run/SKILL.md` Step 1.5，那三處措辭是刻意的，不要改寫：
    > State 已初始化於 `<state_path>`。
-   > 1a：輸入 `/plan-run plans/active/<slug>.md` 啟動狀態機推進；或執行 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" status plans/active/<slug>.md` 查看進度。
-   > 1b：先輸入上一行，再貼入 `/goal plan_runner.py status plans/active/<slug>.md 的輸出顯示 all_done=true（即所有 step 都 completed / skipped，無 failed / blocked / in_progress） OR stop after 30 turns`。
-   > 失敗時 Step 3d 仍會以 `AskUserQuestion` 詢問重試 / 跳過 / 中止；`/goal` 不自動跳過失敗，詳見 `/plan-run` Step 3f。
+   > 下一道指令就會自己跑下去：
+   > ```text
+   > /goal plans/active/<slug>.md 的所有 step 都已 completed 或 skipped——判準是 plan_runner.py 的
+   > 輸出出現 Progress: N/N；或同一個 step 連續 2 輪沒有前進。尚未達成時，下一輪第一個
+   > 動作必須是跑 python3 ~/Documents/agent-skills/scripts/plan_runner.py next plans/active/<slug>.md，
+   > 照它印出的三行做完並回報 complete，不要問使用者是否繼續。
+   >
+   > 現在開始推進，每輪盡量多推幾步。
+   > ```
+   > 隨時可跑 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" status plans/active/<slug>.md` 查看進度。`/clear`、compaction、開新 session 會讓 `/goal` 消失，state file 還在，重下同一道 `/goal` 就接上。
+4. **只有**使用者明確要跨 session 續推、且 `python3 "${AGENT_SKILLS_HOME:-$HOME/Documents/agent-skills}/scripts/plan_runner.py" doctor` 的「Stop hook 已註冊」「wrapper 存在且可執行」兩項都 PASS 時，改走模式 B：把第 2 步的 `--no-attach` 拿掉重跑一次 `init`（冪等，會把 cwd 的 pointer 掛上），提示文改為「hook 從下一輪起接手，**不要**再下 `/goal`」。plan 在 `$HOME` 之外時 pointer 掛不上，維持模式 A。兩種驅動器不可同時開——續推輪數上限由所有 blocker 共用，疊加換不到更多步，只換到互相稀釋的指令。
 
 **若選 2（LLM 自主推進）：** 直接進入標準 implementation flow（plan 仍可隨時切換 `/plan-run`，state machine `init` 是冪等的，未來呼叫不影響）。
 
-**若選 3（暫不開始）：** 結束 `/design`，告知：Plan 已存於 `plans/active/<slug>.md`，隨時可執行 `/plan-run plans/active/<slug>.md` 啟動狀態機，或直接在 session 中開始實作。
+**若選 3（暫不開始）：** 結束 `/design`，告知：Plan 已存於 `plans/active/<slug>.md`，隨時可執行 `/plan-run plans/active/<slug>.md` 開始推進，或直接在 session 中開始實作。

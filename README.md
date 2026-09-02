@@ -4,6 +4,17 @@ My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
 > 版本策略見 [VERSIONING.md](VERSIONING.md)、變更記錄見 [CHANGELOG.md](CHANGELOG.md)。主線 `v2.x`（ECC 解耦版，只依賴 Claude Code 內建 primitives）；需要 everything-claude-code plugin 的舊版凍結於 `v1.28.0`。
 
+## 情境型 rules 的觸發式安裝
+
+`rules/` 底下的規則一般 symlink 進 `~/.claude/rules/common/`，**每個 session 全文載入**。
+對「每次都要守」的紀律是合理的；但情境型規則（`debug-triage-order` 只在 debug 線上 bug
+時適用、`worktree-prompt` 只在開工那一刻適用）其餘 session 付了 token 卻用不到——
+實測兩份合計約 1,120 tokens。
+
+`scripts/hooks/` 提供同樣規則的 `UserPromptSubmit` 觸發式版本：每 session 成本 0，
+命中情境才注入。兩種模式二選一，安裝與取捨見
+[`docs/hooks-setup.md`](docs/hooks-setup.md) 第三篇。
+
 ## Install
 
 ```bash

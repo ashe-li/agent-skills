@@ -379,14 +379,32 @@ ln -s ~/Documents/agent-skills/rules/debug-triage-order.md ~/.claude/rules/commo
 cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%Y%m%d%H%M%S)
 ```
 
+與第二篇同樣先把 script 複製到固定安裝路徑，`settings.json` 只引用那個路徑——
+這樣 checkout 搬家或改名都不必回頭改設定：
+
+```bash
+mkdir -p ~/.claude/hooks
+cp scripts/hooks/debug-triage-order-hint.sh ~/.claude/hooks/
+cp scripts/hooks/worktree-prompt-hint.sh    ~/.claude/hooks/
+chmod +x ~/.claude/hooks/debug-triage-order-hint.sh ~/.claude/hooks/worktree-prompt-hint.sh
+```
+
 追加的物件：
 
 ```json
-{ "type": "command", "command": "bash ~/Documents/agent-skills/scripts/hooks/debug-triage-order-hint.sh" },
-{ "type": "command", "command": "bash ~/Documents/agent-skills/scripts/hooks/worktree-prompt-hint.sh" }
+{ "type": "command", "command": "bash ~/.claude/hooks/debug-triage-order-hint.sh" },
+{ "type": "command", "command": "bash ~/.claude/hooks/worktree-prompt-hint.sh" }
 ```
 
-repo 不在預設位置時設 `AGENT_SKILLS_DIR`，hint 訊息裡的規則全文路徑會跟著調整。
+**`AGENT_SKILLS_DIR` 只影響 hint 訊息裡「規則全文」那條路徑，不影響上面的安裝路徑。**
+checkout 不在 `~/Documents/agent-skills` 時要設它，否則 hint 會指到不存在的規則檔：
+
+```bash
+export AGENT_SKILLS_DIR=/your/path/to/agent-skills   # 寫進 shell profile
+```
+
+未設時預設 `~/Documents/agent-skills`。這個值是在 hook 的 Python 段用 `os.environ`
+讀取的，不依賴 shell 展開。
 
 ## 3. 自檢
 

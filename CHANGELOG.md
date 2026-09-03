@@ -2,7 +2,9 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
-## [Unreleased]
+## [v2.2.0] - 2026-09-03
+
+> **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：本次只新增一支 skill，既有 skill 的唯一改動是 `plan-run/SKILL.md` 多一個 `redundancy-peers` 值——那是給 `/design` 讀的去重提示，不是對外介面，也不改 `/plan-run` 任何行為、旗標或輸出。`/dispatch-loop` 對既有使用者是純增量：不裝它、不叫它，一切照舊。
 
 ### Added
 - **`/dispatch-loop` — 委派推進迴圈**：把「主模型不下場，只指揮、裁決、抽查」這套操作模式從私有的 `~/.claude/skills/` 移進本 repo。與 `/plan-run` 的分工是「下一步做什麼」對「這一步怎麼派、怎麼驗、花多少 token」：六格派工 prompt 骨架（目標／動機／範圍／既有慣例／驗收條件／回報格式）＋五種型態的 agent/model 微調、不信任自報的抽查驗收、每 step token 預算與超支 2 倍停損、回收 agent 前的 KB gate。內容來自 2026-07-10 一次 28 steps／約 5M subagent tokens 的實跑。
@@ -540,7 +542,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...HEAD
+[v2.2.0]: https://github.com/ashe-li/agent-skills/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/ashe-li/agent-skills/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/ashe-li/agent-skills/compare/v1.28.0...v2.0.0
 [v1.28.0]: https://github.com/ashe-li/agent-skills/releases/tag/v1.28.0

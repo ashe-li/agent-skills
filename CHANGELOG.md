@@ -2,6 +2,16 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [Unreleased]
+
+### Added
+- **`/dispatch-loop` — 委派推進迴圈**：把「主模型不下場，只指揮、裁決、抽查」這套操作模式從私有的 `~/.claude/skills/` 移進本 repo。與 `/plan-run` 的分工是「下一步做什麼」對「這一步怎麼派、怎麼驗、花多少 token」：六格派工 prompt 骨架（目標／動機／範圍／既有慣例／驗收條件／回報格式）＋五種型態的 agent/model 微調、不信任自報的抽查驗收、每 step token 預算與超支 2 倍停損、回收 agent 前的 KB gate。內容來自 2026-07-10 一次 28 steps／約 5M subagent tokens 的實跑。
+
+  **移進來時解掉了兩處對外不可解的引用**：原文寫「用 `playbooks/30-delegation-templates.md` 模板」「量級參考見 `10-model-dispatch.md §8`」，那兩個檔在未公開的 `~/.claude/playbooks/`，外部安裝者照著做會撞到不存在的路徑且沒有任何錯誤訊息。判準是對本 repo 跑 `grep -rl "playbooks/" --include=SKILL.md`——零命中代表這份資產從不在公開範圍內，必須 inline 成自足摘要（數字類搬原值：實作 step 60–130K、headed 驗證 100–200K、30-agent 編隊 review 1.6M）。相對地 `_pending/`、`wiki/learned/` 有 `ship-ticket`、`release-pr` 的既有先例，維持原樣不動。`plan_runner.py` 則屬第三類——同 repo 但 `npx skills` 快照只同步 `SKILL.md` 不帶 `scripts/`，處置是加一句說明而非移除引用。
+
+### Changed
+- `plan-run/SKILL.md` 的 `redundancy-peers` 補上 `dispatch-loop`，與 `dispatch-loop` 列的 `plan-run` 對稱（沿用 3b053ef 建立的雙向慣例）。
+
 ## [v2.1.0] - 2026-09-02
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」逐項核對：指令名未變、未移除任何子命令或旗標、plan 格式契約未變（Phase 標頭那條是**文件記載**錯誤，parser 行為一直如此）、既有子命令的機器可讀輸出（`--format=json`）未變、`init --no-attach` 的 stdout 與 base commit `e745670` 的 golden 檔逐位元組一致。

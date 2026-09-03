@@ -3,7 +3,7 @@ name: plan-run
 description: 依 plan.md 的 Dependencies DAG 推進實作 — 順序與依賴由 state file 決定，續推力道預設由內建 /goal 提供（零安裝），跨 session 長 plan 可改掛 Stop hook。觸發：使用者要求依 plan 推進、跨 session 續推、或抱怨 LLM 跳步漏步。
 allowed-tools: Bash, Read, Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 argument-hint: <plans/active/xxx.md 路徑>
-redundancy-peers: [design]
+redundancy-peers: [design, dispatch-loop]
 ---
 
 # /plan-run — Plan DAG 推進器

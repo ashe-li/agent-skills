@@ -80,6 +80,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
 /plan-run <plan.md>        # 依 plan DAG 推進實作（Stop hook 每輪注入下一步）
+/dispatch-loop             # 逐 step 派工 + 抽查驗收 + token 預算的委派迴圈
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
 /triage                    # 基於消融數據退役/復原 learned skills
@@ -104,6 +105,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
 | [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
 | [`/plan-run`](#plan-run--plan-dag-推進器控制流在-stop-hook) | 依 plan.md DAG 推進實作，控制流在 Stop hook（harness 每輪強制查 state 並注入下一步） |
+| [`/dispatch-loop`](#dispatch-loop--委派推進迴圈) | 主模型只指揮不下場：逐 step 派工、抽查驗收、token 預算、回收前 KB gate |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
 | `/triage` | 基於消融實驗退役/復原 learned skills |
@@ -490,6 +492,21 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 | 多 step 實作計畫需依序推進、避免漏步亂序 | `/plan-run` |
 | 單次 step 執行需人工判斷順序 | LLM 直接派 agent（不需 plan state） |
 | Step 內部 bug 修復迴圈 | `/verify-fix-loop` |
+
+</details>
+
+### `/dispatch-loop` — 委派推進迴圈
+
+`/plan-run` 決定「下一步做什麼」，`/dispatch-loop` 決定「這一步怎麼派、怎麼驗、花多少 token」。核心是**主模型不下場**：只寫派工 prompt、抽查回報、做視覺與設計裁決，實作一律委派並在 Agent tool 明帶 `model`（不明帶等於每隻 agent 都吃主模型額度）。
+
+<details>
+<summary>Features</summary>
+
+- **派工 prompt 六格骨架**：目標／動機／範圍／既有慣例／驗收條件／回報格式，缺一格不發；另附搜尋、實作、重構、研究、審查五種型態的 agent + model 微調
+- **抽查驗收**：不信任 subagent 自報——`ls` 驗檔案、`grep` 驗內容、`git log` 比對、測試親跑一次，過了才 `complete`
+- **Token 預算**：每 step 標【agent 數 × 模型層級 × 預估 token】，超預算 2 倍停下重估；附 2026-07-10 實測量級（實作 step 60–130K、headed 驗證 100–200K、30-agent 編隊 review 1.6M——對小 repo 過度設計）
+- **回收前 KB gate**：教訓寫進知識庫才准回收 agent，順序不可反過來
+- **實證教訓**：派工必寫「禁止再委派」（轉派產生的孤兒 agent 會讓任務靜默蒸發）、視覺裁決不可用縮圖、稀缺配額 MCP 不下放 agent
 
 </details>
 

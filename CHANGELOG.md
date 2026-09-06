@@ -2,6 +2,31 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [Unreleased]
+
+### Added
+- **`/release-pr` 新增 Step 3.5「範圍相稱性擋門」＋ `release-pr/fixtures/` golden set**：對 body 的每個段落問「reviewer 為了決定要不要核准並部署這次變更，需要知道這件事嗎？」——「查證時才需要」的內容外連而非內嵌，因為它的完整版本通常已存在於 feature PR、KB 報告或 runbook，寫第二次只是製造第二個會過期的副本。
+
+  **失效模式不是判斷力問題，是位置壓力**：作者剛做完調查、脈絡都在手上，而 PR body 是離手前最後一個可以傾倒的地方——傾倒的動機來自作者的狀態，與讀者的需求無關。同構前例是 `knowledge-base/reports/2026-08-19-alert-description-bloat-audit-and-rewrite-proposal.md`（106 條 Grafana rule 裡 15 條把 RCA 全文塞進每次 firing 都整份推進 Slack 的 `description`），該報告的結論可直接移植：「根本問題不是寫太多，是寫錯地方。」
+
+  **實測回歸**：vocus-web-ui #8124（1 檔／+23−7）初版 body **3993 字元**（GitHub `userContentEdits` API 實測，非估算），含四個完整版本已存在別處的區塊——P95 七列證據表、因果推導段、CodePipeline 機制說明、對某份 KB plan 的更正；修正後 1053 字元。
+
+  golden set 三個 fixture 刻意包含**兩個負對照**（#8121 3 檔 2658 字元、#7969 64 檔 7897 字元皆判 KEEP），因為這道關卡最可能的實作錯誤是退化成「一律縮短」。次指標「每檔字元」在四個真實樣本上隨檔案數增加而遞減（64 檔 123／8 檔 389／3 檔 886／1 檔 1053），是次線性關係的表現；#8124 初版的 3993 會讓曲線在最左端翹起，那個翹起就是傾倒的訊號。**該指標是聞味道用的，樣本只有單一 repo 4 個 PR，不該當門檻硬套**（侷限已寫進 `fixtures/acceptance_results.md`）。
+
+  驗收 3/3 通過，但 fixture 01 的 PASS 是人工修正後的結果，**Step 3.5 的實際有效性標記為 provisional**——要等下一個 release PR 在未經提示的情況下初版就落在合理區間才能解除。
+
+- **golden set 的機械擋門 `scripts/check_release_fixtures.py` ＋ CI 接線**：初版的 golden set 只有 markdown、**零執行入口**——SKILL.md 只用一句「見 `fixtures/`」引用它，`scripts/tests/` 與 workflow 都沒碰它。使用者追問「這會每次都跑嗎」時查證確認：不會，而且 PR 的 `quality` check 是綠的，綠的是 `check_skill.py` 的 SKILL.md 結構分數，**跟 fixtures 完全無關**——正是 KB `ci-green-doesnt-mean-your-new-test-ran-check-collected-count` 的形狀。
+
+  另一個同構缺口在 workflow 的 `paths: ["*/SKILL.md"]`：**只改 fixture 不改 SKILL.md 時整個 workflow 不會啟動**，等同 KB `an-existing-guard-that-always-passes-may-just-not-cover-you` 的「glob 差一格」。已擴為 `*/SKILL.md`、`*/fixtures/**`、兩支 script。
+
+  script 守六件可機械化的事：manifest 存在且可解析、manifest 列到的 fixture 檔真的存在、fixtures/ 無孤兒檔、frontmatter 齊全且 `fixture_id` 與檔名前綴一致、**至少有一份 negative-control**（防擋門退化成單向修剪）、以及最重要的第六條——**SKILL.md 新增 `## Step` 標題時同一個 PR 必須也動到 `fixtures/`**，否則 golden set 會跟 skill 漂移。
+
+  **script 自帶 `--self-test`（不依賴 pytest），CI 先跑它再拿它擋別人**：baseline 必須乾淨，五個突變（新增 Step 不補 fixture／孤兒 fixture／只有 regression 無 negative-control／manifest 指向不存在的檔／`fixture_id` 與檔名不一致）必須全部被擋下。本機實跑 6/6。**先證明守衛會擋，再讓它上崗**——否則加的是第二個安靜的 `false`。
+
+  **範圍誠實聲明**：機械層只驗 golden set 自身的完整性，**驗不了「這次產出的 PR body 取捨對不對」**——那是判讀，靠 SKILL.md Step 3.5 的強制步驟（要求逐條輸出命中表，任一命中就退回 Step 3）。兩層強度不同，已在 script docstring 與 SKILL.md 明寫，不要把 CI 綠當成判讀層做過了。
+
+  **順帶發現、本次未修**：`scripts/tests/` 的兩支既有 pytest（`test_plan_runner_regression.py`、`test_plan_run_hook.py`）**在整個 repo 的 CI 裡從未被執行過**——同一個失效類別。本次不順手掛上去，因為本機沒有 pytest、無法先驗證它們現在是綠的，盲目接線會引入不相關的失敗。留作獨立項。
+
 ## [v2.2.0] - 2026-09-03
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：本次新增一支 skill、修一份 rules 文件，既有 skill 的唯一改動是 `plan-run/SKILL.md` 多一個 `redundancy-peers` 值——那是給 `/design` 讀的去重提示，不是對外介面，也不改 `/plan-run` 任何行為、旗標或機器可讀輸出。`/dispatch-loop` 與 `plans/backlog/` 對既有使用者都是純增量：不叫它、不建那個目錄，一切照舊。

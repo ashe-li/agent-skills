@@ -1,7 +1,14 @@
 name: Skill Quality Gate
 on:
   pull_request:
-    paths: ["*/SKILL.md"]
+    # */fixtures/** 與 check_release_fixtures.py 必須列進來：只改 fixture 不改
+    # SKILL.md 時，舊的單一 glob 不會觸發，golden set 等於沒有守衛。
+    # 同構前例見 KB `an-existing-guard-that-always-passes-may-just-not-cover-you`。
+    paths:
+      - "*/SKILL.md"
+      - "*/fixtures/**"
+      - "scripts/check_skill.py"
+      - "scripts/check_release_fixtures.py"
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -43,3 +50,13 @@ jobs:
             CMD="$CMD --new-files $NEW_ARGS"
           fi
           $CMD
+      - name: Golden set gate self-test
+        # 先證明這道守衛真的會擋，再拿它去擋別人。
+        # KB `an-existing-guard-that-always-passes-may-just-not-cover-you`：
+        # 守衛每次都通過，可能不是沒問題，是沒守到。
+        run: python scripts/check_release_fixtures.py --self-test
+      - name: Golden set completeness gate
+        run: |
+          python scripts/check_release_fixtures.py \
+            --repo-dir . \
+            --base-ref origin/${{ github.base_ref }}

@@ -113,7 +113,26 @@ body 字元數應隨改動規模**次線性**成長。既有房規（2026-09-06 
 
 同構前例：`knowledge-base/reports/2026-08-19-alert-description-bloat-audit-and-rewrite-proposal.md` —— 106 條 Grafana rule 裡 15 條把 RCA 全文塞進每次 firing 都會整份推進 Slack 的 `description`。該報告的結論可直接移植：「根本問題不是寫太多，是寫錯地方。」
 
-實測回歸：#8124（1 檔／+23−7）初版 body **3993 字元**，含四個完整版本已存在於 #8123 與 KB 報告的區塊（P95 證據表、因果推導、CodePipeline 機制、對某份 KB 文件的更正），修正後 1053 字元。golden set 與判定規則見 `fixtures/`。
+實測回歸：#8124（1 檔／+23−7）初版 body **3993 字元**，含四個完整版本已存在於 #8123 與 KB 報告的區塊（P95 證據表、因果推導、CodePipeline 機制、對某份 KB 文件的更正），修正後 1053 字元。
+
+### 執行方式（不是「參考」，是要跑的）
+
+**送進 Step 4 之前，讀 `fixtures/coverage.md`，對每一條列出的 failure mode 逐條自檢，並把結果寫成表輸出：**
+
+```
+| fixture | failure mode | 本次是否命中 | 依據 |
+|---|---|---|---|
+| 01 | scope bloat | 否 | 每檔字元 1053，落在區間；四個可外連區塊均已外連 |
+| 04 | commit message 照抄 | 否 | 每條 claim 都溯源 diff，非 commit 自述 |
+| …  | … | … | … |
+```
+
+**任一條命中就回 Step 3 改寫，不得帶著命中項進 Step 4。**
+
+`fixtures/` 若不在本機（`npx skills` 的快照可能只帶 `SKILL.md`），從 repo 取：
+`https://github.com/ashe-li/agent-skills/tree/main/release-pr/fixtures`。**取不到就明講「golden set 未取得，本次未做涵蓋率自檢」，不要跳過還宣稱做了。**
+
+> **這一層是判讀，不是機械檢查。** CI 的 `scripts/check_release_fixtures.py` 只驗 golden set 自身的完整性（manifest 對得上檔案、有 negative-control、新增 Step 必須同步動 fixtures），**它驗不了「這次的取捨對不對」**。兩層的強度不同，不要把 CI 綠當成本步驟做過了——同構失效見 KB `ci-green-doesnt-mean-your-new-test-ran-check-collected-count`。
 
 ## Step 4：產生標題
 

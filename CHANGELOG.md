@@ -2,6 +2,19 @@
 
 所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/)。
 
+## [Unreleased]
+
+### Added
+- **`/release-pr` 新增 Step 3.5「範圍相稱性擋門」＋ `release-pr/fixtures/` golden set**：對 body 的每個段落問「reviewer 為了決定要不要核准並部署這次變更，需要知道這件事嗎？」——「查證時才需要」的內容外連而非內嵌，因為它的完整版本通常已存在於 feature PR、KB 報告或 runbook，寫第二次只是製造第二個會過期的副本。
+
+  **失效模式不是判斷力問題，是位置壓力**：作者剛做完調查、脈絡都在手上，而 PR body 是離手前最後一個可以傾倒的地方——傾倒的動機來自作者的狀態，與讀者的需求無關。同構前例是 `knowledge-base/reports/2026-08-19-alert-description-bloat-audit-and-rewrite-proposal.md`（106 條 Grafana rule 裡 15 條把 RCA 全文塞進每次 firing 都整份推進 Slack 的 `description`），該報告的結論可直接移植：「根本問題不是寫太多，是寫錯地方。」
+
+  **實測回歸**：vocus-web-ui #8124（1 檔／+23−7）初版 body **3993 字元**（GitHub `userContentEdits` API 實測，非估算），含四個完整版本已存在別處的區塊——P95 七列證據表、因果推導段、CodePipeline 機制說明、對某份 KB plan 的更正；修正後 1053 字元。
+
+  golden set 三個 fixture 刻意包含**兩個負對照**（#8121 3 檔 2658 字元、#7969 64 檔 7897 字元皆判 KEEP），因為這道關卡最可能的實作錯誤是退化成「一律縮短」。次指標「每檔字元」在四個真實樣本上單調遞減（123 → 389 → 886 → 1053），是次線性關係的表現；#8124 初版的 3993 會讓曲線在最左端翹起，那個翹起就是傾倒的訊號。**該指標是聞味道用的，樣本只有單一 repo 4 個 PR，不該當門檻硬套**（侷限已寫進 `fixtures/acceptance_results.md`）。
+
+  驗收 3/3 通過，但 fixture 01 的 PASS 是人工修正後的結果，**Step 3.5 的實際有效性標記為 provisional**——要等下一個 release PR 在未經提示的情況下初版就落在合理區間才能解除。
+
 ## [v2.2.0] - 2026-09-03
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：本次新增一支 skill、修一份 rules 文件，既有 skill 的唯一改動是 `plan-run/SKILL.md` 多一個 `redundancy-peers` 值——那是給 `/design` 讀的去重提示，不是對外介面，也不改 `/plan-run` 任何行為、旗標或機器可讀輸出。`/dispatch-loop` 與 `plans/backlog/` 對既有使用者都是純增量：不叫它、不建那個目錄，一切照舊。

@@ -81,6 +81,61 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 每條 bullet 用 `- **重點**（#PR）：說明`。
 
+## Step 3.5：範圍相稱性擋門（scope proportionality）
+
+Step 3 寫完，送進 Step 4 之前，對 body 的**每一個段落**問一句：
+
+> **reviewer 為了決定「要不要核准並部署這次變更」，需要知道這件事嗎？**
+
+- 需要 → 留下（改了什麼、會不會改變 serving 行為、何時生效、怎麼回滾、部署後看什麼）
+- **「出事時／查證時才需要」→ 外連，不內嵌**（完整證據表、根因推導、機制教學、對其他文件的更正）
+  - 具體動作：**把整段換成一行指路 + 連結**（「背景與完整證據見 #NNNN／`path/to/report.md`」），不是刪掉不提
+  - **命中的段落沒改完之前不得進 Step 4**（詳見下方「執行方式」）
+
+判準的鋒利處：被外連的內容**不是不重要，而是它的完整版本已經存在別處**（feature PR、KB 報告、runbook）。在 release PR 再寫一次只會製造第二個維護點與第二個會過期的副本。
+
+**這不是「越短越好」。** 修剪的對象是與核准決策無關的內容，不是長度本身——64 檔的批次寫 7897 字元完全正當。
+
+### 次指標：聞味道用，不是硬上限
+
+body 字元數應隨改動規模**次線性**成長。既有房規（2026-09-06 實測）：
+
+| PR | 檔案 | body 字元 | 每檔字元 |
+|---|---:|---:|---:|
+| #7969 | 64 | 7897 | 123 |
+| #8117 | 8 | 3108 | 389 |
+| #8121 | 3 | 2658 | 886 |
+| #8124 | 1 | 1053 | 1053 |
+
+**「每檔字元」顯著高於同規模鄰居就停下來重跑主指標。** 單檔但語義極重的變更（feature flag、schema migration、安全修補）可以合理偏高，但要說得出理由。
+
+### 為什麼需要這道關卡
+
+失效模式不是判斷力問題，是**位置壓力**：作者剛做完調查、脈絡都在手上，而 PR body 是離手前最後一個可以傾倒的地方。**傾倒的動機來自作者的狀態，與讀者的需求無關。**
+
+同構前例：`knowledge-base/reports/2026-08-19-alert-description-bloat-audit-and-rewrite-proposal.md` —— 106 條 Grafana rule 裡 15 條把 RCA 全文塞進每次 firing 都會整份推進 Slack 的 `description`。該報告的結論可直接移植：「根本問題不是寫太多，是寫錯地方。」
+
+實測回歸：#8124（1 檔／+23−7）初版 body **3993 字元**，含四個完整版本已存在於 #8123 與 KB 報告的區塊（P95 證據表、因果推導、CodePipeline 機制、對某份 KB 文件的更正），修正後 1053 字元。
+
+### 執行方式（不是「參考」，是要跑的）
+
+**送進 Step 4 之前，讀 `fixtures/coverage.md`，對每一條列出的 failure mode 逐條自檢，並把結果寫成表輸出：**
+
+```
+| fixture | failure mode | 本次是否命中 | 依據 |
+|---|---|---|---|
+| 01 | scope bloat | 否 | 每檔字元 1053，落在區間；四個可外連區塊均已外連 |
+| 04 | commit message 照抄 | 否 | 每條 claim 都溯源 diff，非 commit 自述 |
+| …  | … | … | … |
+```
+
+**任一條命中就回 Step 3 改寫，不得帶著命中項進 Step 4。**
+
+`fixtures/` 若不在本機（`npx skills` 的快照可能只帶 `SKILL.md`），從 repo 取：
+`https://github.com/ashe-li/agent-skills/tree/main/release-pr/fixtures`。**取不到就明講「golden set 未取得，本次未做涵蓋率自檢」，不要跳過還宣稱做了。**
+
+> **這一層是判讀，不是機械檢查。** CI 的 `scripts/check_release_fixtures.py` 只驗 golden set 自身的完整性（manifest 對得上檔案、有 negative-control、新增 Step 必須同步動 fixtures），**它驗不了「這次的取捨對不對」**。兩層的強度不同，不要把 CI 綠當成本步驟做過了——同構失效見 KB `ci-green-doesnt-mean-your-new-test-ran-check-collected-count`。
+
 ## Step 4：產生標題
 
 格式：`Release：<主軸1>、<主軸2>、…`

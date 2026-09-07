@@ -201,6 +201,7 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 - Step 標頭：`- [ ] **S<phase>.<num>** — <title>`（S-code 必填，例 S1.1、S1.2、S2.1）
 - 欄位：兩個空格縮排 + ASCII 冒號（`  - Files: ...`，不要 bold、不要全形冒號）
 - Dependencies 值：純 step ID list（`S1.1, S1.2`），支援 range（`S1.1 ~ S2.3`），禁止自由文字
+- Estimated 值（選填）：只接受 `<N>m`（例：`Estimated: 90m`）——不接受 `1.5h`／`90`／`2h30m`
 -->
 
 ### Phase 1: [實作階段]
@@ -209,7 +210,10 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
   - Agent: `planner`
   - Action: ...
   - Dependencies: []
+  - Estimated: 90m
   - Why: ...
+
+> **Estimated（選填）**：預估這個 step 花費的時間，格式固定 `<N>m`（分鐘），例如 `Estimated: 90m`。**不填不影響任何行為**——`plan_runner.py` 會把缺失的欄位視為 0，不印警告、不觸發任何門檻。格式錯誤（例如 `1.5h`）會印一則 parse 警告並視為 0，但不會中止解析。當同一個 phase 裡所有 step 的 `Estimated:` 小計超過門檻（預設 180 分鐘，可用環境變數 `PLAN_RUN_LARGE_PHASE_MINUTES` 調整）時，`next` 在該 phase 首次出現於「Newly unlocked」時會印一行 `LARGE-WORK: <phase> 估計 X 分鐘，建議拆分`——**這只是提醒，不會擋執行**。只有部分 step 填了 `Estimated:` 時，小計是下限，該行會附註「僅 N/M 個 step 有 Estimated，實際可能更高」。
 
 > **Dependencies canonical form**: 無 deps 時用 `Dependencies: []`（不要省略整個欄位、不要寫 `None` 或留空白），plan_runner.py parser 對 `[]` 一致處理。有 deps 時用 step ID list：`Dependencies: S1.1, S1.2` 或 range `Dependencies: S1.1 ~ S2.3`。
 

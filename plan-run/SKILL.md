@@ -106,6 +106,23 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 `complete / fail / skip` 的 output 依現況附帶 `## Newly unlocked (N)`（新解鎖的完整模板）、`## Still ready (M): <ids>`（只列 ID，模板已給過）、`## In progress`、`## Blocked`（含原因），有 task_id 時多一段 `## Required sync`。這些是補充，**推進本身不靠你讀完它們**——漏讀了 hook 下一輪還會再講一次。
 
+## Checkpoint 內容契約（`checkpoint_pending` 觸發時）
+
+推進到輪數預算邊界或 phase 邊界時，hook reason 會多印一段指示，把進度**寫進檔案**而不是只在回合裡輸出摘要——摘要留在 transcript 裡，compaction 或新 session 一來就沒了；寫進磁碟上的 `.plan-state/<slug>.checkpoint.md` 才能跨 session 接得上。reason 裡會附這份檔案的**完整絕對路徑**（用既有的 `state_path_for()` 同一套路徑推導與 slug，`checkpoint_path_for()` 只是同目錄下換副檔名，不是另外拼字串）。
+
+**四要件缺一不可**（借自 AgentFlow 的 10 分鐘 WIP checkpoint，`agentflow/skills/agentflow/SKILL.md:62`）：
+
+```markdown
+Finished: 已完成什麼
+Running now: 現在正在跑什麼
+Still to do: 還剩什麼
+Next work action: 下一個具體動作
+```
+
+**自足性規則（契約核心）**：checkpoint **不得要求讀者回頭讀 plan.md、state.json 或前一則 checkpoint 才看得懂**。判準是——一個完全沒有本次 context 的人，只讀這一份檔案，就要能回答「下一步該做什麼」。這條後續由 fresh-context agent 驗收。
+
+**內容安全規則**：明文禁止貼 log 原文、禁止任何 token / key / password / JWT。`.plan-state/*.checkpoint.md` 預設在 `.gitignore`，但那是最後一道防線，不是可以鬆懈的理由——寫的當下就當作可能外流處理。
+
 ## Step 3: 失敗處理（HITL gate）
 
 `fail` 之後 hook **不會 block**，turn 正常結束交還給人。downstream 自動轉 `blocked`。用 `AskUserQuestion` 問：

@@ -22,3 +22,15 @@ __pycache__/
 
 # Logs
 *.log
+
+# plan_runner.py state: *.state.json is committed intentionally (cross-session/
+# cross-machine resume snapshot) — do NOT ignore it here.
+# *.state.lock is a transient lock file (never meant to persist); a stray commit
+# of one was found in ~/Documents/knowledge-base during S1.2 inventory (2026-09-07).
+plans/*/.plan-state/*.state.lock
+
+# checkpoint.md is a high-churn WIP resumption snapshot (rewritten on every
+# checkpoint_pending trigger, ~every 45min of wall-clock or stall) — kept on
+# disk for the next session but not versioned, unlike stop.md which is a rare,
+# audit-worthy event and stays tracked (decision: S1.2 inventory, 2026-09-07).
+plans/*/.plan-state/*.checkpoint.md

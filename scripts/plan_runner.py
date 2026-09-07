@@ -63,7 +63,27 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why", "Input", "Output",
+    "Estimated",
 )
+
+# S4.1: `Estimated: <N>m` is deliberately narrow -- only the bare-minutes
+# shape is accepted. '1.5h' / '90' (no unit) / '2h30m' are each one more
+# shape to test, document in design/SKILL.md, and eventually mis-type; this
+# field only ever feeds a warn-only heuristic (LARGE_PHASE_MINUTES below),
+# so the accuracy a second format would buy isn't worth that surface.
+_ESTIMATED_RE = re.compile(r"^(\d+)\s*m$", re.IGNORECASE)
+
+
+def _parse_estimated_minutes(value: str) -> int | None:
+    """Parse an `Estimated:` field value (e.g. '90m') into whole minutes.
+
+    Returns None -- not 0 -- on an unparseable shape so the caller can
+    warn-and-default rather than silently treating a typo as "no estimate".
+    """
+    m = _ESTIMATED_RE.match(value.strip())
+    if not m:
+        return None
+    return int(m.group(1))
 
 
 def now_iso() -> str:
@@ -199,6 +219,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 "skill": None,
                 "command": None,
                 "risk": None,
+                "estimated": 0,
             }
             current_step_id = step_id
             continue
@@ -230,6 +251,16 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                     in_action_block = False
                 elif key == "risk":
                     steps[current_step_id]["risk"] = val
+                    in_action_block = False
+                elif key == "estimated":
+                    minutes = _parse_estimated_minutes(val)
+                    if minutes is None:
+                        parse_warnings.append(
+                            f"Invalid Estimated format for {current_step_id}: "
+                            f"{val!r} (expected e.g. '90m'); treating as 0"
+                        )
+                    else:
+                        steps[current_step_id]["estimated"] = minutes
                     in_action_block = False
                 continue
 
@@ -266,7 +297,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 _NORMALIZE_FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why",
-    "Input", "Output", "Test",
+    "Input", "Output", "Test", "Estimated",
 )
 
 
@@ -456,6 +487,58 @@ def validate_dag(parsed: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Plan fingerprint (S2.1) — drift detection between plan.md and its state
+# ---------------------------------------------------------------------------
+
+# Only the two markers parse_plan()'s step_re accepts (`\[[ x]\]`). `[X]`,
+# `[~]`, `[-]` and friends are deliberately NOT normalized: to the parser a
+# `- [~] S3 ...` line is not a step at all, so treating that edit as
+# cosmetic would hide a step disappearing from the graph. Measured on 216
+# real plans under ~/Documents/knowledge-base: 3087 `[ ]`, 452 `[x]`, and 3
+# non-parser markers -- the case is live, not hypothetical.
+_CHECKBOX_STATE_RE = re.compile(r"^(\s*[-*+]\s+)\[[ x]\](?=\s|$)")
+
+
+def _normalize_plan_line(line: str) -> str:
+    stripped = line.rstrip()
+    return _CHECKBOX_STATE_RE.sub(r"\1[ ]", stripped, count=1)
+
+
+def plan_fingerprint(text: str) -> str:
+    """SHA-256 of plan.md after normalizing away non-semantic churn.
+
+    Normalization (see .verification/2026-09-07/s2.1-normalization-design.md
+    for the measurements behind each rule):
+
+    1. splitlines()   -- absorbs CRLF/LF/CR and "final newline or not";
+                         both are file representation, not content.
+    2. rstrip()       -- trailing whitespace (editor trim-on-save churn).
+    3. checkbox state -- `- [ ]` and `- [x]` collapse to the same token, so
+                         *ticking a step or an acceptance criterion never
+                         reads as drift*. This is the whole point: state
+                         advances by ticking boxes, so hashing the raw file
+                         would report drift on every single step and, with
+                         `next` blocking by default, wedge the run (R2).
+    4. trailing blank lines -- same class as rule 2.
+
+    Everything else is content and MUST change the digest, including the
+    `> Status:` / `**狀態:**` header lines: measured across the real plan
+    corpus, all 17 rewrites of those lines carried semantic scope info
+    ("PENDING APPROVAL" -> "IN PROGRESS"), which is exactly the premise
+    change drift detection exists to surface.
+
+    SECURITY (plan T7): this is an integrity *hint*, not a tamper boundary.
+    plan.md and the state file are both user-writable -- anyone able to edit
+    one can edit the other. It defends against "I edited the plan and forgot
+    to re-init", not against a malicious rewrite.
+    """
+    lines = [_normalize_plan_line(line) for line in text.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
 # State persistence
 # ---------------------------------------------------------------------------
 
@@ -467,11 +550,135 @@ def state_path_for(plan_path: Path) -> Path:
     return state_dir_for(plan_path) / f"{plan_path.stem}.state.json"
 
 
+def checkpoint_path_for(plan_path: Path) -> Path:
+    """Path of the plan's checkpoint file (S3.1).
+
+    Same directory and slug derivation as state_path_for() -- deliberately
+    not an independent string concatenation, so the checkpoint file always
+    lands beside the state file it describes, under the same slug, even if
+    that derivation changes later.
+    """
+    return state_dir_for(plan_path) / f"{plan_path.stem}.checkpoint.md"
+
+
+def stop_marker_path_for(plan_path: Path) -> Path:
+    """Path of the plan's safe-halt marker (S2.2, plan section 2.2).
+
+    Same directory and slug derivation as state_path_for() / checkpoint_
+    path_for() -- deliberately NOT built from state["slug"] via string
+    concatenation. state["slug"] is a JSON field in a user-writable file
+    (see check_plan_drift()'s T7 note on state.json); a tampered value
+    there could contain "../../" and, string-concatenated, escape
+    `.plan-state/`. plan_path.stem is a single path *component* -- it
+    cannot itself contain "/" -- so there is no input this function can be
+    handed that escapes state_dir_for(plan_path) (T3/R7).
+    """
+    return state_dir_for(plan_path) / f"{plan_path.stem}.stop.md"
+
+
+def _read_stop_marker(plan_path: Path) -> str | None:
+    """Best-effort read of the plan's stop marker, or None if absent or
+    unreadable. Every caller (cmd_next, the Stop hook's I/O layer) only
+    ever asks "is this None" -- the content is never parsed to decide
+    behavior (T6). It exists to be printed verbatim for a human to read.
+    """
+    try:
+        return stop_marker_path_for(plan_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 def load_state(plan_path: Path) -> dict[str, Any] | None:
     sp = state_path_for(plan_path)
     if not sp.exists():
         return None
     return json.loads(sp.read_text(encoding="utf-8"))
+
+
+# check_plan_drift() results. `legacy` and `unreadable` are both non-blocking
+# by construction -- see the docstring.
+DRIFT_OK = "ok"
+DRIFT_DETECTED = "drift"
+DRIFT_LEGACY = "legacy"
+DRIFT_UNREADABLE = "unreadable"
+
+
+class PlanDrift(NamedTuple):
+    status: str
+    expected: str | None  # digest recorded at init time
+    actual: str | None    # digest of plan.md as it is right now
+
+    @property
+    def blocks(self) -> bool:
+        return self.status == DRIFT_DETECTED
+
+
+def check_plan_drift(plan_path: Path, state: dict[str, Any]) -> PlanDrift:
+    """Compare plan.md's current fingerprint against the one `init` recorded.
+
+    Deliberately NOT folded into load_state(), even though it reads like a
+    load-time concern. load_state() is on the pointer-validation path
+    (_pointer_status), which the Stop hook walks on *every* turn: hashing
+    plan.md there would add a full file read per turn, and worse, letting a
+    drift verdict leak into that function's result risks a drifted plan
+    being judged POINTER_STATUS_INVALID -- which stops auto-advance for the
+    whole cwd, a far worse failure than a false drift warning. Keeping it a
+    separate call makes "who checks for drift" an explicit caller decision;
+    today that is `status` and `next`.
+
+    Never raises, and never blocks except on a real mismatch:
+
+    - `legacy`     -- state predates this field. All 187 states in flight
+                      across the repos sharing this script are in this
+                      shape, so this branch is the whole backward-compat
+                      story (plan R4). Hint, never block. We also do NOT
+                      adopt the current digest into the old state: that
+                      would silently baseline a plan which may have drifted
+                      already, and the plan's non-goals forbid mutating an
+                      existing state's content.
+    - `unreadable` -- plan.md is gone or unreadable. That is its own,
+                      louder failure; adding a drift block on top only
+                      buries it.
+
+    SECURITY (plan T7): an integrity hint, not a tamper boundary -- see
+    plan_fingerprint().
+    """
+    expected = state.get("plan_sha256")
+    if not isinstance(expected, str) or not expected:
+        return PlanDrift(DRIFT_LEGACY, None, None)
+    try:
+        actual = plan_fingerprint(plan_path.read_text(encoding="utf-8"))
+    except OSError:
+        return PlanDrift(DRIFT_UNREADABLE, expected, None)
+    if actual == expected:
+        return PlanDrift(DRIFT_OK, expected, actual)
+    return PlanDrift(DRIFT_DETECTED, expected, actual)
+
+
+def format_drift_banner(plan_path: Path, drift: PlanDrift, *, blocked: bool) -> str:
+    """Human-facing banner, printed at the very top of `status` / `next`."""
+    state_path = state_path_for(plan_path)
+    if drift.status == DRIFT_LEGACY:
+        return (
+            f"NOTE: 這份 state 沒有 plan_sha256 欄位（init 於漂移偵測上線前），"
+            f"無法判斷 plan.md 是否已變更。\n"
+            f"      要啟用偵測：rm {state_path} && plan_runner.py init {plan_path}"
+        )
+    if drift.status == DRIFT_UNREADABLE:
+        return (
+            f"NOTE: 讀不到 plan.md（{plan_path}），本輪跳過漂移偵測。"
+        )
+    lines = [
+        "DRIFT: plan.md 已變更，但 state 是舊快照——state 不會自動跟著 plan 更新，",
+        "       照舊快照推下去等於在錯誤的前提上繼續。",
+        f"       plan:  {plan_path}",
+        f"       state: {state_path}",
+        f"       expected {drift.expected[:12]} / actual {(drift.actual or '')[:12]}",
+        f"       修法：rm {state_path} && plan_runner.py init {plan_path}",
+    ]
+    if blocked:
+        lines.append("       已拒絕派下一步。確定要照舊快照推，加 --ignore-drift。")
+    return "\n".join(lines)
 
 
 def save_state(plan_path: Path, state: dict[str, Any]) -> None:
@@ -582,6 +789,7 @@ def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
             "files": step["files"],
             "action": step["action"],
             "risk": step["risk"],
+            "estimated": step["estimated"],
             "status": PENDING,
             "task_id": None,
             "started_at": None,
@@ -589,16 +797,32 @@ def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
             "failure_reason": None,
         }
 
-    return {
+    try:
+        plan_sha256 = plan_fingerprint(plan_path.read_text(encoding="utf-8"))
+    except OSError:
+        # parse_plan() just read this file, so this is near-impossible; if it
+        # does happen, an absent field degrades to the legacy (non-blocking)
+        # branch rather than failing init.
+        plan_sha256 = None
+
+    state: dict[str, Any] = {
         "plan_path": str(plan_path),
         "slug": parsed["slug"],
         "title": parsed["title"],
         "phase_order": parsed["phase_order"],
+        # S4.2: default off, and `init --force` / the documented drift remedy
+        # (`rm state && init`) both rebuild state wholesale and so clear any
+        # opt-in. Failing back to "ask every time" is the safe direction --
+        # a setting that survived a plan rewrite would be the dangerous one.
+        "auto_reply": AUTO_REPLY_OFF,
         "parent_task_id": None,
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "steps": steps_state,
     }
+    if plan_sha256 is not None:
+        state["plan_sha256"] = plan_sha256
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -852,6 +1076,85 @@ def _format_full_step_block(step: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _format_recap_next_step(step: dict[str, Any], plan_path: Path) -> list[str]:
+    """`recap`'s ready-step block (S3.3) -- same field layout as
+    _format_full_step_block(), but threads the real `plan_path` through to
+    _format_step_action_block() so the printed dispatch commands are
+    runnable verbatim instead of carrying the `<plan>` placeholder.
+
+    Kept as its own function rather than adding a plan_path parameter to
+    _format_full_step_block(): that function backs `next`/`status`, both
+    golden-tested, and its placeholder-vs-inline distinction already has a
+    documented reason (_format_step_action_block's docstring) tied to
+    the Stop hook's fenced-data boundary -- not something to disturb for a
+    single new caller.
+    """
+    lines: list[str] = []
+    title = step["title"]
+    phase = step["phase"]
+    phase_tag = f" [{phase}]" if phase else ""
+    lines.append(f"### {step['id']} — {title}{phase_tag}")
+    for k in ("agent", "skill", "command"):
+        if step.get(k):
+            lines.append(f"- {k}: {step[k]}")
+    if step.get("files"):
+        lines.append(f"- files: {step['files']}")
+    if step.get("action"):
+        lines.append(f"- action: {step['action']}")
+    if step.get("risk"):
+        lines.append(f"- risk: {step['risk']}")
+    lines.append("- next:")
+    lines.extend(_format_step_action_block(step, plan_path=str(plan_path)))
+    return lines
+
+
+# How many lines from the head and tail of checkpoint.md `recap` prints
+# before falling back to a bounded head+tail view (S3.3). Borrows the
+# head/tail truncation *strategy* from AgentFlow's resume-intake.js:12-15
+# (a byte-bounded read for the same "don't dump a huge file" reason) --
+# here bounded by line count instead, since checkpoint.md's contract
+# (S3.1) is prose written for a human, and a human counts in lines.
+RECAP_CHECKPOINT_HEAD_LINES = 60
+RECAP_CHECKPOINT_TAIL_LINES = 60
+RECAP_CHECKPOINT_MAX_LINES = 200
+
+
+def _bounded_checkpoint_lines(text: str) -> list[str]:
+    """Bound checkpoint.md's rendering for `recap`.
+
+    Text at or under RECAP_CHECKPOINT_MAX_LINES lines is returned whole.
+    Longer text is cut to head + tail with an explicit line naming how many
+    lines were omitted -- never a silent truncation, and never a summary of
+    the omitted content (T6: this function prints, it does not read for
+    meaning).
+    """
+    lines = text.splitlines()
+    if len(lines) <= RECAP_CHECKPOINT_MAX_LINES:
+        return lines
+    head = lines[:RECAP_CHECKPOINT_HEAD_LINES]
+    tail = lines[-RECAP_CHECKPOINT_TAIL_LINES:]
+    omitted = len(lines) - RECAP_CHECKPOINT_HEAD_LINES - RECAP_CHECKPOINT_TAIL_LINES
+    return head + [f"... ({omitted} 行省略) ..."] + tail
+
+
+def _format_elapsed_seconds(seconds: float) -> str:
+    """Coarse human-readable "how long ago" for `recap`'s pointer section.
+    A glance, not a duration for programmatic use -- json format carries
+    the raw ISO timestamp for anything that needs precision.
+    """
+    seconds = max(0.0, seconds)
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "不到 1 分鐘前"
+    hours, minutes = divmod(minutes, 60)
+    if hours == 0:
+        return f"{minutes} 分鐘前"
+    days, hours = divmod(hours, 24)
+    if days == 0:
+        return f"{hours} 小時 {minutes} 分鐘前"
+    return f"{days} 天 {hours} 小時前"
+
+
 def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
     """Markdown rendering. Skips empty sections to save tokens.
     Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
@@ -866,6 +1169,18 @@ def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
     counts_str = " | ".join(f"{k}:{v}" for k, v in counts.items() if v)
     if counts_str:
         lines.append(counts_str)
+
+    # S4.1: warn-only work-volume routing (see LARGE_PHASE_MINUTES). Absent
+    # any `Estimated:` fields this list is always empty, so a plan with no
+    # such fields renders byte-identical to before this feature existed.
+    for w in data.get("large_work_warnings", []) or []:
+        line = (
+            f"LARGE-WORK: {w['phase']} 估計 {w['estimated_minutes']} 分鐘，"
+            "建議拆分"
+        )
+        if w["steps_estimated"] < w["steps_counted"]:
+            line += f"（僅 {w['steps_estimated']}/{w['steps_counted']} 個 step 有 Estimated，實際可能更高）"
+        lines.append(line)
 
     new_ready = data.get("ready_steps_new", [])
     still_ready = data.get("ready_steps_still", [])
@@ -1097,7 +1412,9 @@ _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
 # by an older build stays VALID instead of being condemned as malformed —
 # validate_pointer() failing would disable auto-advance for that cwd, which
 # is a far worse outcome than a missing nag counter.
-_POINTER_OPTIONAL_COUNTER_FIELDS = ("assign_repeat_count", "turn_start_completed")
+_POINTER_OPTIONAL_COUNTER_FIELDS = (
+    "assign_repeat_count", "turn_start_completed", "last_seen_completed_count",
+)
 
 
 class ResolvedPointer(NamedTuple):
@@ -1196,6 +1513,11 @@ def new_pointer_record(
         "driver_transcript_path": None,
         "last_seen_at": timestamp,
         "last_advance_at": None,
+        # (S3.4) baseline for _record_advance_if_progressed()'s "did the
+        # completed+skipped count grow since we last looked" check. None
+        # means "never observed yet", distinct from 0 ("observed, and
+        # zero steps were done at the time").
+        "last_seen_completed_count": None,
         "paused": False,
         "consecutive_blocks": 0,
         "bg_poll_count": 0,
@@ -1224,10 +1546,25 @@ def _parse_iso_timestamp(value: Any) -> datetime | None:
     return parsed
 
 
-def _is_pointer_stale(data: dict[str, Any]) -> bool:
+def _pointer_progress_timestamp(data: dict[str, Any]) -> datetime | None:
+    """When this pointer last made progress: `last_advance_at`, falling back
+    to `created_at` when it is absent or unparseable, None when neither is
+    readable.
+
+    Single definition on purpose. Both callers ("is this pointer abandoned"
+    in _is_pointer_stale() and "has this step been running too long" in
+    decide_budget()'s wall-clock rule) are asking the same question about
+    the same field, and the answer must not mean two different things
+    depending on which one asks.
+    """
     reference = _parse_iso_timestamp(data.get("last_advance_at"))
     if reference is None:
         reference = _parse_iso_timestamp(data.get("created_at"))
+    return reference
+
+
+def _is_pointer_stale(data: dict[str, Any]) -> bool:
+    reference = _pointer_progress_timestamp(data)
     if reference is None:
         return True
     age_seconds = (datetime.now(timezone.utc) - reference).total_seconds()
@@ -1494,6 +1831,27 @@ PHASE_MIN = 3
 
 _BLOCK_BUDGET_ENV_VAR = "PLAN_RUN_BLOCK_BUDGET"
 
+# Wall-clock companion to the turn counters above (S3.2). The counters treat
+# a step that took thirty seconds and one that took two hours identically;
+# this is the axis that tells them apart, so a long-running step still leaves
+# a checkpoint behind even when the round is nowhere near its block budget.
+#
+# 2700s (45 min) comes from S1.1's measurement of 567 real step deltas
+# (.verification/2026-09-07/plan-run-boundary-measurement.md): median 3.9 min,
+# p90 21.2, p95 40.1, so 45 min sits around the 95.5th percentile and roughly
+# 1 step in 20 trips it. Tuning range from that same data is 1800-3600.
+#
+# The override may be lowered freely (a shorter window only means more
+# checkpoints, which is the safe direction) but is hard-clamped at
+# POINTER_STALE_SECONDS: resolve_pointer() drops any pointer older than that,
+# so a larger threshold could never fire and would silently read as "disabled"
+# rather than "very patient".
+
+CHECKPOINT_STALE_SECONDS = 2700
+CHECKPOINT_STALE_HARD_CAP = POINTER_STALE_SECONDS
+
+_CHECKPOINT_STALE_ENV_VAR = "PLAN_RUN_CHECKPOINT_STALE_SECONDS"
+
 
 class BudgetDecision(NamedTuple):
     """Result of decide_budget() — pure computation, no side effects.
@@ -1532,6 +1890,147 @@ def _effective_block_budget() -> int:
     return min(value, BLOCK_BUDGET_HARD_CAP)
 
 
+def _effective_checkpoint_stale_seconds() -> int:
+    """CHECKPOINT_STALE_SECONDS, optionally overridden by
+    PLAN_RUN_CHECKPOINT_STALE_SECONDS.
+
+    Same contract as _effective_block_budget(): any malformed override
+    (non-numeric, non-integer, non-positive, empty/missing) falls back to the
+    default silently and never raises, and the value is hard-clamped at
+    CHECKPOINT_STALE_HARD_CAP.
+    """
+    raw = os.environ.get(_CHECKPOINT_STALE_ENV_VAR)
+    if raw is None or not raw.strip():
+        return CHECKPOINT_STALE_SECONDS
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return CHECKPOINT_STALE_SECONDS
+    if value <= 0:
+        return CHECKPOINT_STALE_SECONDS
+    return min(value, CHECKPOINT_STALE_HARD_CAP)
+
+
+# S4.1: work-volume routing, borrowed from AgentFlow's round-linter.js
+# large_work_route (agentflow/skills/agentflow/scripts/round-linter.js:2681-
+# 2685). AgentFlow's version returns "fail" for an over-budget phase because
+# it has an outer looper that can absorb a failed round and retry. We have
+# no such looper -- /plan-run's only response to a hard block is stopping,
+# so treating this the same way would wedge an unattended run on a plan
+# that is merely large, not broken. It is therefore a warning line only,
+# never a block: see LARGE-WORK below in _build_state_view() /
+# _format_state_view_lines(). Unlike BLOCK_BUDGET/CHECKPOINT_STALE_SECONDS
+# above, this threshold isn't gated by another subsystem's hard limit, so
+# there is no hard cap to clamp an override against -- only a floor check
+# against non-positive/malformed values.
+
+LARGE_PHASE_MINUTES = 180
+
+_LARGE_PHASE_MINUTES_ENV_VAR = "PLAN_RUN_LARGE_PHASE_MINUTES"
+
+
+def _effective_large_phase_minutes() -> int:
+    """LARGE_PHASE_MINUTES, optionally overridden by
+    PLAN_RUN_LARGE_PHASE_MINUTES.
+
+    Same malformed-input contract as _effective_block_budget(): any
+    non-numeric, non-positive, or empty/missing override falls back to the
+    default silently and never raises.
+    """
+    raw = os.environ.get(_LARGE_PHASE_MINUTES_ENV_VAR)
+    if raw is None or not raw.strip():
+        return LARGE_PHASE_MINUTES
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return LARGE_PHASE_MINUTES
+    if value <= 0:
+        return LARGE_PHASE_MINUTES
+    return value
+
+
+def _phase_remaining_estimate(
+    state: dict[str, Any], phase: str
+) -> tuple[int, int, int]:
+    """Sum of `Estimated:` minutes across `phase`'s not-yet-done steps.
+
+    COMPLETED/SKIPPED steps are excluded from both the minutes sum and the
+    "how many had an estimate" denominator: the LARGE-WORK warning exists
+    to flag work still ahead before a phase is entered, not to keep
+    counting work that is already finished.
+
+    Returns (total_minutes, steps_with_estimate, steps_counted) — the last
+    two let the caller render "(N/M steps estimated)" when the subtotal is
+    only a partial (lower-bound) picture.
+    """
+    total = 0
+    steps_with_estimate = 0
+    steps_counted = 0
+    for step in state["steps"].values():
+        if step["phase"] != phase:
+            continue
+        if step["status"] in (COMPLETED, SKIPPED):
+            continue
+        steps_counted += 1
+        minutes = step.get("estimated") or 0
+        if minutes:
+            steps_with_estimate += 1
+        total += minutes
+    return total, steps_with_estimate, steps_counted
+
+
+def _large_work_warnings(
+    state: dict[str, Any], newly_ready_step_ids: list[str]
+) -> list[dict[str, Any]]:
+    """LARGE-WORK warnings for phases entered by this delta.
+
+    Scoped to the phases represented in `newly_ready_step_ids` (the same
+    steps _build_state_view() is about to report as "Newly unlocked") so
+    this naturally piggybacks on the existing previously_reported_ready
+    dedup: a phase already surfaced won't re-trigger until a *further*
+    step in it newly unlocks (e.g. after one of its steps completes and the
+    subtotal — recomputed — still or newly exceeds the threshold).
+    """
+    threshold = _effective_large_phase_minutes()
+    phases_seen: list[str] = []
+    for sid in newly_ready_step_ids:
+        phase = state["steps"][sid]["phase"]
+        if phase not in phases_seen:
+            phases_seen.append(phase)
+
+    warnings: list[dict[str, Any]] = []
+    for phase in phases_seen:
+        total, with_estimate, counted = _phase_remaining_estimate(state, phase)
+        if total > threshold:
+            warnings.append({
+                "phase": phase,
+                "estimated_minutes": total,
+                "threshold_minutes": threshold,
+                "steps_estimated": with_estimate,
+                "steps_counted": counted,
+            })
+    return warnings
+
+
+def _wall_clock_checkpoint_due(pointer: dict[str, Any], now: float | None) -> bool:
+    """True when the pointer has gone longer than the stale threshold without
+    advancing. Rule 4 of decide_budget(); see that docstring for why each of
+    the three "no evidence" cases below answers False.
+
+    Never reads the clock: `now` is whatever the caller injected, and a None
+    or non-numeric `now` means "no clock supplied", not "use the real one".
+    """
+    if isinstance(now, bool) or not isinstance(now, (int, float)):
+        return False
+    reference = _pointer_progress_timestamp(pointer)
+    if reference is None:
+        return False
+    # Strict `>`, matching _is_pointer_stale(): exactly at the threshold is
+    # not yet over it. A negative age (clock moved backwards) fails this
+    # comparison on its own, so it needs no special case.
+    return (now - reference.timestamp()) > _effective_checkpoint_stale_seconds()
+
+
 def _pointer_consecutive_blocks(pointer: dict[str, Any]) -> int:
     value = pointer.get("consecutive_blocks")
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
@@ -1563,6 +2062,8 @@ def decide_budget(
     pointer: dict[str, Any],
     state: dict[str, Any],
     ready_step: str,
+    *,
+    now: float | None = None,
 ) -> BudgetDecision:
     """Decide block/allow for a ready step under the self-imposed budget.
 
@@ -1573,9 +2074,54 @@ def decide_budget(
     3. finishing `ready_step` would close out its phase, and we've already
        auto-advanced >= PHASE_MIN times -> also checkpoint_pending, so the
        stop lands on a phase boundary instead of mid-phase.
-    4. otherwise -> plain block.
+    4. (S3.2) the pointer has not advanced for longer than
+       _effective_checkpoint_stale_seconds() -> also checkpoint_pending.
+    5. otherwise -> plain block.
     An `allow` here does NOT reset consecutive_blocks; only a fresh user
     turn (stop_hook_active=false, handled by S1.2) does that.
+
+    `now` is an injected epoch-seconds clock (time.time() in production,
+    a fixed value in tests). It exists so rule 4 can be time-dependent
+    without this function ever reading a clock itself -- calling time.time()
+    in here would make every existing golden/regression assertion depend on
+    when it happened to run. `now=None` (the default) therefore means "no
+    clock supplied, skip rule 4", which is what keeps callers that predate
+    S3.2 byte-identical.
+
+    Rule 4 only ever ORs into `checkpoint_pending`. It must never touch
+    `decision` or `steps_remaining` (plan R1): those two carry the 8-step
+    turn-counting contract that the Stop hook and its tests are built on,
+    and wall-clock time is a different axis that has no business voting on
+    how many steps are left. It also leaves
+    `checkpoint_from_phase_boundary` alone -- that flag drives the "phase
+    boundary reached" footer, and a slow step is not a phase boundary.
+
+    Rule 4's reference timestamp is `_pointer_progress_timestamp()`:
+    `last_advance_at`, falling back to `created_at`. Three edge cases and
+    the reasoning behind each answer:
+
+    * **Fallback to `created_at`.** For a plan initialised moments ago this
+      is a no-op: `created_at` is recent, so nothing fires, and the first
+      few steps run without a spurious checkpoint. For an *old* pointer
+      that never advanced a single step, it fires on the first assignment
+      of the round -- and that is the intended reading, not a false
+      positive: "attached hours ago, zero steps advanced" is exactly the
+      stall this mechanism exists to leave a note about. The alternative
+      (skip rule 4 until `last_advance_at` exists) would make the rule
+      inert for precisely the worst case.
+    * **Neither timestamp readable.** No reference means no elapsed time,
+      so no evidence of a long-running step; return False rather than
+      guess. Note this is the opposite default from `_is_pointer_stale()`,
+      which condemns an unreadable pointer -- there, "unknown" means "do
+      not auto-advance on it", the cautious answer; here "unknown" would
+      mean "interrupt for a checkpoint on every single step", which is
+      noise, and noise is how a checkpoint stops being read.
+    * **Clock running backwards** (`now` earlier than the reference, e.g.
+      an NTP correction or a pointer written on another machine). The age
+      goes negative and fails the `>` comparison, so nothing fires. A
+      backwards clock is evidence the clock moved, not evidence a step ran
+      long, and inventing a checkpoint from it would be a fabricated
+      signal.
     """
     consecutive_blocks = _pointer_consecutive_blocks(pointer)
     block_budget = _effective_block_budget()
@@ -1595,7 +2141,9 @@ def decide_budget(
         and consecutive_blocks >= PHASE_MIN
     )
     checkpoint_pending = (
-        consecutive_blocks == block_budget - 1 or phase_boundary
+        consecutive_blocks == block_budget - 1
+        or phase_boundary
+        or _wall_clock_checkpoint_due(pointer, now)
     )
     steps_remaining = max(block_budget - consecutive_blocks, 0)
 
@@ -1606,6 +2154,529 @@ def decide_budget(
         checkpoint_pending=checkpoint_pending,
         steps_remaining=steps_remaining,
         checkpoint_from_phase_boundary=phase_boundary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# auto-reply setting + four-category hard stops (S4.2)
+# ---------------------------------------------------------------------------
+#
+# This section decides ONE question: "may this be settled without waking the
+# owner?" It never settles anything itself. Auto-answering, its mandatory
+# `Auto-answered:` provenance record and the `--keep-going` one-shot flag are
+# S4.3; the four-option scope gate is S4.4.
+#
+# The safety envelope is a REVERSE whitelist, taken verbatim from
+# ~/Documents/agentflow/skills/agentflow/docs/AG_GUIDE.zh-tw.md:119 --
+# "但有四件事不管怎麼設都一定停下來等你：只有主人能做的決定、無法復原的事、
+# 會透過新管道離開你機器的事、超過約定花費上限的事。"
+# (see also agentflow/skills/agentflow/SKILL.md:104)
+#
+# The direction matters more than the contents. Enumerating "what may be
+# automated" fails toward doing something nobody approved; enumerating "what
+# must stop" fails toward asking one extra question. Every ambiguity below is
+# therefore resolved toward a hit, and every predicate is traced to a rule the
+# user already wrote -- inventing a new rule here would be inventing a new
+# hole.
+
+AUTO_REPLY_ON = "on"
+AUTO_REPLY_OFF = "off"
+
+
+def auto_reply_setting(state: Any) -> str:
+    """Read `auto_reply` off a state dict. Anything but a literal "on" is off.
+
+    S1.2 inventoried ~187 in-flight states across every repo sharing this
+    runner: none carries an auto-reply field of any spelling. "Missing field
+    == off" is therefore the entire backward-compatibility story -- no
+    version negotiation, and a missing field is never a validation failure
+    (load_state() must keep accepting it, which is why this lives here and
+    not in a validator).
+
+    Deliberately asymmetric: only the exact opt-in string enables the
+    mechanism. A typo, a bool, a null, a truthy-looking "yes" -- all read as
+    off, because the failure direction of "misread as off" is one extra
+    question and the failure direction of "misread as on" is an unattended
+    decision.
+    """
+    if not isinstance(state, dict):
+        return AUTO_REPLY_OFF
+    raw = state.get("auto_reply")
+    if not isinstance(raw, str):
+        return AUTO_REPLY_OFF
+    return AUTO_REPLY_ON if raw.strip().lower() == AUTO_REPLY_ON else AUTO_REPLY_OFF
+
+
+def resolve_auto_reply(state: Any, *, no_auto_reply: bool = False) -> str:
+    """Effective setting for one invocation. `--no-auto-reply` is the escape
+    hatch (T11d): it turns the mechanism off for this call only and never
+    writes back, so leaving it out of the next command restores the stored
+    value rather than silently having disabled the feature."""
+    if no_auto_reply:
+        return AUTO_REPLY_OFF
+    return auto_reply_setting(state)
+
+
+HARD_STOP_OWNER_ONLY = "H1"
+HARD_STOP_IRREVERSIBLE = "H2"
+HARD_STOP_OUTWARD_CHANNEL = "H3"
+HARD_STOP_OVER_BUDGET = "H4"
+
+HARD_STOP_CATEGORIES = (
+    HARD_STOP_OWNER_ONLY,
+    HARD_STOP_IRREVERSIBLE,
+    HARD_STOP_OUTWARD_CHANNEL,
+    HARD_STOP_OVER_BUDGET,
+)
+
+HARD_STOP_LABELS = {
+    HARD_STOP_OWNER_ONLY: "只有主人能做的決定",
+    HARD_STOP_IRREVERSIBLE: "無法復原的事",
+    HARD_STOP_OUTWARD_CHANNEL: "會透過新管道離開你機器的事",
+    HARD_STOP_OVER_BUDGET: "超過約定花費上限的事",
+}
+
+# `dispatch-loop/SKILL.md:68` -- 「單 step 超預算 2 倍 → 停下重估，不加派補洞」.
+# The phase ratio comes from plan §2.5's H4 row (phase subtotal × 1.5).
+HARD_STOP_STEP_BUDGET_RATIO = 2.0
+HARD_STOP_PHASE_BUDGET_RATIO = 1.5
+
+_MEM = "~/.claude/projects/-Users-shiun-Documents-knowledge-base/memory/"
+_RULES = "~/.claude/rules/common/"
+
+RULE_DESIGNER_SPEC = _MEM + "feedback_designer_spec_no_unilateral_change.md:15"
+RULE_VISUAL_ADJUDICATION = "~/.claude/CLAUDE.md:20"
+RULE_RESUME_FRAMING = _MEM + "feedback_resume_claims_verify_and_honest_framing.md:10"
+RULE_EXTERNAL_DOC = _MEM + "feedback_external_doc_no_casual_label.md:12"
+RULE_EXPLICIT_LIST = _MEM + "feedback_explicit_list_before_authorize.md:12"
+RULE_GROUP_DECISIONS = _MEM + "feedback_group_decisions_not_per_item.md:13"
+
+RULE_PRE_DESTROY = _MEM + "feedback_pre_destroy_three_axis_check.md:26"
+RULE_FORCE_PUSH = _MEM + "feedback_force_push_confirm.md:13"
+RULE_NO_WILDCARD_DELETE = _MEM + "feedback_delete_explicit_paths_no_wildcard.md:11"
+RULE_GIT_WORKFLOW_STASH = _RULES + "git-workflow.md:16"
+
+RULE_REPO_OWNERSHIP_BACKEND = _RULES + "repo-ownership.md:8"
+RULE_REPO_OWNERSHIP_OTHERS = _RULES + "repo-ownership.md:9"
+RULE_AUTO_MERGE_MICRO_ONLY = _MEM + "feedback_auto_merge_small_infra_prs.md:42"
+RULE_NO_DEV_TO_PROD_API = _MEM + "feedback_no_dev_pointed_to_prod_api.md:22"
+RULE_OUTWARD_CHANNEL = (
+    "~/Documents/agentflow/skills/agentflow/docs/AG_GUIDE.zh-tw.md:119"
+)
+
+RULE_TOKEN_DISCIPLINE = "~/Documents/agent-skills/dispatch-loop/SKILL.md:68"
+
+
+class HardStopHit(NamedTuple):
+    """One reason to stop. `rule` is the file:line the predicate came from --
+    S5.1 re-derives every predicate from these, so a hit that cannot name its
+    source is a bug, not a finding."""
+
+    category: str
+    rule: str
+    evidence: str
+
+
+# --- command-position anchoring --------------------------------------------
+#
+# `guard-regex-must-anchor-on-command-position-not-word-presence` (KB, 2026-09-02):
+# a guard matching "whitespace then the word" mistook `helm/frontend/values.yaml`
+# and the string "helm render" for helm invocations, three times in one session.
+# The fix there was "require the word to be followed by whitespace or EOL".
+#
+# The same anchoring is applied here, but note the failure direction is
+# INVERTED relative to that hook. There, a false positive blocked a legitimate
+# command and sent the user chasing a problem that did not exist -- expensive.
+# Here, a false positive means "ask the owner one extra time" -- cheap, and
+# explicitly the direction plan §7.1/T11(a) asks for. So the anchoring exists
+# to kill the *path-substring* class of false positives the KB lesson
+# documents (`rm-guide.md`, `dropdown`, `performance`), and nothing more; we do
+# not attempt to distinguish "a command being described" from "a command being
+# run", because guessing wrong in the safe direction costs a question.
+
+_HARD_STOP_SEGMENT_RE = re.compile(r"\|\||&&|\$\(|[\n;|&`(){}]")
+_HARD_STOP_TOKEN_SPLIT_RE = re.compile(r"[\s\"'<>]+")
+_HARD_STOP_TOKEN_TRIM = "，。、；：？！「」『』【】…·,.;:!?"
+
+
+def _command_segments(text: str) -> list[list[str]]:
+    """Split free text into command segments, then into standalone words.
+
+    A segment boundary is anything that can start a new command in a shell:
+    newline, `;`, `|`, `||`, `&`, `&&`, backtick, `$(`, and bracketing. Words
+    are then split on whitespace and quote characters, so a command reached
+    through a wrapper (`sudo rm`, `xargs rm`, `bash -c "rm x"`) is still a
+    standalone word -- "command position" is emphatically NOT "token index 0",
+    which is exactly what a wrapper defeats.
+    """
+    segments: list[list[str]] = []
+    for raw_segment in _HARD_STOP_SEGMENT_RE.split(text):
+        words = []
+        for raw in _HARD_STOP_TOKEN_SPLIT_RE.split(raw_segment):
+            word = raw.strip(_HARD_STOP_TOKEN_TRIM)
+            if word:
+                words.append(word)
+        if words:
+            segments.append(words)
+    return segments
+
+
+def _has_word(words: list[str], *candidates: str) -> str | None:
+    """Return the matched word if any candidate appears as a *standalone*
+    word. `helm/frontend/x.yaml`, `rm-guide.md` and `dropdown` never match."""
+    wanted = {c.lower() for c in candidates}
+    for word in words:
+        if word.lower() in wanted:
+            return word
+    return None
+
+
+def _word_with_prefix(words: list[str], prefix: str) -> str | None:
+    for word in words:
+        if word.lower().startswith(prefix.lower()):
+            return word
+    return None
+
+
+def _word_containing(words: list[str], *needles: str) -> str | None:
+    """Substring match *within a single word* -- for path fragments like
+    `smb-` in `helm/smb-api/values.yaml`, where the fragment is by definition
+    not standalone."""
+    for word in words:
+        low = word.lower()
+        for needle in needles:
+            if needle.lower() in low:
+                return word
+    return None
+
+
+# --- H1: only the owner can decide -----------------------------------------
+#
+# Vocabulary, not commands: these are properties of the *decision*, not of a
+# shell line, so they are matched against the whole text.
+
+_H1_DESIGN_PARAM_TERMS = (
+    # feedback_designer_spec_no_unilateral_change.md:15 lists these verbatim.
+    r"border-width", r"border-radius", r"font-size", r"font-weight",
+    r"line-height", r"letter-spacing", r"padding", r"margin", r"gap",
+    r"opacity", r"shadow", r"easing", r"className", r"design token",
+    r"color token", r"icon size", r"animation duration", r"hex",
+    "色票", "設計參數", "設計稿", "設計規格",
+)
+_H1_VISUAL_TERMS = (
+    # CLAUDE.md:20 -- 主模型才做「Figma 判讀、UI 對齊裁決、截圖比對」.
+    "Figma", "截圖比對", "視覺比對", "視覺裁決", "UI 對齊", r"screenshot diff",
+)
+_H1_OUTWARD_COPY_TERMS = (
+    "履歷", r"resume", "LinkedIn", "對外文案", "對外文件", "電子報", "社群貼文",
+)
+_H1_DECISION_TERMS = (
+    r"AskUserQuestion", "待裁決", "請使用者選", "請使用者決定", "由使用者裁決",
+    "擇一", "二選一", "三選一", "四選一",
+)
+_H1_ALTERNATIVE_RE = re.compile(r"(?:方案|選項|option)\s*[A-Za-z1-9]", re.IGNORECASE)
+
+
+def _term_hit(text: str, terms: tuple[str, ...]) -> str | None:
+    for term in terms:
+        if term.isascii():
+            if re.search(r"(?<![\w-])" + re.escape(term) + r"(?![\w-])", text, re.IGNORECASE):
+                return term
+        elif term in text:
+            return term
+    return None
+
+
+def _hard_stop_owner_only(text: str, step: dict[str, Any]) -> list[HardStopHit]:
+    hits: list[HardStopHit] = []
+
+    owner = step.get("owner")
+    if isinstance(owner, str) and owner.strip():
+        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, RULE_EXPLICIT_LIST, f"Owner: {owner.strip()}"))
+    elif re.search(r"^\s*[-*]?\s*Owner\s*[:：]", text, re.MULTILINE):
+        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, RULE_EXPLICIT_LIST, "Owner: marker on step"))
+
+    for terms, rule in (
+        (_H1_DESIGN_PARAM_TERMS, RULE_DESIGNER_SPEC),
+        (_H1_VISUAL_TERMS, RULE_VISUAL_ADJUDICATION),
+        (_H1_DECISION_TERMS, RULE_EXPLICIT_LIST),
+    ):
+        term = _term_hit(text, terms)
+        if term:
+            hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, rule, term))
+
+    term = _term_hit(text, _H1_OUTWARD_COPY_TERMS)
+    if term:
+        rule = RULE_RESUME_FRAMING if term in ("履歷", "resume", "LinkedIn") else RULE_EXTERNAL_DOC
+        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, rule, term))
+
+    # ≥3 parallel alternatives: feedback_explicit_list_before_authorize.md:12
+    # (≥3 decisions get a list first) escalating to
+    # feedback_group_decisions_not_per_item.md:13 (>10 get grouped first).
+    # Either way the choosing is the owner's.
+    alternatives = _H1_ALTERNATIVE_RE.findall(text)
+    if len(alternatives) >= 3:
+        rule = RULE_GROUP_DECISIONS if len(alternatives) > 10 else RULE_EXPLICIT_LIST
+        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, rule, f"{len(alternatives)} 個並列選項"))
+
+    return hits
+
+
+# --- H2: irreversible -------------------------------------------------------
+
+_FORCE_PUSH_FLAGS = ("--force", "-f", "--force-with-lease", "--force-if-includes")
+_WRITE_HTTP_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+_HTTP_CLIENTS = ("curl", "wget", "http", "httpie")
+
+
+def _http_method(words: list[str]) -> str | None:
+    if not _has_word(words, "-X", "--request", "--method"):
+        return None
+    return _has_word(words, *_WRITE_HTTP_METHODS)
+
+
+def _hard_stop_irreversible(words: list[str]) -> list[HardStopHit]:
+    hits: list[HardStopHit] = []
+
+    def add(rule: str, evidence: str) -> None:
+        hits.append(HardStopHit(HARD_STOP_IRREVERSIBLE, rule, evidence))
+
+    if _has_word(words, "rm"):
+        add(RULE_PRE_DESTROY, "rm")
+        glob = _word_containing(words, "*")
+        if glob:
+            # feedback_delete_explicit_paths_no_wildcard.md:11 -- 刪除一律逐一
+            # 列出具體路徑，禁 * / glob；展開結果在下指令當下不可預見。
+            add(RULE_NO_WILDCARD_DELETE, f"rm + wildcard {glob}")
+
+    if _has_word(words, "git") and _has_word(words, "push"):
+        flag = _has_word(words, *_FORCE_PUSH_FLAGS)
+        if flag:
+            add(RULE_FORCE_PUSH, f"git push {flag}")
+    if _has_word(words, "git") and _has_word(words, "reset") and _has_word(words, "--hard"):
+        add(RULE_PRE_DESTROY, "git reset --hard")
+    if _has_word(words, "git") and _has_word(words, "stash"):
+        flag = _has_word(words, "-u", "--include-untracked")
+        add(RULE_GIT_WORKFLOW_STASH, f"git stash {flag}" if flag else "git stash")
+
+    # feedback_pre_destroy_three_axis_check.md:26 names these verbatim:
+    # terraform destroy / aws ... delete-* / kubectl delete / helm uninstall /
+    # CF API DELETE / IAM policy overwrite.
+    if _has_word(words, "kubectl") and _has_word(words, "delete"):
+        add(RULE_PRE_DESTROY, "kubectl delete")
+    if _has_word(words, "terraform") and _has_word(words, "destroy"):
+        add(RULE_PRE_DESTROY, "terraform destroy")
+    if _has_word(words, "helm") and _has_word(words, "uninstall", "delete"):
+        add(RULE_PRE_DESTROY, "helm uninstall")
+    if _has_word(words, "aws"):
+        sub = _word_with_prefix(words, "delete-")
+        if sub:
+            add(RULE_PRE_DESTROY, f"aws {sub}")
+    if _has_word(words, *_HTTP_CLIENTS) and _http_method(words) == "DELETE":
+        add(RULE_PRE_DESTROY, "HTTP DELETE")
+
+    verb = _has_word(words, "drop", "dropdb", "dropuser", "delete", "truncate")
+    if verb:
+        add(RULE_PRE_DESTROY, verb)
+
+    return hits
+
+
+# --- H3: leaves the machine through a new channel ---------------------------
+
+_GH_WRITE_NOUNS = ("pr", "issue", "release", "repo", "gist", "workflow", "run")
+_GH_WRITE_VERBS = (
+    "create", "merge", "comment", "close", "edit", "review", "ready",
+    "delete", "dispatch", "upload", "publish",
+)
+_OUTWARD_PAYLOAD_FLAGS = (
+    "-d", "--data", "--data-raw", "--data-binary", "-F", "--form",
+    "-T", "--upload-file",
+)
+# feedback_no_dev_pointed_to_prod_api.md:22 -- E2E/dev/本地實驗一律 staging.
+# A URL carrying one of these markers is not a *new* outward channel.
+_NON_PROD_URL_MARKERS = (
+    "staging", "localhost", "127.0.0.1", "0.0.0.0", "preview", "example.com",
+    ".test", ".local", "host.docker.internal",
+)
+_ASSIGNED_URL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=(https?://\S+)$")
+
+
+def _hard_stop_outward_channel(words: list[str]) -> list[HardStopHit]:
+    hits: list[HardStopHit] = []
+
+    def add(rule: str, evidence: str) -> None:
+        hits.append(HardStopHit(HARD_STOP_OUTWARD_CHANNEL, rule, evidence))
+
+    # A force-push is the canonical two-category hit: irreversible (H2, via
+    # feedback_force_push_confirm) *and* outward (H3) -- it rewrites history
+    # on a remote other people may have checked out, and repo-ownership.md:9
+    # puts other people's state off-limits. Reporting only H2 would make
+    # S4.3's `Hard-stop check: ... H3 no` line a false statement.
+    if _has_word(words, "git") and _has_word(words, "push"):
+        flag = _has_word(words, *_FORCE_PUSH_FLAGS)
+        if flag:
+            add(RULE_REPO_OWNERSHIP_OTHERS, f"git push {flag}")
+
+    if _has_word(words, "gh"):
+        noun = _has_word(words, *_GH_WRITE_NOUNS)
+        verb = _has_word(words, *_GH_WRITE_VERBS)
+        if noun and verb:
+            # repo-ownership.md:9 -- PR 的 approve/review 狀態屬於給出它的人;
+            # feedback_auto_merge_small_infra_prs.md:42 -- 只有微調 PR 可自動
+            # merge，邊界模糊一律當作非微調、問使用者。
+            rule = RULE_AUTO_MERGE_MICRO_ONLY if verb in ("merge",) else RULE_REPO_OWNERSHIP_OTHERS
+            add(rule, f"gh {noun} {verb}")
+        elif _has_word(words, "api") and _http_method(words):
+            add(RULE_REPO_OWNERSHIP_OTHERS, "gh api write")
+
+    channel = _word_containing(words, "notion", "slack.com", "hooks.slack") or _has_word(
+        words, "slack", "sendmail", "msmtp", "mailx", "mutt", "mail"
+    )
+    if channel:
+        add(RULE_OUTWARD_CHANNEL, channel)
+
+    if _has_word(words, *_HTTP_CLIENTS) and (
+        _http_method(words) or _has_word(words, *_OUTWARD_PAYLOAD_FLAGS)
+    ):
+        add(RULE_OUTWARD_CHANNEL, "HTTP write")
+
+    # repo-ownership.md:8 -- 後端團隊 own: smb-* / payment-* 的 helm values &
+    # secrets、prod 的 cloudflared / alloy deploy trigger、cert-manager。
+    backend = _word_containing(words, "smb-", "payment-", "cert-manager")
+    if backend:
+        add(RULE_REPO_OWNERSHIP_BACKEND, backend)
+    infra = _word_containing(words, "cloudflared", "alloy")
+    if infra and (_has_word(words, "prod", "production") or _word_containing(words, "phase=prod")):
+        add(RULE_REPO_OWNERSHIP_BACKEND, f"{infra} (prod)")
+
+    # feedback_no_dev_pointed_to_prod_api.md:22 -- 「read-only 不是 read-only」:
+    # 任何頁面瀏覽都會帶 pageview / analytics 等 client-side write 進 prod。
+    for word in words:
+        m = _ASSIGNED_URL_RE.match(word)
+        if m and not any(marker in m.group(1).lower() for marker in _NON_PROD_URL_MARKERS):
+            add(RULE_NO_DEV_TO_PROD_API, word)
+            break
+
+    return hits
+
+
+# --- H4: over the agreed spend ceiling --------------------------------------
+
+
+def _hard_stop_over_budget(budget_state: dict[str, Any]) -> list[HardStopHit]:
+    """H4 is the only category whose inputs this file cannot observe.
+
+    plan_runner.py has no token meter -- §10's per-step estimates live in the
+    plan prose, and actual consumption is known only to whoever dispatched the
+    agent. So the caller supplies both numbers, and the contract is:
+
+    * no estimate supplied -> no ceiling was agreed -> nothing to exceed, no
+      hit. "超過約定花費上限" presupposes an 約定; inventing one here would
+      make H4 fire on every step of every plan and the mechanism would be
+      switched off wholesale, which is worse than not having it.
+    * estimate supplied but actual missing -> a ceiling exists and we cannot
+      certify we are under it -> hit. This is the ambiguity-stops-us rule; it
+      also means a caller cannot buy a pass by omitting the measurement.
+    * actual over the ratio -> hit.
+
+    Residual, called out for S4.3: a caller that supplies nothing gets no H4
+    coverage. Wiring real per-step accounting is S4.3's job, not this step's.
+    """
+    hits: list[HardStopHit] = []
+    for est_key, act_key, ratio, label in (
+        ("step_estimated_tokens", "step_actual_tokens", HARD_STOP_STEP_BUDGET_RATIO, "step"),
+        ("phase_estimated_tokens", "phase_actual_tokens", HARD_STOP_PHASE_BUDGET_RATIO, "phase"),
+    ):
+        estimate = budget_state.get(est_key)
+        if not isinstance(estimate, (int, float)) or estimate <= 0:
+            continue
+        ceiling = estimate * ratio
+        actual = budget_state.get(act_key)
+        if not isinstance(actual, (int, float)):
+            hits.append(HardStopHit(
+                HARD_STOP_OVER_BUDGET, RULE_TOKEN_DISCIPLINE,
+                f"{label} ceiling {ceiling:.0f} declared, actual unmeasured",
+            ))
+        elif actual > ceiling:
+            hits.append(HardStopHit(
+                HARD_STOP_OVER_BUDGET, RULE_TOKEN_DISCIPLINE,
+                f"{label} {actual:.0f} > {ratio}× {estimate:.0f}",
+            ))
+    return hits
+
+
+def hard_stop_findings(
+    action_text: Any, step: Any, budget_state: Any
+) -> list[HardStopHit]:
+    """Every reason this work must stop for its owner, with provenance.
+
+    Pure: reads its three arguments, touches no file, no clock and no state.
+
+    ALL matching categories are returned, not the first. Any hit already means
+    "stop", so first-match-wins would behave identically -- but S4.3 records a
+    per-question `Hard-stop check: H1 .. H4` line, and a force-push reported as
+    "H2 yes / H3 no" would put a false statement into the audit record. The
+    record is the point of the mechanism, so accuracy of the *set* matters.
+
+    `action_text` is scanned in full, deliberately un-truncated:
+    PLAN_ACTION_TRUNCATE_CHARS bounds what the hook renders, and letting it
+    bound what the guard reads would make "put the rm past character 600" a
+    one-line bypass.
+
+    Unreadable input hits all four. Ambiguity resolves toward stopping in
+    every branch below; an input we cannot parse is maximum ambiguity, and
+    "we could not clear any of the four" is the honest thing to record.
+    """
+    if (
+        not isinstance(action_text, str)
+        or not isinstance(step, dict)
+        or not isinstance(budget_state, (dict, type(None)))
+    ):
+        return [
+            HardStopHit(cat, RULE_OUTWARD_CHANNEL, "unreadable input; nothing could be cleared")
+            for cat in HARD_STOP_CATEGORIES
+        ]
+
+    text_parts = [action_text]
+    for key in ("title", "files", "command"):
+        value = step.get(key)
+        if isinstance(value, str) and value:
+            text_parts.append(value)
+    text = "\n".join(text_parts)
+
+    hits = _hard_stop_owner_only(text, step)
+    for words in _command_segments(text):
+        hits.extend(_hard_stop_irreversible(words))
+        hits.extend(_hard_stop_outward_channel(words))
+    hits.extend(_hard_stop_over_budget(budget_state or {}))
+
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[HardStopHit] = []
+    for hit in hits:
+        key = (hit.category, hit.rule, hit.evidence)
+        if key not in seen:
+            seen.add(key)
+            unique.append(hit)
+    return unique
+
+
+def hard_stop_check(action_text: Any, step: Any, budget_state: Any) -> list[str]:
+    """The category IDs hit, sorted and deduplicated. Empty == may proceed.
+
+    Thin projection of hard_stop_findings(); use that when you need the rule
+    provenance (S4.3's `Auto-answered:` entries do).
+    """
+    return sorted({hit.category for hit in hard_stop_findings(action_text, step, budget_state)})
+
+
+def format_hard_stop_check_line(categories: list[str]) -> str:
+    """The `Hard-stop check: H1 no / H2 no / H3 no / H4 no` line. All four
+    always appear: an omitted category reads as "not considered", and the
+    whole value of a reverse whitelist is that every category was considered."""
+    hit = set(categories)
+    return "Hard-stop check: " + " / ".join(
+        f"{cat} {'yes' if cat in hit else 'no'}" for cat in HARD_STOP_CATEGORIES
     )
 
 
@@ -1635,9 +2706,17 @@ _FENCE_LOOKALIKE_CHAR = "‑"  # non-breaking hyphen: reads like '-', matches no
 
 HOOK_REASON_KINDS = ("next_step", "report_result", "settle_background", "completion")
 
-_CHECKPOINT_NOTE = (
-    "這是本段最後一步；做完請輸出進度摘要（已完成 N/M、本 phase 狀態、下一步、剩餘步數）"
-    "後結束回合，不要再繼續"
+# S3.1 checkpoint content contract. Kept in sync with the same four-element
+# template documented in plan-run/SKILL.md ("Checkpoint 內容契約") -- change
+# one, change the other. The labels are the borrowed-from-AgentFlow WIP
+# checkpoint fields (agentflow/skills/agentflow/SKILL.md:62); the
+# self-sufficiency and no-secrets rules are this plan's own T4/self-
+# sufficiency requirements, not part of that borrowed text.
+_CHECKPOINT_ELEMENT_LABELS = (
+    "Finished:",
+    "Running now:",
+    "Still to do:",
+    "Next work action:",
 )
 
 # Matches ANSI CSI sequences (colors, cursor movement, etc.), e.g. \x1b[31m.
@@ -1767,6 +2846,24 @@ def _quote_plan_path(raw: Any) -> str:
     return shlex.quote(text)
 
 
+def _checkpoint_path_display(raw: Any) -> str:
+    """Render the checkpoint file's absolute path for a hook reason (S3.1).
+
+    `raw` is the same hook-owned pointer field `_quote_plan_path()` reads, so
+    it gets the same byte-stripping and single-line folding. The result is
+    plain informational text the model reads and writes to, not a shell
+    argument, so it is not shlex.quote()d. When no usable plan path is
+    available (e.g. a direct render_hook_reason() call in a test), this
+    falls back to a placeholder that still names the right directory shape
+    rather than raising or silently omitting the instruction.
+    """
+    text = _sanitize_plan_text(raw, PLAN_PATH_TRUNCATE_CHARS, collapse_newlines=True)
+    text = text.split("\n", 1)[0].strip()
+    if not text:
+        return "<plan 所在目錄>/.plan-state/<slug>.checkpoint.md"
+    return str(checkpoint_path_for(Path(text)))
+
+
 def _sanitize_plan_title(raw: Any, fallback: str = "") -> str:
     """Sanitize a step or plan title."""
     return _sanitize_plan_text(
@@ -1844,6 +2941,33 @@ def _other_ready_steps_line(state: dict[str, Any], step_id: str) -> str | None:
     return f"Also ready: {', '.join(ready)} (one step per turn — hook will assign next turn)"
 
 
+def _render_checkpoint_note(plan_path: Any) -> str:
+    """The checkpoint instruction appended when `checkpoint_pending` is True.
+
+    Must be an unambiguous *write this file* instruction, not "summarize in
+    the reply" -- a chat-turn summary is lost the moment the transcript is
+    compacted, which is the exact failure this exists to prevent. The path
+    printed here is the real absolute path (via checkpoint_path_for(), the
+    same derivation state_path_for() uses) so the model does not have to
+    guess a cwd-relative location.
+    """
+    path_text = _checkpoint_path_display(plan_path)
+    element_lines = "\n".join(f"  {label} <...>" for label in _CHECKPOINT_ELEMENT_LABELS)
+    return (
+        "這是本段最後一步；停下前把進度寫進 checkpoint 檔——不是在回合裡輸出摘要，"
+        "是實際寫入這個檔案：\n"
+        f"  {path_text}\n"
+        "四要件缺一不可：\n"
+        f"{element_lines}\n"
+        "自足性規則：這份 checkpoint 不得要求讀者回頭讀 plan.md、state.json 或"
+        "前一則 checkpoint 才看得懂——一個完全沒有本次 context 的人，只讀這一份檔案，"
+        "就要能回答「下一步該做什麼」。\n"
+        "內容安全規則：禁止貼 log 原文，禁止任何 token / key / password / JWT——"
+        "這份檔案留在磁碟上、會被下一個 session 與驗收者讀到，寫進去就收不回來。\n"
+        "寫完 checkpoint 後結束回合，不要再繼續。"
+    )
+
+
 def _render_next_step(
     state: dict[str, Any],
     step_id: str,
@@ -1864,7 +2988,7 @@ def _render_next_step(
     lines.append(_budget_hint_line(budget_info))
     if budget_info.checkpoint_pending:
         lines.append("")
-        lines.append(_CHECKPOINT_NOTE)
+        lines.append(_render_checkpoint_note(plan_path))
     return "\n".join(lines)
 
 
@@ -2289,6 +3413,67 @@ def _reset_turn_counters(ctx: _HookContext) -> None:
         ctx.update(**fields)
 
 
+def _record_advance_if_progressed(ctx: _HookContext) -> None:
+    """`last_advance_at`'s only writer (S3.4).
+
+    Without this, `last_advance_at` was schema-only: `new_pointer_record()`
+    set it to None and nothing else in the file ever wrote to it, so
+    `_is_pointer_stale()` and decide_budget()'s wall-clock rule always fell
+    back to `created_at` -- which never moves -- and could not tell an
+    actively-driven pointer from an abandoned one once either got old
+    enough. Measured against real pointers: any pointer older than
+    CHECKPOINT_STALE_SECONDS got `checkpoint_pending=True` on effectively
+    every block, not the ~5% the S1.1 calibration was designed around.
+
+    Deliberately NOT placed in `_record_assignment()` or at
+    `_branch_ready_step()`'s call site, even though both look like "the
+    advance point" at first read. Both fire on *handing out* a ready
+    step -- which happens again on every block the step is still not
+    done (see the assign-repeat-count machinery right next to them). A
+    step can be assigned five times in a row with zero work done; writing
+    a timestamp there would make "we handed out work" indistinguishable
+    from "work got done", which is the exact ambiguity this field exists
+    to resolve, not reproduce.
+
+    The only unambiguous evidence of progress is state.json's own
+    completed+skipped count moving: nothing but `complete`/`skip` (run
+    directly by the model, never by this hook) can move it. So this reads
+    that count fresh, off `ctx.state` (loaded from disk by the caller for
+    *this* invocation), and compares it against `last_seen_completed_count`
+    -- a baseline persisted on the pointer across turns, unlike
+    `turn_start_completed` (which `_reset_turn_counters()` above rebases
+    every fresh user turn and exists for a different question, "what did
+    *this turn* achieve"). Persisting it separately means a completion
+    recorded in turn N is still "seen" in turn N+1 and is never
+    double-counted as fresh progress just because a new turn started.
+
+    Runs unconditionally, every invocation, before the branch chain --
+    not gated on the turn boundary above, because progress can happen
+    mid-run: block -> model completes a step -> hook fires again before
+    the human's next turn. Gating this on `_reset_turn_counters()` would
+    miss exactly that within-run progress.
+
+    No evidence (state too malformed to count) leaves both fields alone.
+    A regression (current < previous -- not something normal operation
+    causes, but not impossible under manual state surgery) is not treated
+    as progress either, but the stored count still resyncs to the true
+    current value so a later real increase is measured against it rather
+    than a stale high-water mark.
+    """
+    current = _hook_completed_count(ctx.state)
+    if current is None:
+        return
+    previous = ctx.pointer.get("last_seen_completed_count")
+    if isinstance(previous, bool) or not isinstance(previous, int):
+        previous = None
+    if previous is not None and current == previous:
+        return
+    if previous is None or current > previous:
+        ctx.update(last_advance_at=now_iso(), last_seen_completed_count=current)
+    else:
+        ctx.update(last_seen_completed_count=current)
+
+
 def _branch_paused(ctx: _HookContext) -> HookDecision | None:
     """(2) Explicitly paused by the user — stay out of the way entirely."""
     if ctx.pointer.get("paused"):
@@ -2516,7 +3701,9 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
     if not ready:
         return None
     step_id = ready[0]
-    budget = decide_budget(ctx.pointer, ctx.state, step_id)
+    # time.time() is supplied here, not read inside decide_budget(), so the
+    # budget decision stays a pure function of its arguments (S3.2 / R1).
+    budget = decide_budget(ctx.pointer, ctx.state, step_id, now=time.time())
     if budget.decision != HOOK_BLOCK:
         return _hook_allow(ctx, system_message=_budget_exhausted_message(ctx, budget, step_id))
     repeats = _record_assignment(ctx, step_id)
@@ -2564,6 +3751,8 @@ def decide_hook_action(
     pointer: dict[str, Any] | None,
     state: dict[str, Any] | None,
     mtime_lookup: Callable[[str], float | None] = _default_mtime_lookup,
+    *,
+    stop_marker_text: str | None = None,
 ) -> HookDecision:
     """Decide block/allow for one Stop hook invocation. Pure — no I/O.
 
@@ -2571,6 +3760,12 @@ def decide_hook_action(
     arbitration (4) can handle its case and still fall through. The caller
     persists `pointer_updates`, honours `delete_pointer`, and prints
     nothing at all when `silent` is set.
+
+    `stop_marker_text` is the I/O layer's best-effort read of the plan's
+    `.plan-state/<slug>.stop.md` (S2.2) -- None when absent/unreadable,
+    the file's full text otherwise. Reading it is disk I/O, so it happens
+    in `_decide_and_persist()`, not here; this function only ever asks
+    "is this None or not" (T6), never a word of the content.
     """
     if not isinstance(hook_input, dict):
         hook_input = {}
@@ -2578,9 +3773,17 @@ def decide_hook_action(
         return HookDecision(decision=HOOK_ALLOW)
     if not isinstance(pointer, dict):                        # (1) not our cwd
         return HookDecision(decision=HOOK_ALLOW, silent=True)
+    if stop_marker_text is not None:               # (1.5) safe-halt marker (S2.2)
+        # Ahead of every other branch -- including the malformed-pointer
+        # warning and lease arbitration -- because a stop marker means a
+        # human already needs to look at this; it must not queue behind
+        # unrelated hook chatter. No pointer write: the point of a safe
+        # halt is that nothing keeps mutating state while it stands.
+        return HookDecision(decision=HOOK_ALLOW, system_message=stop_marker_text)
 
     ctx = _HookContext(hook_input, pointer, state, mtime_lookup)
     _reset_turn_counters(ctx)
+    _record_advance_if_progressed(ctx)
     for branch in _HOOK_BRANCHES:
         decision = branch(ctx)
         if decision is not None:
@@ -2649,6 +3852,24 @@ def _load_hook_state(pointer_data: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+def _load_hook_stop_marker(pointer_data: dict[str, Any]) -> str | None:
+    """Best-effort read of the plan's stop marker for the hook's I/O layer
+    (S2.2), mirroring _load_hook_state()'s shape exactly — same field, same
+    allowed-root gate, same "any failure means None" contract. `None` here
+    reads to decide_hook_action() as "no marker", identical to "absent".
+    """
+    plan_path_raw = pointer_data.get("plan_path")
+    if not isinstance(plan_path_raw, str) or not plan_path_raw:
+        return None
+    plan_path = Path(plan_path_raw)
+    try:
+        if not _is_within_allowed_root(plan_path):
+            return None
+        return _read_stop_marker(plan_path)
+    except OSError:
+        return None
+
+
 def _hook_output_payload(decision: HookDecision) -> dict[str, Any] | None:
     """Map a HookDecision to the JSON dict to print, or None to print
     nothing at all. Output shape is centralized here so the wire format
@@ -2709,7 +3930,8 @@ def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDeci
     resolved = resolve_pointer_for_hook(cwd) if cwd else None
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
-    decision = decide_hook_action(hook_input, pointer, state)
+    stop_marker_text = _load_hook_stop_marker(resolved.data) if resolved is not None else None
+    decision = decide_hook_action(hook_input, pointer, state, stop_marker_text=stop_marker_text)
     _apply_hook_side_effects(decision, resolved)
     return decision
 
@@ -2876,6 +4098,7 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
         "parent_task_id": state.get("parent_task_id"),
         "ready_steps_new": [step_to_instruction(state, sid) for sid in newly],
         "ready_steps_still": still,  # IDs only — Claude already saw these
+        "large_work_warnings": _large_work_warnings(state, newly),
         "in_progress_steps": [
             {
                 "id": sid,
@@ -2900,8 +4123,70 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
 
 def cmd_next(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
+
+    stop_text = _read_stop_marker(plan_path)
+    if stop_text is not None:
+        # S2.2: the safe-halt marker wins over everything else this
+        # function would otherwise compute -- including drift (S2.1),
+        # and before even requiring a state file to exist. Both a stop
+        # marker and drift can be true at once (the plan changed while a
+        # human was mid-investigation of the failure that triggered the
+        # halt); drift's own remediation line is `rm <state> && init`,
+        # which is exactly the wrong reflex to hand someone while they are
+        # actively reviewing that same state. So: print the marker, do
+        # nothing else, unconditionally.
+        if args.format == "json":
+            emit({
+                "stopped": True,
+                "stop_marker_path": str(stop_marker_path_for(plan_path)),
+                "stop_marker": stop_text,
+            })
+        else:
+            print(stop_text, end="" if stop_text.endswith("\n") else "\n")
+        return 0
+
     state = _require_state(plan_path)
+
+    drift = check_plan_drift(plan_path, state)
+    ignore = bool(getattr(args, "ignore_drift", False))
+    blocked = drift.blocks and not ignore
+    if drift.status != DRIFT_OK and args.format != "json":
+        print(format_drift_banner(plan_path, drift, blocked=blocked))
+        print()
+    if blocked:
+        # Refuse to hand out work, and do NOT touch the state: an aborted
+        # `next` must not consume the previously_reported_ready delta, or
+        # the step would silently vanish from the next successful call.
+        if args.format == "json":
+            emit({
+                "error": "plan drift detected",
+                "plan_drift": drift._asdict(),
+                "hint": format_drift_banner(plan_path, drift, blocked=True),
+            })
+        return 2
+
     payload = _build_state_view(state, mode="full")
+    if drift.status != DRIFT_OK:
+        payload["plan_drift"] = drift._asdict()
+
+    # S4.2: report the effective auto-reply setting -- but only when the
+    # stored value is the opt-in "on". Every one of the ~187 in-flight states
+    # S1.2 inventoried reads as "off", and adding an unconditional line/key
+    # would change `next` output for all of them.
+    stored_auto_reply = auto_reply_setting(state)
+    if stored_auto_reply == AUTO_REPLY_ON:
+        effective = resolve_auto_reply(
+            state, no_auto_reply=bool(getattr(args, "no_auto_reply", False))
+        )
+        payload["auto_reply"] = effective
+        if args.format != "json":
+            suffix = (
+                "（四類硬停止仍生效）" if effective == AUTO_REPLY_ON
+                else "（本次 --no-auto-reply 覆蓋 state 的 on，未寫回）"
+            )
+            print(f"AUTO-REPLY: {effective}{suffix}")
+            print()
+
     save_state(plan_path, state)  # persist previously_reported_ready update
     emit_formatted(payload, args.format, format_next_md)
     return 0
@@ -3018,8 +4303,171 @@ def cmd_fail(args: argparse.Namespace) -> int:
     task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
+    # S2.2 Addendum: pure side effect on disk, no payload/format change --
+    # see _write_stop_marker_on_fail()'s docstring for why this exists.
+    _write_stop_marker_on_fail(plan_path, state, args.reason or "")
     payload = {"status": "failed", "step": sid, "task_id": task_id, "reason": args.reason, **view}
     emit_formatted(payload, args.format, lambda d: format_transition_md("failed", d))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Safe-halt marker (S2.2) — plan_runner.py stop
+# ---------------------------------------------------------------------------
+
+def _git_head_info(cwd: Path) -> tuple[str, str, bool | None]:
+    """Best-effort (sha, branch, dirty) of the repo containing `cwd`, for
+    the stop marker's "Git HEAD" line. Mirrors _detect_repo_root()'s
+    failure handling: not a git repo, git missing, or a timeout all yield
+    "unknown" rather than raising -- writing a stop marker is already a
+    degraded moment, so a broken git environment must not be the reason
+    it fails outright.
+    """
+    def run(*args: str) -> str | None:
+        try:
+            proc = subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=GIT_SUBPROCESS_TIMEOUT_SECONDS,
+                shell=False,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return None
+        if proc.returncode != 0:
+            return None
+        return proc.stdout.strip()
+
+    sha = run("rev-parse", "HEAD") or "unknown"
+    branch = run("rev-parse", "--abbrev-ref", "HEAD") or "unknown"
+    status = run("status", "--porcelain")
+    dirty: bool | None = None if status is None else bool(status)
+    return sha, branch, dirty
+
+
+def _stop_marker_failing_step(state: dict[str, Any]) -> tuple[str, str] | None:
+    """Which step to name in the stop marker's "Failing step" line: the
+    first FAILED step in plan order, else the first IN_PROGRESS one (a
+    human may be about to `fail` it), else None -- a manual halt need not
+    be tied to any one step.
+    """
+    steps = state.get("steps") if isinstance(state, dict) else None
+    if not isinstance(steps, dict):
+        return None
+    for wanted in (FAILED, IN_PROGRESS):
+        for sid, step in steps.items():
+            if isinstance(step, dict) and step.get("status") == wanted:
+                return sid, step.get("title", "")
+    return None
+
+
+def render_stop_marker(plan_path: Path, state: dict[str, Any], reason: str) -> str:
+    """Render the Markdown body of `.plan-state/<slug>.stop.md` (plan
+    section 2.2). Human-facing, not machine-parsed -- `next` and the Stop
+    hook only ever check whether this file *exists* (T6); nothing here is
+    read back as a directive.
+
+    `reason` is operator-supplied free text (the `--reason` CLI argument),
+    sanitized the same way plan-authored fields are before being embedded
+    -- collapsed to one line, byte-stripped, length-capped -- because this
+    file is printed verbatim into a Stop hook systemMessage an LLM reads.
+    """
+    slug = _sanitize_plan_field(state.get("slug")) or plan_path.stem
+    failing = _stop_marker_failing_step(state)
+    if failing is not None:
+        sid, title = failing
+        safe_sid = _sanitize_step_id(sid)
+        failing_text = f"{safe_sid} — {_sanitize_plan_title(title, safe_sid)}"
+    else:
+        failing_text = "N/A"
+    sha, branch, dirty = _git_head_info(plan_path.parent)
+    dirty_text = "unknown" if dirty is None else ("yes" if dirty else "no")
+    reason_text = _sanitize_plan_field(reason) or "(no reason given)"
+    runner = _runner_invocation(str(plan_path))
+    plan_arg = _quote_plan_path(str(plan_path))
+    suggested = f"{runner} status {plan_arg}"
+    if failing is not None:
+        suggested += f"  # 檢視 {_sanitize_step_id(failing[0])}，決定 retry (start) 或 skip"
+    return (
+        f"# STOP — {slug}\n"
+        f"- Stopped at: {now_iso()}\n"
+        f"- Failing step: {failing_text}\n"
+        f"- Git HEAD: {sha} ({branch}, dirty: {dirty_text})\n"
+        f"- Reason: {reason_text}\n"
+        f"- Suggested next: {suggested}\n"
+    )
+
+
+def _write_stop_marker_on_fail(plan_path: Path, state: dict[str, Any], reason: str) -> bool:
+    """`fail`'s automatic safe-halt marker (S2.2 Addendum to plan section
+    2.2). The original spec only wired the marker to the manual `stop
+    --write` subcommand; the addendum exists because nobody is watching an
+    unattended run at 3am to invoke it by hand -- a step failing with no
+    marker left behind means the very next turn resumes on a broken
+    premise, exactly what this whole mechanism exists to prevent (N3).
+
+    Never overwrites an existing marker: the first failure's evidence
+    (git HEAD, timestamp, reason) is what a human needs to review, and a
+    second failure piling on top of an unreviewed halt must not erase it.
+
+    Best-effort and silent on I/O failure -- the `fail` transition itself
+    (already committed to state by the caller) must never be undone or
+    reported as failed just because a marker could not be written.
+    Returns whether a marker was newly written.
+    """
+    marker_path = stop_marker_path_for(plan_path)
+    if marker_path.exists():
+        return False
+    try:
+        text = render_stop_marker(plan_path, state, reason or "(no reason given)")
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(text, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+_STOP_SAFETY_REMINDER = (
+    "內容安全規則：Reason 欄位禁止貼 log 原文，禁止任何 token / key / password / JWT——"
+    "這份檔案會進版控，寫進去就收不回來。"
+)
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    """`stop` subcommand: write or clear the safe-halt marker (S2.2).
+
+    Two independent, deliberately manual actions -- neither is triggered
+    automatically by `fail` (a failed step is its own human-in-the-loop
+    gate, see _branch_failed_step()'s docstring; not every failure should
+    unattended-halt every future turn, so this is an explicit opt-in).
+    """
+    plan_path = Path(args.plan).resolve()
+    marker_path = stop_marker_path_for(plan_path)
+    if args.write:
+        reason = (args.reason or "").strip()
+        if not reason:
+            emit({"error": "--write requires --reason"})
+            return 1
+        state = load_state(plan_path) or {}
+        text = render_stop_marker(plan_path, state, reason)
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(text, encoding="utf-8")
+        print(f"已寫入安全停機標記：{marker_path}")
+        print()
+        print(text, end="")
+        print(_STOP_SAFETY_REMINDER)
+        return 0
+    # --clear (argparse's mutually-exclusive group guarantees exactly one
+    # of --write/--clear is set).
+    if not args.reason_reviewed:
+        emit({"error": "--clear requires --reason-reviewed (avoids an accidental clear)"})
+        return 1
+    if not marker_path.exists():
+        print(f"未發現安全停機標記，無需清除：{marker_path}")
+        return 0
+    marker_path.unlink()
+    print(f"已清除安全停機標記：{marker_path}")
     return 0
 
 
@@ -3046,6 +4494,10 @@ def cmd_skip(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
+    drift = check_plan_drift(plan_path, state)
+    if drift.status != DRIFT_OK and args.format != "json":
+        print(format_drift_banner(plan_path, drift, blocked=False))
+        print()
     payload = {
         "slug": state["slug"],
         "title": state["title"],
@@ -3064,7 +4516,147 @@ def cmd_status(args: argparse.Namespace) -> int:
             for sid, s in state["steps"].items()
         ],
     }
+    if drift.status != DRIFT_OK:
+        payload["plan_drift"] = drift._asdict()
     emit_formatted(payload, args.format, format_status_md)
+    return 0
+
+
+def cmd_recap(args: argparse.Namespace) -> int:
+    """Single-command recovery entrypoint (S3.3): "what happened while I
+    was away, and what do I do next." Without this, that answer needs four
+    separate commands (status / open checkpoint.md / check stop.md / check
+    pointer) -- which in practice nobody runs, so nobody notices what they
+    missed.
+
+    T6, load-bearing: this command PRINTS. It never writes state.json,
+    checkpoint.md, stop.md, or the pointer file, and it never parses
+    checkpoint.md or stop.md content to decide anything -- both are prose
+    written for a human to read, not a program to interpret. Do not add a
+    "read stop.md's Suggested next and run it" feature here or anywhere
+    else; that is exactly the automation this docstring exists to block.
+
+    Output order, fixed:
+      1. stop.md, verbatim, alone -- if present, nothing else is printed.
+         Same precedence as cmd_next(): drift's own remediation
+         (`rm state && init`) is the wrong reflex to hand someone who is
+         mid-investigation of why the plan halted.
+      2. drift status (one line when clean; the full banner when not).
+      3. checkpoint.md, bounded (see _bounded_checkpoint_lines()) -- the
+         section is omitted entirely when no checkpoint exists yet, rather
+         than printing a placeholder "(none)" line.
+      4. the next ready step, with a dispatch command built against the
+         real plan path (unlike `next`/`status`, no `<plan>` placeholder).
+      5. the cwd's pointer -- last_advance_at (or created_at fallback) and
+         elapsed time, or a plain "no active pointer" line.
+    """
+    plan_path = Path(args.plan).resolve()
+
+    stop_text = _read_stop_marker(plan_path)
+    if stop_text is not None:
+        if args.format == "json":
+            emit({
+                "stopped": True,
+                "stop_marker_path": str(stop_marker_path_for(plan_path)),
+                "stop_marker": stop_text,
+            })
+        else:
+            print(stop_text, end="" if stop_text.endswith("\n") else "\n")
+        return 0
+
+    state = _require_state(plan_path)
+    drift = check_plan_drift(plan_path, state)
+
+    try:
+        checkpoint_text = checkpoint_path_for(plan_path).read_text(encoding="utf-8")
+    except OSError:
+        checkpoint_text = None
+
+    # mode="full" + no save_state(): recomputes the ready set for display
+    # without persisting previously_reported_ready (print-only, T6).
+    view = _build_state_view(state, mode="full")
+    next_step = view["ready_steps_new"][0] if view["ready_steps_new"] else None
+
+    # cwd-keyed, same lookup cmd_pointer() uses; require_valid=False so a
+    # present-but-malformed pointer is still surfaced (recap is a
+    # diagnostic view, not a gate) rather than silently reported as absent.
+    resolved = resolve_pointer_for_hook(Path.cwd())
+    pointer_data = resolved.data if resolved else None
+
+    if args.format == "json":
+        payload: dict[str, Any] = {
+            "stopped": False,
+            "plan_drift": drift._asdict(),
+            "checkpoint_path": str(checkpoint_path_for(plan_path)),
+            "checkpoint_text": checkpoint_text,
+            "summary": view["summary"],
+            "next_step": next_step,
+            "pointer": None,
+        }
+        if pointer_data is not None:
+            ts = _pointer_progress_timestamp(pointer_data)
+            payload["pointer"] = {
+                "path": str(resolved.path),
+                "plan_path": pointer_data.get("plan_path"),
+                "last_advance_at": pointer_data.get("last_advance_at"),
+                "created_at": pointer_data.get("created_at"),
+                "elapsed_seconds": (
+                    (datetime.now(timezone.utc) - ts).total_seconds() if ts else None
+                ),
+            }
+        emit(payload)
+        return 0
+
+    lines = [f"# Recap: {state.get('title') or state.get('slug', '')}"]
+    s = view["summary"]
+    lines.append(f"Progress: {s['progress']}" + (" — ALL DONE" if s["all_done"] else ""))
+
+    lines.append("")
+    lines.append(f"## Drift: {drift.status}")
+    if drift.status != DRIFT_OK:
+        lines.append(format_drift_banner(plan_path, drift, blocked=False))
+
+    if checkpoint_text is not None:
+        lines.append("")
+        lines.append(f"## Checkpoint ({checkpoint_path_for(plan_path)})")
+        lines.extend(_bounded_checkpoint_lines(checkpoint_text))
+
+    lines.append("")
+    lines.append("## Next")
+    if next_step is not None:
+        lines.extend(_format_recap_next_step(next_step, plan_path))
+    elif s["all_done"]:
+        lines.append("(plan 全部完成，無下一步)")
+    else:
+        in_progress = view.get("in_progress_steps") or []
+        if in_progress:
+            ids = ", ".join(s_["id"] for s_ in in_progress)
+            lines.append(f"(無新解鎖步驟；仍有進行中步驟：{ids})")
+        else:
+            lines.append("(目前無 ready 步驟——檢查是否卡在 blocked 或全數 failed)")
+
+    lines.append("")
+    lines.append("## Pointer")
+    if pointer_data is None:
+        lines.append("此 cwd 無 active pointer。")
+    else:
+        ts = _pointer_progress_timestamp(pointer_data)
+        field = "last_advance_at" if pointer_data.get("last_advance_at") else "created_at"
+        if ts is None:
+            lines.append("pointer 時間戳記無法解析。")
+        else:
+            elapsed = (datetime.now(timezone.utc) - ts).total_seconds()
+            lines.append(f"{field}: {ts.isoformat()}（{_format_elapsed_seconds(elapsed)}）")
+        pointer_plan = pointer_data.get("plan_path")
+        if isinstance(pointer_plan, str) and pointer_plan:
+            try:
+                same_plan = Path(pointer_plan).resolve() == plan_path
+            except OSError:
+                same_plan = True  # unresolvable path -- don't warn on a guess
+            if not same_plan:
+                lines.append(f"注意：此 cwd 的 pointer 目前指向另一份 plan（{pointer_plan}）")
+
+    print("\n".join(lines))
     return 0
 
 
@@ -3188,6 +4780,67 @@ def cmd_dag(args: argparse.Namespace) -> int:
                 print(f"  {icon} {sid}: {s['title']}{deps}")
         print()
         print(f"Progress: {summary(state)['progress']}")
+    return 0
+
+
+def cmd_hard_stop(args: argparse.Namespace) -> int:
+    """Answer "may this step be settled without waking the owner?" -- and
+    only answer it.
+
+    Read-only by construction: no state write, no auto-answering, no
+    `Auto-answered:` entry (that is S4.3, and until it exists nothing in this
+    file may settle anything on its own). Exists so the judgment is
+    inspectable by a human, by tests and by S5.2's acceptance run without
+    importing the module.
+    """
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+
+    step = state["steps"].get(args.step)
+    if step is None:
+        emit({"error": f"unknown step: {args.step}"})
+        return 1
+
+    budget_state = {
+        key: getattr(args, key)
+        for key in (
+            "step_estimated_tokens", "step_actual_tokens",
+            "phase_estimated_tokens", "phase_actual_tokens",
+        )
+        if getattr(args, key, None) is not None
+    }
+    findings = hard_stop_findings(step.get("action") or "", step, budget_state)
+    categories = sorted({f.category for f in findings})
+    auto_reply = resolve_auto_reply(
+        state, no_auto_reply=bool(getattr(args, "no_auto_reply", False))
+    )
+
+    if args.format == "json":
+        emit({
+            "step": args.step,
+            "auto_reply": auto_reply,
+            "hard_stop": categories,
+            "clear": not categories,
+            "findings": [f._asdict() for f in findings],
+        })
+        return 0
+
+    print(f"HARD-STOP: {args.step} — {_sanitize_plan_title(step.get('title'), args.step)}")
+    print(f"Auto-reply: {auto_reply}")
+    print(format_hard_stop_check_line(categories))
+    print()
+    if not categories:
+        print("Verdict: CLEAR — 四類皆未命中（例行預設可自動決定，留痕規則見 S4.3）")
+        return 0
+    for category in categories:
+        print(f"- {category} {HARD_STOP_LABELS[category]}")
+        for finding in findings:
+            if finding.category != category:
+                continue
+            print(f"    rule: {finding.rule}")
+            print(f"    matched: {_sanitize_plan_field(finding.evidence)}")
+    print()
+    print(f"Verdict: STOP — 需人工裁決（命中 {', '.join(categories)}）")
     return 0
 
 
@@ -3601,9 +5254,18 @@ def main() -> None:
 
     p_next = sub.add_parser("next", help="Show ready steps")
     p_next.add_argument("plan")
+    p_next.add_argument(
+        "--no-auto-reply",
+        action="store_true",
+        help="Disable auto-reply for this call only; never written back to state",
+    )
+    p_next.add_argument(
+        "--ignore-drift",
+        action="store_true",
+        help="Hand out steps even though plan.md no longer matches the state snapshot",
+    )
     add_format_flag(p_next)
     p_next.set_defaults(func=cmd_next)
-
     p_start = sub.add_parser("start", help="Mark step in_progress")
     p_start.add_argument("plan")
     p_start.add_argument("step")
@@ -3631,15 +5293,61 @@ def main() -> None:
     add_format_flag(p_skip)
     p_skip.set_defaults(func=cmd_skip)
 
+    p_stop = sub.add_parser(
+        "stop", help="Write or clear the unattended safe-halt marker (S2.2)",
+    )
+    p_stop.add_argument("plan")
+    p_stop_mode = p_stop.add_mutually_exclusive_group(required=True)
+    p_stop_mode.add_argument(
+        "--write", action="store_true",
+        help="Write .plan-state/<slug>.stop.md and halt unattended advance",
+    )
+    p_stop_mode.add_argument(
+        "--clear", action="store_true",
+        help="Remove the stop marker (requires --reason-reviewed)",
+    )
+    p_stop.add_argument(
+        "--reason", default=None,
+        help="Required with --write. No log excerpts, no tokens/keys/passwords/JWTs.",
+    )
+    p_stop.add_argument(
+        "--reason-reviewed", action="store_true",
+        help="Required with --clear, to prevent an accidental clear",
+    )
+    p_stop.set_defaults(func=cmd_stop)
+
     p_status = sub.add_parser("status", help="Show all steps and statuses")
     p_status.add_argument("plan")
     add_format_flag(p_status)
     p_status.set_defaults(func=cmd_status)
 
+    p_hard_stop = sub.add_parser(
+        "hard-stop",
+        help="Report which of the four hard-stop categories a step hits",
+    )
+    p_hard_stop.add_argument("plan")
+    p_hard_stop.add_argument("step")
+    p_hard_stop.add_argument("--no-auto-reply", action="store_true")
+    for _budget_flag in (
+        "--step-estimated-tokens", "--step-actual-tokens",
+        "--phase-estimated-tokens", "--phase-actual-tokens",
+    ):
+        p_hard_stop.add_argument(_budget_flag, type=int, default=None)
+    add_format_flag(p_hard_stop)
+    p_hard_stop.set_defaults(func=cmd_hard_stop)
+
     p_index = sub.add_parser("index", help="Ultra-compact ID+status trace view")
     p_index.add_argument("plan")
     add_format_flag(p_index)
     p_index.set_defaults(func=cmd_index)
+
+    p_recap = sub.add_parser(
+        "recap",
+        help="Single recovery entrypoint: stop marker / drift / checkpoint / next / pointer",
+    )
+    p_recap.add_argument("plan")
+    add_format_flag(p_recap)
+    p_recap.set_defaults(func=cmd_recap)
 
     p_reset = sub.add_parser("reset", help="Reset step(s) to pending")
     p_reset.add_argument("plan")

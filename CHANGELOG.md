@@ -27,6 +27,34 @@
 
   **順帶發現、本次未修**：`scripts/tests/` 的兩支既有 pytest（`test_plan_runner_regression.py`、`test_plan_run_hook.py`）**在整個 repo 的 CI 裡從未被執行過**——同一個失效類別。本次不順手掛上去，因為本機沒有 pytest、無法先驗證它們現在是綠的，盲目接線會引入不相關的失敗。留作獨立項。
 
+- **`plan_runner.py` 新增 plan.md 漂移偵測（S2.1）**：`init` 會把 plan.md 的 SHA-256 指紋寫進 state 的 `plan_sha256` 欄位，`status` / `next` 每次重算並比對。指紋算在**正規化後**的內容上，剝除三類非語意變動：checkbox 勾選狀態（`- [ ]` ↔ `- [x]`）、行尾空白、換行符與檔尾空行。其餘一切都算內容變更，包含 `> Status:` 這類標頭行——實測 216 份真實 plan 的歷史，那些行的每一次改寫都攜帶語意範圍資訊，正是本機制要浮上來的東西。正規化的量測依據與被排除的六個替代方案見 `.verification/2026-09-07/s2.1-normalization-design.md`。
+
+  刻意只認 `[ ]` 與 `[x]` 兩種標記：`parse_plan()` 的 `step_re` 只接受這兩種，所以 `- [x] S3` 改成 `- [~] S3` 對 parser 而言是「這一行不再是一個 step」——那是圖結構的真實變化，必須報 drift。
+
+  **安全邊界**：plan.md 與 state.json 皆為使用者可寫，能改一個就能改另一個。此機制防的是「改了 plan 卻忘了重 init」，**不是防惡意竄改**，不構成信任邊界。
+
+- **`plan_runner.py` 新增安全停機標記 `.plan-state/<slug>.stop.md`（S2.2）**：借鏡 AgentFlow `looper.js` 的 `.stop.txt`——不可續跑標記，需人工審過才清掉。新增 `plan_runner.py stop <plan> --write --reason <text>` 手動寫入（含 ISO8601、失敗 step、`git rev-parse HEAD` + branch + dirty 狀態、可執行的建議下一步），`stop <plan> --clear --reason-reviewed` 清除（旗標防手滑，缺旗標拒絕）。`next` 與 Stop hook 在做任何事之前先檢查此檔是否存在——存在即印出全文並自然收手（`next` return 0、印全文，Stop hook allow 不寫 pointer），不解析內容做任何決策（純存在性判斷，內容只給人看）。
+
+  **與漂移偵測（S2.1）的交互**：兩者可能同時成立（plan 在有人調查停機原因時被改動）。`stop.md` 完全優先——`next` 甚至不會走到 drift 檢查那一步。理由：drift 的補救指令是 `rm <state> && init`，這正是有人在調查停機原因時最不該被引導去做的事，可能銷掉他正在查的 state。
+
+  路徑推導沿用 `checkpoint_path_for()` 的 `plan_path.stem` 模式，不用 state 的 `slug` 欄位字串拼接——避免一個被竄改的 `slug`（state.json 使用者可寫）透過拼接跳出 `.plan-state/`。
+
+### Changed
+- **⚠️ Behavior change — 偵測到漂移時 `next` 預設拒絕派下一步**（exit code 2）。在此之前，plan.md 改了而 state 沒重建時，`plan_runner.py` 會**靜默沿用舊快照**繼續派工；無人值守推進時，這代表走錯的 plan 會一路推到底沒人發現。現在 `status` 與 `next` 會在輸出**最頂端**印 `DRIFT:` 警告，附 plan／state 路徑與修法（`rm <state> && plan_runner.py init <plan>`），而 `next` 會停下來。
+
+  - 逃生口：`plan_runner.py next <plan> --ignore-drift` 照舊派工，警告仍印。
+  - 被擋下的 `next` **不會寫 state**——中止的呼叫不可消耗 `previously_reported_ready` 的 delta，否則該 step 會從下一次成功呼叫中無聲消失。
+  - `status` 只警告，不 block。
+  - **既有 state 完全不受影響**：缺 `plan_sha256` 欄位一律放行，只印一行 hint，永不 block。實測全域 187 份既有 state（跨 11 個 repo 家族）**無一份含此欄位**，其中 138 份 plan.md 仍在原路徑、逐份實跑 `status` + `next` 皆 rc=0、零 DRIFT、零 block。舊 state 也**不會**被偷偷補上指紋——那等於把一份可能早已漂移的 plan 靜默立為基準。
+  - `init` 的 stdout 未變（與 base commit `e745670` 的 golden 檔仍逐位元組一致）；指紋只進 state 檔，不進 `init` 的輸出。
+
+- **⚠️ Behavior change — `fail` 現在會自動寫入安全停機標記（S2.2 Addendum）**。S2.2 原規格只有手動 `stop --write`，但無人值守情境下沒有人會在半夜跑這個指令——一個 step 半夜 fail、沒有留下 `stop.md`，下一輪就會在壞掉的前提上繼續推，正是這整套機制要擋的事（N3）。裁決記在 plan §8 S2.2 的 Addendum。
+
+  - `plan_runner.py fail` 失敗轉態成功後，若 `.plan-state/<slug>.stop.md` **尚不存在**，自動寫入一份，內容含該 step、`failure_reason`、當下 git HEAD/branch/dirty、與一行可執行的建議動作（沿用 `stop --write` 同一套 `render_stop_marker()`）。
+  - **已存在的標記不會被覆寫**：保留最早那次失敗的現場（HEAD、時間戳、reason），後續的 fail 不會蓋掉它。
+  - 寫入為 best-effort：磁碟寫入失敗不影響 `fail` 這個 transition 本身的成功記錄；`cmd_fail` 的 stdout / `--format json` payload 契約完全未變，只多一個磁碟副作用。
+  - `stop --write --reason` 手動子命令行為不變，仍可用於非 step 相關的手動停機。
+
 ## [v2.2.0] - 2026-09-03
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：本次新增一支 skill、修一份 rules 文件，既有 skill 的唯一改動是 `plan-run/SKILL.md` 多一個 `redundancy-peers` 值——那是給 `/design` 讀的去重提示，不是對外介面，也不改 `/plan-run` 任何行為、旗標或機器可讀輸出。`/dispatch-loop` 與 `plans/backlog/` 對既有使用者都是純增量：不叫它、不建那個目錄，一切照舊。

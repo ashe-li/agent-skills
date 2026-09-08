@@ -2005,5 +2005,687 @@ class HardStopCliTestCase(unittest.TestCase):
         run_cli("hard-stop", str(self.plan_path), "S2")
         self.assertEqual(before, state_path.read_bytes())
 
+
+# ---------------------------------------------------------------------------
+# S4.3 -- hard-stop findings ride the hook reason; `Auto-answered:` /
+# `--keep-going` / the `auto_reply="on"` enable gate.
+#
+# Per the plan's S4.3 Addendum, only half of this step is code-enforceable:
+# "判定的送達可以強制，留痕的執行不行." HookHardStopWiringTestCase covers the
+# enforceable half (findings reaching the Stop hook reason unconditionally).
+# The unenforceable half (an agent actually writing `## Auto-answered` to
+# checkpoint.md) has no interception point to test against; it is a content
+# contract in plan-run/SKILL.md, checked below only for presence of the
+# documented text, never for compliance.
+# ---------------------------------------------------------------------------
+
+
+class HookHardStopWiringTestCase(unittest.TestCase):
+    """S4.3 main deliverable: `_branch_ready_step()` calls
+    `hard_stop_findings()` on the ready step and threads any hits into the
+    Stop hook's `next_step` block reason via `_hook_block()`'s `suffix` --
+    the same mechanism `_ASSIGN_REPEAT_NOTE` already uses, and the two must
+    coexist rather than overwrite each other.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_module_from_path(PLAN_RUNNER, "plan_runner_hardstop_hook")
+
+    def _fixture(self, action: str, *, assign_repeat_count: int = 0):
+        mod = self.mod
+        plan_dir = Path.home() / ".plan-run-s43-fixture"
+        pointer = mod.new_pointer_record(
+            plan_path=plan_dir / "plan.md",
+            repo_root=plan_dir,
+            cwd=plan_dir,
+            session_id="s43-session",
+        )
+        pointer["last_seen_completed_count"] = 0
+        if assign_repeat_count:
+            pointer["last_assigned_step_id"] = "S1"
+            pointer["assign_repeat_count"] = assign_repeat_count
+        state = {
+            "plan_path": str(plan_dir / "plan.md"),
+            "slug": "s43-fixture",
+            "title": "S4.3 fixture",
+            "phase_order": ["P1"],
+            "parent_task_id": None,
+            "created_at": mod.now_iso(),
+            "updated_at": mod.now_iso(),
+            "steps": {
+                "S1": {
+                    "id": "S1", "title": "first", "phase": "P1", "deps": [],
+                    "agent": None, "skill": None, "command": None, "files": None,
+                    "action": action, "risk": None, "status": "pending",
+                    "task_id": None, "started_at": None, "completed_at": None,
+                    "failure_reason": None,
+                },
+            },
+        }
+        hook_input = {
+            "hook_event_name": "Stop",
+            "session_id": "s43-session",
+            "transcript_path": str(plan_dir / "transcript.jsonl"),
+            "cwd": str(plan_dir),
+            "stop_hook_active": True,
+        }
+        return hook_input, pointer, state
+
+    def _decide(self, action: str, **kw):
+        hook_input, pointer, state = self._fixture(action, **kw)
+        return self.mod.decide_hook_action(hook_input, pointer, state, lambda p: None)
+
+    def test_hard_stop_hit_reaches_the_hook_reason(self) -> None:
+        decision = self._decide("跑 sudo rm -rf ./build 然後收工")
+        self.assertEqual(decision.decision, "block")
+        self.assertIn("HARD-STOP", decision.reason)
+        self.assertIn("H2", decision.reason)
+        self.assertIn("不得自動決定", decision.reason)
+
+    def test_clean_step_carries_no_hard_stop_note(self) -> None:
+        decision = self._decide("依既有慣例補一個單元測試")
+        self.assertEqual(decision.decision, "block")
+        self.assertNotIn("HARD-STOP", decision.reason)
+
+    def test_hard_stop_note_cites_rule_and_evidence(self) -> None:
+        decision = self._decide("跑 sudo rm -rf ./build")
+        self.assertIn("rule:", decision.reason)
+        self.assertIn("evidence:", decision.reason)
+
+    def test_multiple_categories_all_listed(self) -> None:
+        decision = self._decide(
+            "Owner: 使用者\n跑 sudo rm -rf ./build 然後 gh pr merge 8102"
+        )
+        self.assertIn("H1", decision.reason)
+        self.assertIn("H2", decision.reason)
+        self.assertIn("H3", decision.reason)
+
+    def test_coexists_with_assign_repeat_note_both_present(self) -> None:
+        """R11/plan §5: the two suffixes must not overwrite each other."""
+        decision = self._decide("跑 sudo rm -rf ./build", assign_repeat_count=1)
+        self.assertIn("HARD-STOP", decision.reason)
+        self.assertIn("連續第", decision.reason)  # _ASSIGN_REPEAT_NOTE text
+
+    def test_hard_stop_note_precedes_repeat_note(self) -> None:
+        decision = self._decide("跑 sudo rm -rf ./build", assign_repeat_count=1)
+        self.assertLess(
+            decision.reason.index("HARD-STOP"),
+            decision.reason.index("連續第"),
+        )
+
+    def test_h4_never_fires_from_the_hook_path(self) -> None:
+        """No real token accounting reaches this call site (S4.2 finding,
+        unresolved by S4.3 -- see plan-run/SKILL.md's H4 caveat). H4 must
+        stay silent here rather than appear to auto-clear or false-fire."""
+        decision = self._decide("依既有慣例補一個單元測試")
+        self.assertNotIn("H4", decision.reason)
+        decision = self._decide("跑 sudo rm -rf ./build")
+        self.assertNotIn("H4", decision.reason)
+
+    def test_evidence_text_is_sanitized(self) -> None:
+        """The hook reason is the authoritative (non-fenced) region; a
+        control byte smuggled in via the step's action text must not
+        survive into it."""
+        decision = self._decide("跑 sudo rm -rf ./build\x07 完成")
+        self.assertNotIn("\x07", decision.reason)
+
+
+class CheckpointWritableProbeTestCase(unittest.TestCase):
+    """`_checkpoint_writable()`: the real-I/O probe backing the R11/T12
+    enable gate. Called with a real `Path` -- the same type
+    `checkpoint_path_for()` returns to its one production caller,
+    `cmd_auto_reply()` -- per the standing lesson that a probe tested only
+    with the "wrong" type for its real caller can pass while the
+    production wiring is still broken.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_module_from_path(PLAN_RUNNER, "plan_runner_checkpoint_writable")
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+
+    def test_writable_directory_with_no_existing_file_passes(self) -> None:
+        path = self.tmp_path / "sub" / "plan.checkpoint.md"
+        self.assertIsNone(self.mod._checkpoint_writable(path))
+
+    def test_probe_leaves_no_file_behind(self) -> None:
+        target_dir = self.tmp_path / "sub"
+        path = target_dir / "plan.checkpoint.md"
+        self.mod._checkpoint_writable(path)
+        self.assertFalse(path.exists(), "must not create the checkpoint file itself")
+        leftovers = list(target_dir.glob(".*autoreply-probe*")) if target_dir.exists() else []
+        self.assertEqual(leftovers, [], "probe file must be cleaned up")
+
+    def test_unwritable_directory_fails(self) -> None:
+        locked = self.tmp_path / "locked"
+        locked.mkdir()
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        path = locked / "plan.checkpoint.md"
+        problem = self.mod._checkpoint_writable(path)
+        self.assertIsNotNone(problem)
+
+    def test_existing_unwritable_checkpoint_file_fails(self) -> None:
+        path = self.tmp_path / "plan.checkpoint.md"
+        path.write_text("existing content", encoding="utf-8")
+        path.chmod(0o400)
+        self.addCleanup(path.chmod, 0o600)
+        problem = self.mod._checkpoint_writable(path)
+        self.assertIsNotNone(problem)
+
+    def test_existing_writable_checkpoint_file_passes_and_is_untouched(self) -> None:
+        path = self.tmp_path / "plan.checkpoint.md"
+        path.write_text("existing content", encoding="utf-8")
+        self.assertIsNone(self.mod._checkpoint_writable(path))
+        self.assertEqual(path.read_text(encoding="utf-8"), "existing content")
+
+
+class AutoReplyEnableCliTestCase(unittest.TestCase):
+    """`plan_runner.py auto-reply <plan> on|off` -- the only place
+    `state["auto_reply"]` is ever written (S4.2 only wrote the "off"
+    default at init time). Enabling is refused when the checkpoint path
+    is not writable (R11/T12): "no record possible" must never be
+    silently accepted as "on".
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "auto-reply-enable-plan.md"
+        self.plan_path.write_text(PLAN_TEXT, encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+    def state_file(self) -> Path:
+        return self.tmp_path / ".plan-state" / "auto-reply-enable-plan.state.json"
+
+    def checkpoint_path(self) -> Path:
+        return self.tmp_path / ".plan-state" / "auto-reply-enable-plan.checkpoint.md"
+
+    def test_enables_when_checkpoint_path_writable(self) -> None:
+        r = run_cli("auto-reply", str(self.plan_path), "on")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        state = json.loads(self.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(state["auto_reply"], "on")
+
+    def test_enabling_does_not_create_the_checkpoint_file(self) -> None:
+        run_cli("auto-reply", str(self.plan_path), "on")
+        self.assertFalse(self.checkpoint_path().exists())
+
+    def test_refuses_when_checkpoint_dir_not_writable(self) -> None:
+        state_dir = self.tmp_path / ".plan-state"
+        state_dir.chmod(0o500)
+        self.addCleanup(state_dir.chmod, 0o700)
+
+        r = run_cli("auto-reply", str(self.plan_path), "on")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("REFUSED", r.stdout)
+
+        state_dir.chmod(0o700)
+        state = json.loads(self.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(state["auto_reply"], "off")
+        state_dir.chmod(0o500)  # restore for addCleanup's own chmod to be a no-op-safe reset
+
+    def test_refuses_when_checkpoint_file_itself_not_writable(self) -> None:
+        self.checkpoint_path().write_text("existing", encoding="utf-8")
+        self.checkpoint_path().chmod(0o400)
+        self.addCleanup(self.checkpoint_path().chmod, 0o600)
+
+        r = run_cli("auto-reply", str(self.plan_path), "on")
+        self.assertNotEqual(r.returncode, 0)
+        state = json.loads(self.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(state["auto_reply"], "off")
+
+    def test_json_format_refusal_shape(self) -> None:
+        state_dir = self.tmp_path / ".plan-state"
+        state_dir.chmod(0o500)
+        self.addCleanup(state_dir.chmod, 0o700)
+
+        r = run_cli("auto-reply", str(self.plan_path), "on", "--format", "json")
+        state_dir.chmod(0o700)
+        self.assertNotEqual(r.returncode, 0)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["status"], "refused")
+        self.assertEqual(payload["auto_reply"], "off")
+        state_dir.chmod(0o500)
+
+    def test_off_resets_to_off(self) -> None:
+        run_cli("auto-reply", str(self.plan_path), "on")
+        r = run_cli("auto-reply", str(self.plan_path), "off")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        state = json.loads(self.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(state["auto_reply"], "off")
+
+    def test_off_never_probes_the_checkpoint_path(self) -> None:
+        """Turning off is always safe: it must not refuse even when the
+        checkpoint file itself is unwritable, since off writes no records
+        to it -- only state.json, which this scenario leaves untouched."""
+        self.checkpoint_path().write_text("existing", encoding="utf-8")
+        self.checkpoint_path().chmod(0o400)
+        self.addCleanup(self.checkpoint_path().chmod, 0o600)
+        r = run_cli("auto-reply", str(self.plan_path), "off")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+
+class NextKeepGoingFlagTestCase(unittest.TestCase):
+    """`next --keep-going` (Addendum-2): one-shot, this-call-only auto-reply
+    override. Never written to state; `next`-only (the Stop hook path takes
+    no such argument, so it structurally cannot honor it -- that half is
+    documented in plan-run/SKILL.md, not tested here beyond string
+    presence, since there is no CLI surface to call it against).
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "keep-going-plan.md"
+        self.plan_path.write_text(PLAN_TEXT, encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+    def state_file(self) -> Path:
+        return self.tmp_path / ".plan-state" / "keep-going-plan.state.json"
+
+    def test_keep_going_reports_on_for_this_call_only(self) -> None:
+        r = run_cli("next", str(self.plan_path), "--keep-going")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("AUTO-REPLY: on", r.stdout)
+
+    def test_keep_going_is_not_written_back_to_state(self) -> None:
+        run_cli("next", str(self.plan_path), "--keep-going")
+        state = json.loads(self.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(state["auto_reply"], "off")
+
+    def test_without_the_flag_state_stays_off_and_silent(self) -> None:
+        r = run_cli("next", str(self.plan_path))
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertNotIn("AUTO-REPLY", r.stdout)
+
+    def test_no_auto_reply_overrides_keep_going(self) -> None:
+        """Turning off always wins over turning on -- consistent with
+        `resolve_auto_reply()`'s existing precedence for the stored-"on"
+        case (T11d escape hatch)."""
+        r = run_cli(
+            "next", str(self.plan_path), "--keep-going", "--no-auto-reply",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("AUTO-REPLY: off", r.stdout)
+
+    def test_keep_going_json_payload(self) -> None:
+        r = run_cli(
+            "next", str(self.plan_path), "--keep-going", "--format", "json",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["auto_reply"], "on")
+
+
+class ResolveAutoReplyKeepGoingTestCase(unittest.TestCase):
+    """Pure-function coverage for `resolve_auto_reply(..., keep_going=...)`."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_module_from_path(PLAN_RUNNER, "plan_runner_keep_going")
+
+    def test_keep_going_turns_on_a_stored_off(self) -> None:
+        self.assertEqual(
+            self.mod.resolve_auto_reply({"auto_reply": "off"}, keep_going=True),
+            "on",
+        )
+
+    def test_keep_going_is_redundant_with_a_stored_on(self) -> None:
+        self.assertEqual(
+            self.mod.resolve_auto_reply({"auto_reply": "on"}, keep_going=True),
+            "on",
+        )
+
+    def test_no_auto_reply_beats_keep_going(self) -> None:
+        self.assertEqual(
+            self.mod.resolve_auto_reply(
+                {"auto_reply": "off"}, no_auto_reply=True, keep_going=True,
+            ),
+            "off",
+        )
+
+    def test_neither_flag_is_unchanged(self) -> None:
+        self.assertEqual(self.mod.resolve_auto_reply({"auto_reply": "off"}), "off")
+
+
+class SkillDocContractTestCase(unittest.TestCase):
+    """plan-run/SKILL.md's content contract for S4.3 -- checked only for
+    presence of the documented terms, exactly as the plan's Addendum
+    frames it: this half cannot be enforced by code, only written down and
+    kept from silently disappearing on a future edit.
+
+    Assertions are scoped to the `## Auto-reply` section specifically
+    (via `_section()`), not the whole file: several of these terms
+    (`hook`, `token`, `log`, "內容契約") already occur elsewhere in
+    SKILL.md for unrelated reasons (the pre-existing checkpoint contract,
+    Stop hook setup docs), so an unscoped `assertIn` would pass by
+    coincidence whether or not S4.3's own text was ever written.
+    """
+
+    SKILL_MD = REPO_ROOT / "plan-run" / "SKILL.md"
+
+    def setUp(self) -> None:
+        self.text = self.SKILL_MD.read_text(encoding="utf-8")
+
+    def _section(self, heading: str) -> str:
+        """Text of a `## <heading>` section, up to the next top-level `## `
+        heading or EOF. Fails the test immediately if the heading is
+        absent.
+
+        Lines inside fenced code blocks (```...```) are never treated as a
+        section boundary -- this section's own worked example is a
+        checkpoint.md snippet that itself contains a literal `## Auto-
+        answered` line, which a fence-blind scan would mistake for the end
+        of the SKILL.md section.
+        """
+        marker = f"## {heading}"
+        start = self.text.find(marker)
+        self.assertGreaterEqual(start, 0, f"missing section: {marker!r}")
+        lines = self.text[start + len(marker):].split("\n")
+        in_fence = False
+        end_line = len(lines)
+        for i, line in enumerate(lines):
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if not in_fence and line.startswith("## "):
+                end_line = i
+                break
+        return "\n".join(lines[:end_line])
+
+    def test_auto_reply_section_exists(self) -> None:
+        self._section("Auto-reply")  # raises via assertGreaterEqual if absent
+
+    def test_auto_answered_checkpoint_block_is_documented(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("## Auto-answered", section)
+
+    def test_auto_answered_required_subfields_are_documented(self) -> None:
+        section = self._section("Auto-reply")
+        for token in ("Took:", "Safe because:", "Hard-stop check"):
+            with self.subTest(token=token):
+                self.assertIn(token, section)
+
+    def test_auto_answered_is_a_content_contract_not_a_program_gate(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("內容契約，不是程式 gate", section)
+
+    def test_h4_caveat_is_documented(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("H4 需呼叫端提供實際值，否則不成立", section)
+
+    def test_enable_refusal_is_documented(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("拒絕啟用", section)
+
+    def test_keep_going_semantics_are_documented(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("--keep-going", section)
+        self.assertIn("不寫回 state", section)
+
+    def test_keep_going_hook_path_exclusion_is_documented(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("Stop hook 路徑不吃這個旗標", section)
+
+    def test_hard_stops_still_apply_under_keep_going_is_documented(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("四類硬停止", section)
+
+    def test_four_delivery_paths_are_documented(self) -> None:
+        """Review finding: the doc used to conflate CLI `next` with the
+        Stop hook's block reason, and to claim `next` pushed findings into
+        a "hook reason" it never touches in mode A. A later follow-up
+        found `recap` -- the post-compaction/handoff recovery entrypoint --
+        missing entirely. All four real delivery surfaces -- mode A's CLI
+        output, `recap`, mode B's Stop hook, and the manual `hard-stop`
+        query -- must be named distinctly."""
+        section = self._section("Auto-reply")
+        self.assertIn("模式 A", section)
+        self.assertIn("recap", section)
+        self.assertIn("模式 B", section)
+        self.assertIn("Newly unlocked", section)
+        self.assertIn("plan_runner.py hard-stop", section)
+
+    def test_no_log_excerpt_or_secret_rule_is_restated(self) -> None:
+        section = self._section("Auto-reply")
+        self.assertIn("log 原文", section)
+        self.assertIn("token / key / password / JWT", section)
+
+
+# ---------------------------------------------------------------------------
+# S4.3 follow-up (review finding): hard_stop_findings() was wired into the
+# Stop hook path (_branch_ready_step(), mode B) only. Mode A -- the
+# *default* mode per plan-run/SKILL.md Step 1.5 -- drives entirely off CLI
+# `next` (and the transition commands' own delta output), so a plan run in
+# mode A never saw a hard-stop finding at all. This section covers the CLI
+# path specifically; HookHardStopWiringTestCase above already covers the
+# Stop hook path and is unaffected by this fix.
+# ---------------------------------------------------------------------------
+
+
+class NextCliHardStopTestCase(unittest.TestCase):
+    """`_format_full_step_block()` backs every CLI surface that hands a
+    ready step to a driving agent: `next`'s full listing, and every
+    transition command's ("start"/"complete"/"fail"/"skip") "Newly
+    unlocked" delta block. Hard-stop findings must appear there
+    unconditionally -- no separate `hard-stop` invocation to remember.
+    """
+
+    HARD_STOP_NEXT_PLAN = """# Next Hard Stop Fixture
+
+### Phase 1: Setup
+
+- [ ] S1 Destructive step
+  - Files: `helm/smb-api/values.yaml`
+  - Action: 跑 sudo rm -rf ./data 後 git push --force
+"""
+
+    HARD_STOP_TRANSITION_PLAN = """# Next Hard Stop Transition Fixture
+
+### Phase 1: Setup
+
+- [ ] S1 Benign step
+  - Action: 依既有慣例補一個單元測試
+
+- [ ] S2 Destructive step
+  - Dependencies: S1
+  - Files: `helm/smb-api/values.yaml`
+  - Action: 跑 sudo rm -rf ./data 後 git push --force
+"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "next-hard-stop-plan.md"
+        self.plan_path.write_text(self.HARD_STOP_NEXT_PLAN, encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+    def test_hard_stop_is_surfaced_in_next_output(self) -> None:
+        r = run_cli("next", str(self.plan_path))
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("HARD-STOP", r.stdout)
+        self.assertIn("H2", r.stdout)
+        self.assertIn("H3", r.stdout)
+        self.assertIn("rule:", r.stdout)
+        self.assertIn("evidence:", r.stdout)
+
+    def test_benign_plan_has_no_hard_stop_text_in_next_output(self) -> None:
+        """The negative direction: a plan whose only ready step is benign
+        must not gain a spurious HARD-STOP paragraph."""
+        benign_path = self.tmp_path / "benign-plan.md"
+        benign_path.write_text(PLAN_TEXT, encoding="utf-8")
+        run_cli("init", str(benign_path), "--no-attach")
+        r = run_cli("next", str(benign_path))
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertNotIn("HARD-STOP", r.stdout)
+
+    def test_hard_stop_survives_keep_going(self) -> None:
+        """SKILL.md claims the four categories are delivered regardless of
+        `--keep-going`; this is the CLI-path half of that claim."""
+        r = run_cli("next", str(self.plan_path), "--keep-going")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("HARD-STOP", r.stdout)
+
+    def test_h4_never_fires_from_cli_next(self) -> None:
+        """No real token accounting reaches this call site either (same
+        S4.2 finding as the hook path) -- H4 must stay silent, not appear
+        clear."""
+        r = run_cli("next", str(self.plan_path))
+        self.assertNotIn("H4", r.stdout)
+
+    def test_hard_stop_surfaces_in_complete_delta_output(self) -> None:
+        """The shared rendering function also backs `complete`'s "Newly
+        unlocked" block -- a driving agent that reacts only to each
+        transition's own output (never calling `next` on its own) must
+        see the finding there too."""
+        plan_path = self.tmp_path / "next-hard-stop-transition-plan.md"
+        plan_path.write_text(self.HARD_STOP_TRANSITION_PLAN, encoding="utf-8")
+        run_cli("init", str(plan_path), "--no-attach")
+        r = run_cli("start", str(plan_path), "S1")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        r = run_cli("complete", str(plan_path), "S1")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("HARD-STOP", r.stdout)
+
+
+# ---------------------------------------------------------------------------
+# S4.3 second follow-up (review finding): `recap` uses its own renderer
+# (`_format_recap_next_step()`), separate from `_format_full_step_block()`
+# -- so fixing the CLI `next` gap above did not fix `recap`. `recap` is
+# S3.3's single unattended-*recovery* entrypoint: the first command run
+# after compaction, a new session, or a handoff to someone else -- exactly
+# the moment with the least context to independently think to check
+# hard-stop. Reviewer's call: in scope, must be fixed the same way.
+# ---------------------------------------------------------------------------
+
+
+class RecapCliHardStopTestCase(unittest.TestCase):
+    """CLI `recap` counterpart to `NextCliHardStopTestCase`. Uses the same
+    HOME-isolated env pattern as `RecapCliTestCase` above, since `recap`
+    also does a pointer lookup keyed on cwd.
+    """
+
+    HARD_STOP_RECAP_PLAN = """# Recap Hard Stop Fixture
+
+### Phase 1: Setup
+
+- [ ] S1 Destructive step
+  - Files: `helm/smb-api/values.yaml`
+  - Action: 跑 rm -rf ./data 然後 git push --force origin main
+"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "recap-hard-stop-plan.md"
+        self.plan_path.write_text(self.HARD_STOP_RECAP_PLAN, encoding="utf-8")
+
+        self._home_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._home_tmp.cleanup)
+        self.env = dict(os.environ)
+        self.env["HOME"] = self._home_tmp.name
+
+        r = run_cli("init", str(self.plan_path), "--no-attach", env=self.env)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+    def recap(self) -> subprocess.CompletedProcess:
+        return run_cli(
+            "recap", str(self.plan_path), cwd=self.tmp_path, env=self.env,
+        )
+
+    def test_hard_stop_is_surfaced_in_recap_output(self) -> None:
+        r = self.recap()
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("HARD-STOP", r.stdout)
+        self.assertIn("H2", r.stdout)
+        self.assertIn("H3", r.stdout)
+
+    def test_benign_plan_has_no_hard_stop_text_in_recap_output(self) -> None:
+        benign_path = self.tmp_path / "recap-benign-plan.md"
+        benign_path.write_text(RECAP_PLAN_TEXT, encoding="utf-8")
+        run_cli("init", str(benign_path), "--no-attach", env=self.env)
+        r = run_cli("recap", str(benign_path), cwd=self.tmp_path, env=self.env)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertNotIn("HARD-STOP", r.stdout)
+
+
+class ReadyStepHardStopDeliveryTestCase(unittest.TestCase):
+    """Enumerates every renderer that hands a ready step's fields to a
+    human/agent to read, and asserts each one delivers hard-stop findings
+    on a hit and stays silent on a benign step. This list must be kept in
+    sync with `_hard_stop_hook_note()`'s own docstring, which names the
+    same call sites in prose.
+
+    This is an enumeration, not introspection: it cannot catch a fourth
+    renderer nobody added an entry for. Its job is to make forgetting
+    *visible* -- a new ready-step renderer belongs in `RENDERERS` below in
+    the same change that adds it, and a reviewer (or future editor) who
+    greps for `_hard_stop_hook_note(` will find every existing call site
+    listed here, once, in one place.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_module_from_path(PLAN_RUNNER, "plan_runner_ready_step_delivery")
+
+    HITTING_ACTION = "跑 rm -rf ./data 然後 git push --force origin main"
+    BENIGN_ACTION = "依既有慣例補一個單元測試"
+
+    def _step(self, action: str) -> dict:
+        # `files` only carries a backend-owned path for the hitting
+        # fixture -- reusing it for the benign action would trip H3 on
+        # `files` alone regardless of `action`, which is a fixture bug,
+        # not a finding about the code under test.
+        files = "helm/smb-api/values.yaml" if action == self.HITTING_ACTION else "a.py"
+        return {
+            "id": "S1", "title": "t", "phase": "P1", "deps": [],
+            "agent": None, "skill": None, "command": None,
+            "files": files, "action": action, "risk": None,
+        }
+
+    def _render_full_step_block(self, action: str) -> str:
+        return "\n".join(self.mod._format_full_step_block(self._step(action)))
+
+    def _render_recap_next_step(self, action: str) -> str:
+        return "\n".join(
+            self.mod._format_recap_next_step(self._step(action), Path("/tmp/plan.md"))
+        )
+
+    def _render_hook_suffix(self, action: str) -> str:
+        step = self._step(action)
+        findings = self.mod.hard_stop_findings(action, step, None)
+        return self.mod._hard_stop_hook_note(findings) if findings else ""
+
+    # Keep in sync with _hard_stop_hook_note()'s docstring list.
+    RENDERERS = (
+        ("next / transition delta (_format_full_step_block)", _render_full_step_block),
+        ("recap (_format_recap_next_step)", _render_recap_next_step),
+        ("Stop hook block reason (_branch_ready_step via _hard_stop_hook_note)", _render_hook_suffix),
+    )
+
+    def test_every_known_renderer_delivers_on_a_hit(self) -> None:
+        for name, render in self.RENDERERS:
+            with self.subTest(renderer=name):
+                self.assertIn("HARD-STOP", render(self, self.HITTING_ACTION))
+
+    def test_every_known_renderer_is_silent_on_benign(self) -> None:
+        for name, render in self.RENDERERS:
+            with self.subTest(renderer=name):
+                self.assertNotIn("HARD-STOP", render(self, self.BENIGN_ACTION))
+
+
 if __name__ == "__main__":
     unittest.main()

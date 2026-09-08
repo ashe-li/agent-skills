@@ -1049,8 +1049,24 @@ def _format_step_action_block(
     return lines
 
 
-def _format_full_step_block(step: dict[str, Any]) -> list[str]:
-    """Full ready-step block: header + fields + next action sequence."""
+def _ready_step_header_and_fields(step: dict[str, Any]) -> list[str]:
+    """Header + agent/skill/command/files/action fields + hard-stop
+    findings (S4.3) -- the field prefix every ready-step renderer shares.
+
+    Extracted so a new renderer inherits hard-stop delivery by
+    construction instead of by remembering to copy these lines: this is
+    exactly the failure mode found in review -- `_format_full_step_block()`
+    and `_format_recap_next_step()` had each grown their own copy of this
+    block, so wiring hard-stop into one did not wire it into the other.
+    See `_hard_stop_hook_note()`'s docstring for the full list of surfaces
+    this function (transitively) backs, and
+    `ReadyStepHardStopDeliveryTestCase` for the test enumerating them.
+
+    `budget_state` is always None here: no real per-step token accounting
+    reaches any of these rendering call sites (S4.2 finding; see plan-run/
+    SKILL.md's H4 caveat), so H4 stays silent in every one of them, never
+    falsely clear.
+    """
     lines: list[str] = []
     title = step["title"]
     phase = step["phase"]
@@ -1063,6 +1079,26 @@ def _format_full_step_block(step: dict[str, Any]) -> list[str]:
         lines.append(f"- files: {step['files']}")
     if step.get("action"):
         lines.append(f"- action: {step['action']}")
+    findings = hard_stop_findings(step.get("action") or "", step, None)
+    if findings:
+        lines.append(_hard_stop_hook_note(findings))
+    return lines
+
+
+def _format_full_step_block(step: dict[str, Any]) -> list[str]:
+    """Full ready-step block: header + fields + hard-stop findings (S4.3)
+    + next action sequence.
+
+    Backs `next`'s full listing AND every transition command's ("start" /
+    "complete" / "fail" / "skip") "Newly unlocked" delta block -- both
+    route through `_format_state_view_lines()` -> this function. That
+    makes this one of the CLI-path counterparts of `_branch_ready_step()`'s
+    Stop hook suffix (mode B): mode A (the *default* mode, plan-run/
+    SKILL.md Step 1.5) drives entirely off these CLI outputs and never
+    touches the hook path at all, so hard-stop findings have to reach the
+    driving agent here too, not only there.
+    """
+    lines = _ready_step_header_and_fields(step)
     deps = step["deps"]
     if deps:
         dep_ids = ",".join(deps)
@@ -1078,29 +1114,26 @@ def _format_full_step_block(step: dict[str, Any]) -> list[str]:
 
 def _format_recap_next_step(step: dict[str, Any], plan_path: Path) -> list[str]:
     """`recap`'s ready-step block (S3.3) -- same field layout as
-    _format_full_step_block(), but threads the real `plan_path` through to
-    _format_step_action_block() so the printed dispatch commands are
-    runnable verbatim instead of carrying the `<plan>` placeholder.
+    _format_full_step_block() (both build on _ready_step_header_and_fields(),
+    S4.3, hard-stop findings included), but threads the real `plan_path`
+    through to _format_step_action_block() so the printed dispatch
+    commands are runnable verbatim instead of carrying the `<plan>`
+    placeholder.
 
     Kept as its own function rather than adding a plan_path parameter to
-    _format_full_step_block(): that function backs `next`/`status`, both
-    golden-tested, and its placeholder-vs-inline distinction already has a
-    documented reason (_format_step_action_block's docstring) tied to
-    the Stop hook's fenced-data boundary -- not something to disturb for a
-    single new caller.
+    _format_full_step_block(): that function backs `next`/transition
+    output, golden-tested, and its placeholder-vs-inline distinction
+    already has a documented reason (_format_step_action_block's
+    docstring) tied to the Stop hook's fenced-data boundary -- not
+    something to disturb for a single new caller.
+
+    Hard-stop findings reaching here matters more than at the other call
+    sites: `recap` is the single recovery entrypoint after compaction, a
+    fresh session, or a handoff (S3.3's whole reason to exist), so its
+    reader is the person with the *least* context and the least reason to
+    think of separately running `hard-stop`.
     """
-    lines: list[str] = []
-    title = step["title"]
-    phase = step["phase"]
-    phase_tag = f" [{phase}]" if phase else ""
-    lines.append(f"### {step['id']} — {title}{phase_tag}")
-    for k in ("agent", "skill", "command"):
-        if step.get(k):
-            lines.append(f"- {k}: {step[k]}")
-    if step.get("files"):
-        lines.append(f"- files: {step['files']}")
-    if step.get("action"):
-        lines.append(f"- action: {step['action']}")
+    lines = _ready_step_header_and_fields(step)
     if step.get("risk"):
         lines.append(f"- risk: {step['risk']}")
     lines.append("- next:")
@@ -2164,7 +2197,10 @@ def decide_budget(
 # This section decides ONE question: "may this be settled without waking the
 # owner?" It never settles anything itself. Auto-answering, its mandatory
 # `Auto-answered:` provenance record and the `--keep-going` one-shot flag are
-# S4.3; the four-option scope gate is S4.4.
+# S4.3. S4.4 proposed a fifth mechanism on top of these; it was built and
+# then removed. Why it exists nowhere in this file:
+# plans/active/unattended-long-run-governance.md section 2.6 (design +
+# removal notice).
 #
 # The safety envelope is a REVERSE whitelist, taken verbatim from
 # ~/Documents/agentflow/skills/agentflow/docs/AG_GUIDE.zh-tw.md:119 --
@@ -2207,13 +2243,29 @@ def auto_reply_setting(state: Any) -> str:
     return AUTO_REPLY_ON if raw.strip().lower() == AUTO_REPLY_ON else AUTO_REPLY_OFF
 
 
-def resolve_auto_reply(state: Any, *, no_auto_reply: bool = False) -> str:
-    """Effective setting for one invocation. `--no-auto-reply` is the escape
-    hatch (T11d): it turns the mechanism off for this call only and never
-    writes back, so leaving it out of the next command restores the stored
-    value rather than silently having disabled the feature."""
+def resolve_auto_reply(
+    state: Any, *, no_auto_reply: bool = False, keep_going: bool = False
+) -> str:
+    """Effective setting for one invocation.
+
+    `--no-auto-reply` is the escape hatch (T11d): it turns the mechanism
+    off for this call only and never writes back, so leaving it out of the
+    next command restores the stored value rather than silently having
+    disabled the feature.
+
+    `keep_going` is S4.3's `--keep-going` (plan §S4.3 Addendum-2): the
+    opposite direction, turning the mechanism on for this call only, also
+    never written back. It is `next`-only by construction -- nothing wires
+    it into the Stop hook's argument-less decide_hook_action() path, which
+    is the whole reason Addendum-2 settled on "not written to state" (a
+    hook path with no CLI args could not honor a one-shot flag any other
+    way). `no_auto_reply` still wins when both are set: turning the
+    mechanism off is always the safe direction, on either input.
+    """
     if no_auto_reply:
         return AUTO_REPLY_OFF
+    if keep_going:
+        return AUTO_REPLY_ON
     return auto_reply_setting(state)
 
 
@@ -2678,6 +2730,56 @@ def format_hard_stop_check_line(categories: list[str]) -> str:
     return "Hard-stop check: " + " / ".join(
         f"{cat} {'yes' if cat in hit else 'no'}" for cat in HARD_STOP_CATEGORIES
     )
+
+
+def _hard_stop_hook_note(findings: list[HardStopHit]) -> str:
+    """Render `hard_stop_findings()` hits for the Stop hook `reason`
+    suffix -- S4.3's main deliverable (plan §S4.3 Addendum: "判定的送達可以
+    強制，留痕的執行不行"). `_hook_block()`'s `suffix` is not something the
+    driving agent can skip past the way it could skip ever running
+    `hard-stop` on its own initiative, so this is the enforceable half.
+
+    Distinct from `cmd_hard_stop`'s human-triggered report: this is meant
+    to sit inline next to other hook-reason suffixes (`_ASSIGN_REPEAT_NOTE`
+    in particular), so it stays compact rather than a full multi-line
+    report. Evidence goes through `_sanitize_plan_field()` -- this text
+    lands in the reason's authoritative (non-fenced) region, same as every
+    other hook-authored string there.
+
+    Every renderer that hands a ready step to a driving agent/human calls
+    this on that step's `hard_stop_findings()` -- a hit must never reach
+    someone through a path that stays silent. As of S4.3's follow-up, the
+    known call sites are (kept in sync with
+    ReadyStepHardStopDeliveryTestCase.RENDERERS, which enumerates and
+    tests all of them):
+
+      - `_format_full_step_block()` -- backs CLI `next`'s full listing and
+        every transition command's ("start"/"complete"/"fail"/"skip")
+        "Newly unlocked" delta block (mode A, the default per
+        plan-run/SKILL.md Step 1.5).
+      - `_format_recap_next_step()` -- backs CLI `recap` (S3.3), the
+        single post-compaction/handoff recovery entrypoint; the reader
+        here has the least context of anyone, so this path matters most.
+      - `_branch_ready_step()` -- backs the Stop hook's block `reason`
+        (mode B).
+
+    Adding a fourth renderer of a ready step? Wire it through this
+    function too, and add it to `RENDERERS` in the test above -- that
+    test fails loudly (naming the missing renderer) if the wiring is
+    forgotten, instead of the gap sitting unnoticed the way this one did.
+    """
+    categories = sorted({f.category for f in findings})
+    labels = "、".join(f"{c}（{HARD_STOP_LABELS[c]}）" for c in categories)
+    lines = [f"HARD-STOP：本步命中 {labels}，不得自動決定，需人工裁決："]
+    for category in categories:
+        for finding in findings:
+            if finding.category != category:
+                continue
+            lines.append(
+                f"  - {finding.category} rule: {finding.rule} "
+                f"evidence: {_sanitize_plan_field(finding.evidence)}"
+            )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -3709,13 +3811,26 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
     repeats = _record_assignment(ctx, step_id)
     if bool(ctx.pointer.get("checkpoint_pending")) != budget.checkpoint_pending:
         ctx.update(checkpoint_pending=budget.checkpoint_pending)
-    suffix = None
+
+    suffix_parts: list[str] = []
+    # S4.3 main deliverable: hard-stop findings ride the hook reason
+    # unconditionally -- no separate command for the agent to remember to
+    # run. budget_state is None: this call site has no real per-step token
+    # accounting to hand H4 (S4.2 finding, not resolved by this step -- see
+    # plan-run/SKILL.md's H4 caveat), so H4 can only ever stay silent here,
+    # never falsely read as clear.
+    step = ctx.state["steps"].get(step_id)
+    if isinstance(step, dict):
+        findings = hard_stop_findings(step.get("action") or "", step, None)
+        if findings:
+            suffix_parts.append(_hard_stop_hook_note(findings))
     if repeats >= HOOK_ASSIGN_REPEAT_ESCALATE_AT:
-        suffix = _ASSIGN_REPEAT_NOTE.format(
+        suffix_parts.append(_ASSIGN_REPEAT_NOTE.format(
             count=repeats,
             plan=_quote_plan_path(ctx.pointer.get("plan_path")),
             step=_sanitize_step_id(step_id),
-        )
+        ))
+    suffix = "\n\n".join(suffix_parts) if suffix_parts else None
     return _hook_block(ctx, "next_step", step_id, budget, suffix)
 
 
@@ -4169,21 +4284,34 @@ def cmd_next(args: argparse.Namespace) -> int:
     if drift.status != DRIFT_OK:
         payload["plan_drift"] = drift._asdict()
 
-    # S4.2: report the effective auto-reply setting -- but only when the
-    # stored value is the opt-in "on". Every one of the ~187 in-flight states
-    # S1.2 inventoried reads as "off", and adding an unconditional line/key
+    # S4.2/S4.3: report the effective auto-reply setting -- but only when
+    # the stored value is the opt-in "on", or `--keep-going` turns it on
+    # for this call. Every one of the ~187 in-flight states S1.2
+    # inventoried reads as "off", and adding an unconditional line/key
     # would change `next` output for all of them.
     stored_auto_reply = auto_reply_setting(state)
-    if stored_auto_reply == AUTO_REPLY_ON:
+    no_auto_reply = bool(getattr(args, "no_auto_reply", False))
+    keep_going = bool(getattr(args, "keep_going", False))
+    if stored_auto_reply == AUTO_REPLY_ON or keep_going:
         effective = resolve_auto_reply(
-            state, no_auto_reply=bool(getattr(args, "no_auto_reply", False))
+            state, no_auto_reply=no_auto_reply, keep_going=keep_going,
         )
         payload["auto_reply"] = effective
         if args.format != "json":
-            suffix = (
-                "（四類硬停止仍生效）" if effective == AUTO_REPLY_ON
-                else "（本次 --no-auto-reply 覆蓋 state 的 on，未寫回）"
-            )
+            if effective == AUTO_REPLY_OFF:
+                if no_auto_reply and keep_going:
+                    suffix = "（--no-auto-reply 覆蓋 --keep-going，維持 off，未寫回）"
+                elif no_auto_reply and stored_auto_reply == AUTO_REPLY_ON:
+                    suffix = "（本次 --no-auto-reply 覆蓋 state 的 on，未寫回）"
+                else:
+                    suffix = "（本次 --no-auto-reply，未寫回）"
+            elif keep_going:
+                suffix = (
+                    "（--keep-going 僅本次 next 生效、不寫回 state；"
+                    "四類硬停止仍照常送達；Stop hook 路徑不吃這個旗標）"
+                )
+            else:
+                suffix = "（四類硬停止仍生效）"
             print(f"AUTO-REPLY: {effective}{suffix}")
             print()
 
@@ -4783,6 +4911,82 @@ def cmd_dag(args: argparse.Namespace) -> int:
     return 0
 
 
+def _checkpoint_writable(path: Path) -> str | None:
+    """Best-effort real-I/O probe: can this plan's checkpoint file actually
+    be written to right now? Returns None when yes, else a short
+    human-readable reason.
+
+    R11/T12 gate (S4.3): `auto_reply` may only flip to "on" when this
+    returns None -- a live filesystem check, not an assumption drawn from
+    the directory merely existing. Two failure shapes are distinguished:
+    `path` itself exists but lost its write bit, and the *directory*
+    cannot accept a new file (missing, read-only, wrong owner). The second
+    check writes and removes a hidden sibling probe file rather than
+    touching `path` itself -- enabling auto-reply must never have the side
+    effect of creating an empty checkpoint.md where `recap`'s reader
+    (S3.1) would otherwise correctly report "no checkpoint yet".
+    """
+    if path.exists() and not os.access(path, os.W_OK):
+        return f"checkpoint file exists but is not writable: {path}"
+    probe = path.parent / f".{path.name}.autoreply-probe"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        return f"{path.parent} is not writable: {exc}"
+    return None
+
+
+def cmd_auto_reply(args: argparse.Namespace) -> int:
+    """Flip `state["auto_reply"]` on or off -- the only place it is ever
+    written (S4.2 added the field and the off-by-default read path;
+    `init_state()` only ever writes "off", including on `--force`).
+
+    Turning it on is gated on `_checkpoint_writable()` (R11/T12): the
+    entire safety property of auto-reply is that every decision it makes
+    gets a same-pass `Auto-answered:` record (plan-run/SKILL.md), and that
+    record has nowhere to land if the checkpoint path is not writable.
+    Refusing here, at enable time, is the one half of that guarantee this
+    file can make good on by itself -- whether an agent actually writes
+    the record once enabled is a content contract (plan-run/SKILL.md), not
+    something this command, or anything else in this file, can verify.
+
+    Turning it off never probes the filesystem: off writes no records
+    anywhere, so there is nothing for an unwritable checkpoint path to
+    threaten, and the safe direction must never be refusable.
+    """
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+
+    if args.value == AUTO_REPLY_OFF:
+        state["auto_reply"] = AUTO_REPLY_OFF
+        save_state(plan_path, state)
+        emit({"status": "ok", "auto_reply": AUTO_REPLY_OFF})
+        return 0
+
+    checkpoint_path = checkpoint_path_for(plan_path)
+    problem = _checkpoint_writable(checkpoint_path)
+    if problem is not None:
+        if args.format == "json":
+            emit({
+                "status": "refused",
+                "auto_reply": AUTO_REPLY_OFF,
+                "checkpoint_path": str(checkpoint_path),
+                "reason": problem,
+            })
+        else:
+            print("REFUSED: checkpoint 路徑不可寫，auto_reply 維持 off")
+            print(f"  path: {checkpoint_path}")
+            print(f"  reason: {problem}")
+        return 1
+
+    state["auto_reply"] = AUTO_REPLY_ON
+    save_state(plan_path, state)
+    emit({"status": "ok", "auto_reply": AUTO_REPLY_ON})
+    return 0
+
+
 def cmd_hard_stop(args: argparse.Namespace) -> int:
     """Answer "may this step be settled without waking the owner?" -- and
     only answer it.
@@ -5260,6 +5464,15 @@ def main() -> None:
         help="Disable auto-reply for this call only; never written back to state",
     )
     p_next.add_argument(
+        "--keep-going",
+        action="store_true",
+        help=(
+            "One-shot: treat auto-reply as 'on' for this call only; never "
+            "written back to state; hard stops still apply; `next`-only, "
+            "the Stop hook path does not see this flag"
+        ),
+    )
+    p_next.add_argument(
         "--ignore-drift",
         action="store_true",
         help="Hand out steps even though plan.md no longer matches the state snapshot",
@@ -5335,6 +5548,18 @@ def main() -> None:
         p_hard_stop.add_argument(_budget_flag, type=int, default=None)
     add_format_flag(p_hard_stop)
     p_hard_stop.set_defaults(func=cmd_hard_stop)
+
+    p_auto_reply = sub.add_parser(
+        "auto-reply",
+        help=(
+            "Enable/disable auto-reply for this plan; "
+            "refuses 'on' when the checkpoint path is not writable (R11/T12)"
+        ),
+    )
+    p_auto_reply.add_argument("plan")
+    p_auto_reply.add_argument("value", choices=[AUTO_REPLY_ON, AUTO_REPLY_OFF])
+    add_format_flag(p_auto_reply)
+    p_auto_reply.set_defaults(func=cmd_auto_reply)
 
     p_index = sub.add_parser("index", help="Ultra-compact ID+status trace view")
     p_index.add_argument("plan")

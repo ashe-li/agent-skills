@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1044,7 +1045,9 @@ def _format_step_action_block(
     return lines
 
 
-def _ready_step_header_and_fields(step: dict[str, Any]) -> list[str]:
+def _ready_step_header_and_fields(
+    step: dict[str, Any], checkpoint_note: str | None = None
+) -> list[str]:
     """Header + agent/skill/command/files/action fields -- the field
     prefix every ready-step renderer shares.
 
@@ -1058,6 +1061,13 @@ def _ready_step_header_and_fields(step: dict[str, Any]) -> list[str]:
     see the removal notice near `decide_budget()`. A future renderer that
     needs to surface per-step findings again should hang them here, for
     the same reason the block was extracted in the first place.
+
+    `checkpoint_note` (S6.1) is that reason paying off: the checkpoint
+    instruction reached the Stop hook path only, while the CLI is the
+    default mode -- mechanism 3's zero artifacts followed directly. It
+    hangs here so a renderer added later carries it without anyone
+    remembering to. None means no checkpoint is owed, and the output is
+    then byte-identical to before this parameter existed.
     """
     lines: list[str] = []
     title = step["title"]
@@ -1071,17 +1081,22 @@ def _ready_step_header_and_fields(step: dict[str, Any]) -> list[str]:
         lines.append(f"- files: {step['files']}")
     if step.get("action"):
         lines.append(f"- action: {step['action']}")
+    if checkpoint_note:
+        lines.append("")
+        lines.extend(checkpoint_note.split("\n"))
     return lines
 
 
-def _format_full_step_block(step: dict[str, Any]) -> list[str]:
+def _format_full_step_block(
+    step: dict[str, Any], checkpoint_note: str | None = None
+) -> list[str]:
     """Full ready-step block: header + fields + next action sequence.
 
     Backs `next`'s full listing AND every transition command's ("start" /
     "complete" / "fail" / "skip") "Newly unlocked" delta block -- both
     route through `_format_state_view_lines()` -> this function.
     """
-    lines = _ready_step_header_and_fields(step)
+    lines = _ready_step_header_and_fields(step, checkpoint_note)
     deps = step["deps"]
     if deps:
         dep_ids = ",".join(deps)
@@ -1095,7 +1110,9 @@ def _format_full_step_block(step: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _format_recap_next_step(step: dict[str, Any], plan_path: Path) -> list[str]:
+def _format_recap_next_step(
+    step: dict[str, Any], plan_path: Path, checkpoint_note: str | None = None
+) -> list[str]:
     """`recap`'s ready-step block (S3.3) -- same field layout as
     _format_full_step_block() (both build on _ready_step_header_and_fields()),
     but threads the real `plan_path` through to _format_step_action_block()
@@ -1109,7 +1126,7 @@ def _format_recap_next_step(step: dict[str, Any], plan_path: Path) -> list[str]:
     docstring) tied to the Stop hook's fenced-data boundary -- not
     something to disturb for a single new caller.
     """
-    lines = _ready_step_header_and_fields(step)
+    lines = _ready_step_header_and_fields(step, checkpoint_note)
     if step.get("risk"):
         lines.append(f"- risk: {step['risk']}")
     lines.append("- next:")
@@ -1193,13 +1210,19 @@ def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
 
     new_ready = data.get("ready_steps_new", [])
     still_ready = data.get("ready_steps_still", [])
+    checkpoint_note = data.get("checkpoint_note")
 
     if new_ready:
         lines.append("")
         lines.append(f"## Newly unlocked ({len(new_ready)})")
-        for step in new_ready:
+        for i, step in enumerate(new_ready):
             lines.append("")
-            lines.extend(_format_full_step_block(step))
+            # Only the first block carries the note. It hangs on the shared
+            # prefix so a *new* renderer inherits it by construction, but a
+            # wave that unlocks four steps must not print the same twelve
+            # lines four times -- a receipt nobody finishes reading is the
+            # failure mode S6.2 removed mechanism 5 over.
+            lines.extend(_format_full_step_block(step, checkpoint_note if i == 0 else None))
 
     if still_ready:
         lines.append("")
@@ -2441,8 +2464,10 @@ def _other_ready_steps_line(state: dict[str, Any], step_id: str) -> str | None:
     return f"Also ready: {', '.join(ready)} (one step per turn — hook will assign next turn)"
 
 
-def _render_checkpoint_note(plan_path: Any) -> str:
-    """The checkpoint instruction appended when `checkpoint_pending` is True.
+def _render_checkpoint_note(
+    plan_path: Any, verdict: "CheckpointVerdict | None" = None
+) -> str:
+    """The checkpoint block appended when a checkpoint is owed.
 
     Must be an unambiguous *write this file* instruction, not "summarize in
     the reply" -- a chat-turn summary is lost the moment the transcript is
@@ -2450,22 +2475,52 @@ def _render_checkpoint_note(plan_path: Any) -> str:
     printed here is the real absolute path (via checkpoint_path_for(), the
     same derivation state_path_for() uses) so the model does not have to
     guess a cwd-relative location.
+
+    `verdict` (S6.1) turns this from a request into a receipt. With all
+    five gates passing it collapses to one line saying so -- the program
+    went and looked, and there is nothing left to ask for. Otherwise it
+    names the gates that failed, in the gates' own words, above the
+    instruction. A caller with no verdict (no plan path to check) still
+    gets the plain instruction, which is what this function did before.
     """
+    # _checkpoint_path_display() / _quote_plan_path() read the hook's own
+    # pointer field, so they only accept str; the CLI callers hold a Path.
+    # Without this coercion both fall back to their placeholders and the
+    # instruction tells the reader to write "<plan 所在目錄>/...".
+    if isinstance(plan_path, Path):
+        plan_path = str(plan_path)
     path_text = _checkpoint_path_display(plan_path)
-    element_lines = "\n".join(f"  {label} <...>" for label in _CHECKPOINT_ELEMENT_LABELS)
-    return (
-        "這是本段最後一步；停下前把進度寫進 checkpoint 檔——不是在回合裡輸出摘要，"
-        "是實際寫入這個檔案：\n"
-        f"  {path_text}\n"
-        "四要件缺一不可：\n"
-        f"{element_lines}\n"
+    if verdict is not None and verdict.ok:
+        return (
+            f"CHECKPOINT OK — {len(verdict.gates)}/{len(verdict.gates)} gates pass: "
+            f"{verdict.path}"
+        )
+
+    lines = [
+        "CHECKPOINT REQUIRED — 停下前把進度寫進 checkpoint 檔（不是在回合裡輸出摘要，"
+        "是實際寫入這個檔案）：",
+        f"  {path_text}",
+    ]
+    if verdict is not None:
+        lines.append("程式已經去檔案系統檢查過，未通過的關卡：")
+        lines.extend(f"  - {gate.name}: {gate.detail}" for gate in verdict.failures)
+    lines.append(
+        f"取得標準格式：{_runner_invocation(plan_path)} checkpoint "
+        f"{_quote_plan_path(plan_path)} --template"
+    )
+    lines.append("四要件缺一不可：")
+    lines.extend(f"  {label} <...>" for label in _CHECKPOINT_ELEMENT_LABELS)
+    lines.append(
         "自足性規則：這份 checkpoint 不得要求讀者回頭讀 plan.md、state.json 或"
         "前一則 checkpoint 才看得懂——一個完全沒有本次 context 的人，只讀這一份檔案，"
-        "就要能回答「下一步該做什麼」。\n"
-        "內容安全規則：禁止貼 log 原文，禁止任何 token / key / password / JWT——"
-        "這份檔案留在磁碟上、會被下一個 session 與驗收者讀到，寫進去就收不回來。\n"
-        "寫完 checkpoint 後結束回合，不要再繼續。"
+        "就要能回答「下一步該做什麼」。"
     )
+    lines.append(
+        "內容安全規則：禁止貼 log 原文，禁止任何 token / key / password / JWT——"
+        "這份檔案留在磁碟上、會被下一個 session 與驗收者讀到，寫進去就收不回來。"
+    )
+    lines.append("寫完 checkpoint 後結束回合，不要再繼續。")
+    return "\n".join(lines)
 
 
 def _render_next_step(
@@ -2488,7 +2543,9 @@ def _render_next_step(
     lines.append(_budget_hint_line(budget_info))
     if budget_info.checkpoint_pending:
         lines.append("")
-        lines.append(_render_checkpoint_note(plan_path))
+        lines.append(
+            _render_checkpoint_note(plan_path, _hook_checkpoint_verdict(plan_path, state))
+        )
     return "\n".join(lines)
 
 
@@ -2578,6 +2635,846 @@ def render_hook_reason(
     if kind == "completion":
         return _render_completion(state)
     raise ValueError(f"Unknown hook reason kind: {kind!r}")
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint evidence gates (S6.1)
+# ---------------------------------------------------------------------------
+#
+# Mechanism 3 shipped with a fatal shape: `checkpoint_pending` produced a
+# paragraph asking the model to write a file, and nothing ever went to the
+# filesystem to find out whether it had. Over the mechanism's entire
+# lifetime it produced zero files -- census in
+# .verification/2026-09-08/mechanism-3-checkpoint-zero-artifacts.md. The
+# fix, ported from AgentFlow's tracker gates (techniques #3-#7 of
+# .verification/2026-09-08/agentflow-portability-study.md): the program
+# collects the facts itself. All five gates below are pure filesystem
+# operations -- no subprocess, no network.
+#
+# TRUST BOUNDARY -- load-bearing, do not relax:
+# checkpoint.md is EVIDENCE WRITTEN FOR A HUMAN. These gates may check
+# whether it exists, whether it is the only one claiming this plan,
+# whether it is fresh, whether it has the contracted shape, and whether it
+# is the file we think it is. They must NEVER read its prose back into
+# what the runner does next -- no "read `Next work action:` and dispatch
+# it", no parsing `Still to do:` into step state, no summarizing it for a
+# decision. The two fields the gates do read (`Plan:` and `Checkpoint
+# at:`) are read solely to judge the file's own validity: which plan it
+# claims to describe, and when it claims to have been written. That is
+# verification of evidence, not instruction from it -- the same line
+# _read_stop_marker() draws in its own T6 note, and the same one
+# AgentFlow's tracker gates draw when they read the Ask id and the `Last
+# update` stamp without ever executing what the tracker says.
+
+# The identity line the uniqueness gate matches on, and the stamp line the
+# freshness gate parses. Both are emitted by `checkpoint --template`;
+# changing either here means changing checkpoint_template() with it (that
+# is what the template/parser agreement tests pin down -- I-063's lesson
+# was that a shape living only in prose drifts away from its parser).
+CHECKPOINT_IDENTITY_LABEL = "Plan:"
+CHECKPOINT_STAMP_LABEL = "Checkpoint at:"
+
+# The placeholder `checkpoint --template` leaves in each of the four
+# contract elements. The shape gate rejects it, so `--template > file`
+# alone can never satisfy the obligation -- somebody has to write words.
+CHECKPOINT_PLACEHOLDER = "<...>"
+
+# How far the model-written content stamp and the OS-written mtime may
+# disagree before the freshness gate calls it a mismatch. Generous enough
+# for "ran --template, thought for a few minutes, then wrote the file",
+# far too tight for backdating or for reusing yesterday's checkpoint.
+#
+# Why cross-check at all: AgentFlow trusts the content stamp alone
+# (round-linter.js clamps it to a real-clock window but never looks at
+# mtime), because its trackers travel between clones where git checkout
+# resets mtime. Our .plan-state/ files never leave the machine that wrote
+# them, so mtime is available here and is a fact the model cannot set
+# without an extra syscall it has no reason to make.
+CHECKPOINT_STAMP_MTIME_TOLERANCE_SECONDS = 900
+
+CHECKPOINT_GATE_EXISTENCE = "existence"
+CHECKPOINT_GATE_UNIQUENESS = "uniqueness"
+CHECKPOINT_GATE_FRESHNESS = "freshness"
+CHECKPOINT_GATE_SHAPE = "shape"
+CHECKPOINT_GATE_IDENTITY = "identity"
+
+#: Reporting order. Existence runs first because the other four have
+#: nothing to read without it.
+CHECKPOINT_GATE_ORDER = (
+    CHECKPOINT_GATE_EXISTENCE,
+    CHECKPOINT_GATE_UNIQUENESS,
+    CHECKPOINT_GATE_FRESHNESS,
+    CHECKPOINT_GATE_SHAPE,
+    CHECKPOINT_GATE_IDENTITY,
+)
+
+_CHECKPOINT_NOT_EVALUATED = "not evaluated — the existence gate failed"
+
+
+class CheckpointGate(NamedTuple):
+    """One gate's verdict. `detail` is written to be read by a human in a
+    terminal: it must say what was checked and, on failure, which side of
+    the comparison did not hold."""
+
+    name: str
+    ok: bool
+    detail: str
+
+
+class CheckpointVerdict(NamedTuple):
+    path: str
+    gates: tuple[CheckpointGate, ...]
+
+    @property
+    def ok(self) -> bool:
+        return all(gate.ok for gate in self.gates)
+
+    @property
+    def failures(self) -> tuple[CheckpointGate, ...]:
+        return tuple(gate for gate in self.gates if not gate.ok)
+
+
+def checkpoint_template(plan_path: Path, *, now: datetime | None = None) -> str:
+    """The canonical checkpoint shape, dispensed by `checkpoint --template`.
+
+    Emitted by the program rather than kept as a static string in the
+    docs, so the shape the writer receives and the shape the gates enforce
+    cannot drift apart (AgentFlow I-063: "the exact seven-section shape
+    existed only inside checker code and tests").
+
+    The stamp is substituted with the real current time instead of being
+    left as a placeholder. AgentFlow leaves a placeholder and instructs the
+    model to read a shell clock, an instruction its own incident I-056
+    records being violated (a coordinator guessed 12:38 at 12:31:52). We
+    can hand over the true value because we generate the template at the
+    moment it is asked for; and reusing a stale template later is caught by
+    the freshness gate's mtime cross-check rather than by trust.
+    """
+    stamp = (now or datetime.now().astimezone()).isoformat(timespec="seconds")
+    lines = [
+        f"# Checkpoint: {plan_path.stem}",
+        "",
+        f"{CHECKPOINT_IDENTITY_LABEL} {plan_path.stem}",
+        f"{CHECKPOINT_STAMP_LABEL} {stamp}",
+        "",
+    ]
+    lines.extend(f"{label} {CHECKPOINT_PLACEHOLDER}" for label in _CHECKPOINT_ELEMENT_LABELS)
+    return "\n".join(lines) + "\n"
+
+
+def _sha256_of_path(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _checkpoint_claims_plan(text: str, slug: str) -> bool:
+    pattern = rf"^[ \t]*{re.escape(CHECKPOINT_IDENTITY_LABEL)}[ \t]*{re.escape(slug)}[ \t]*$"
+    return re.search(pattern, text, re.MULTILINE) is not None
+
+
+def _checkpoint_element_values(text: str, label: str) -> list[str]:
+    """Every value written against `label`, in file order.
+
+    Strict by design: the label must open the line (no list bullets, no
+    bold markers, no indentation beyond whitespace), exactly as
+    `checkpoint --template` emits it. A lenient parser here is how the
+    contract stops meaning anything.
+    """
+    pattern = rf"^[ \t]*{re.escape(label)}[ \t]*(.*)$"
+    return [m.group(1).strip() for m in re.finditer(pattern, text, re.MULTILINE)]
+
+
+def _gate_existence(path: Path) -> CheckpointGate:
+    """Gate 1: the file is actually on disk. lstat, not exists(), so a
+    dangling symlink counts as present here and is rejected by the
+    identity gate with an accurate reason instead of being reported as
+    "missing"."""
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        return CheckpointGate(
+            CHECKPOINT_GATE_EXISTENCE, False,
+            f"no checkpoint file at {path} ({exc.strerror or exc})",
+        )
+    return CheckpointGate(
+        CHECKPOINT_GATE_EXISTENCE, True, f"present at {path} ({info.st_size} bytes)",
+    )
+
+
+def _gate_uniqueness(plan_path: Path, path: Path) -> CheckpointGate:
+    """Gate 2: exactly one file claims this plan, and it is the canonical one.
+
+    Ported from AgentFlow's tracker_candidates() (completion-context.js:
+    211-234): list every file of the contracted kind, keep the ones whose
+    content names *this* work item, then fail on both 0 and >1. The
+    content filter is what makes it correct here -- one `.plan-state/`
+    directory serves every plan in its `plans/active/`, so "one
+    *.checkpoint.md in the directory" would be wrong on any repo running
+    two plans at once. Matching on the `Plan:` line instead means a
+    sibling plan's checkpoint is invisible to this gate, while a second
+    copy claiming this plan ("open a new one and pretend") is not.
+    """
+    slug = plan_path.stem
+    directory = state_dir_for(plan_path)
+    try:
+        candidates = sorted(p for p in directory.glob("*.checkpoint.md") if p.is_file())
+    except OSError as exc:
+        return CheckpointGate(
+            CHECKPOINT_GATE_UNIQUENESS, False, f"cannot scan {directory}: {exc}",
+        )
+
+    claiming: list[Path] = []
+    for candidate in candidates:
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _checkpoint_claims_plan(text, slug):
+            claiming.append(candidate)
+
+    if not claiming:
+        return CheckpointGate(
+            CHECKPOINT_GATE_UNIQUENESS, False,
+            f"no file in {directory} carries the `{CHECKPOINT_IDENTITY_LABEL} {slug}` "
+            f"identity line (scanned {len(candidates)} *.checkpoint.md file(s)) — "
+            "run `checkpoint <plan> --template` for the canonical shape",
+        )
+    if len(claiming) > 1:
+        names = ", ".join(p.name for p in claiming)
+        return CheckpointGate(
+            CHECKPOINT_GATE_UNIQUENESS, False,
+            f"{len(claiming)} files in {directory} claim plan {slug}: {names} — "
+            "exactly one checkpoint per plan; delete the extras",
+        )
+    if claiming[0] != path:
+        return CheckpointGate(
+            CHECKPOINT_GATE_UNIQUENESS, False,
+            f"the only checkpoint claiming plan {slug} is {claiming[0].name}, "
+            f"expected {path.name}",
+        )
+    return CheckpointGate(
+        CHECKPOINT_GATE_UNIQUENESS, True,
+        f"exactly one of {len(candidates)} *.checkpoint.md file(s) claims plan {slug}",
+    )
+
+
+def _state_last_finished_timestamp(state: Any) -> datetime | None:
+    """The newest `completed_at` among steps currently `completed`, or None.
+
+    A second, pointer-free source for "when did this run last make
+    progress". It exists because the pointer's own answer is not always
+    available and has historically not always moved: `last_advance_at` had
+    no CLI writer at all until S6.1's second pass, so every pointer driven
+    from the command line reported `created_at` -- a timestamp that never
+    changes -- and the freshness gate compared against it happily.
+
+    Two deliberate exclusions:
+
+    - `failed` steps also carry a `completed_at`, but a failure is not an
+      advance, and a failed step writes a stop marker that pre-empts every
+      surface anyway.
+    - `skipped` steps are finished but carry NO `completed_at` at all
+      (transition_step() writes the field for `completed` and `failed`
+      only). So a plan advanced purely by skips yields None here.
+
+    That asymmetry is safe *because of how the caller combines the two
+    sources*: it takes the later of this and the pointer's timestamp, so a
+    missing value here can only forgo extra strictness, never invent
+    freshness the run does not have.
+    """
+    if not isinstance(state, dict) or not isinstance(state.get("steps"), dict):
+        return None
+    stamps = [
+        parsed
+        for step in state["steps"].values()
+        if isinstance(step, dict) and step.get("status") == COMPLETED
+        and (parsed := _parse_iso_timestamp(step.get("completed_at"))) is not None
+    ]
+    return max(stamps) if stamps else None
+
+
+def _last_advance_reference(
+    pointer: dict[str, Any] | None, state: Any
+) -> tuple[datetime | None, str]:
+    """The freshness gate's "last advance", plus where it came from.
+
+    The later of the pointer's progress timestamp and plan state's newest
+    completion. Taking the later of the two is what makes a frozen or
+    absent pointer harmless: neither source can pull the reference
+    backwards, so the gate is at least as strict as the better-informed of
+    them.
+    """
+    from_pointer = (
+        _pointer_progress_timestamp(pointer) if isinstance(pointer, dict) else None
+    )
+    from_state = _state_last_finished_timestamp(state)
+    if from_pointer is None and from_state is None:
+        return None, "none"
+    if from_pointer is None:
+        return from_state, "plan state"
+    if from_state is None:
+        return from_pointer, "pointer"
+    if from_state > from_pointer:
+        return from_state, "plan state"
+    return from_pointer, "pointer"
+
+
+def _gate_freshness(
+    path: Path,
+    text: str,
+    pointer: dict[str, Any] | None,
+    state: Any = None,
+    reference: tuple[datetime | None, str] | None = None,
+) -> CheckpointGate:
+    """Gate 3: the checkpoint is newer than the last real advance, by both
+    the stamp it wrote and the mtime it did not.
+
+    Two independent facts have to agree:
+
+    - the `Checkpoint at:` line, which the writer controls; and
+    - `os.stat().st_mtime`, which the operating system wrote.
+
+    A failure message must always name which side is wrong, because the
+    remedies differ: a stale stamp with a fresh mtime means the file was
+    rewritten without updating its own header, while a stale mtime means
+    nobody touched the file at all.
+
+    The "last advance" itself comes from _last_advance_reference(), which
+    reads both the pointer and plan state. When neither can supply one the
+    gate passes, but its detail says exactly what it did and did not check
+    -- a line that reads like a clean bill of health when nothing was
+    compared is worse than an honest one.
+
+    `reference` overrides that derivation with one the caller snapshotted
+    earlier. `complete` / `skip` pass the value from *before* their own
+    transition: they record the advance they are about to make, and
+    without the snapshot the gate would judge a pre-existing checkpoint
+    against a timestamp that same command had just written -- a file
+    cannot describe work recorded after it. See
+    _advance_reference_before_command().
+    """
+    stamps = _checkpoint_element_values(text, CHECKPOINT_STAMP_LABEL)
+    if len(stamps) != 1:
+        found = "no" if not stamps else f"{len(stamps)}"
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, False,
+            f"{found} `{CHECKPOINT_STAMP_LABEL} <ISO-8601>` line(s) in {path.name}; "
+            "expected exactly one",
+        )
+    stamp = _parse_iso_timestamp(stamps[0])
+    if stamp is None:
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, False,
+            f"`{CHECKPOINT_STAMP_LABEL} {stamps[0]}` is not a parseable ISO-8601 timestamp",
+        )
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError as exc:
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, False, f"cannot stat {path}: {exc}",
+        )
+
+    skew = stamp.timestamp() - mtime
+    if abs(skew) > CHECKPOINT_STAMP_MTIME_TOLERANCE_SECONDS:
+        side = "ahead of" if skew > 0 else "behind"
+        mtime_iso = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, False,
+            f"content stamp and filesystem mtime disagree by {int(abs(skew))}s "
+            f"(tolerance {CHECKPOINT_STAMP_MTIME_TOLERANCE_SECONDS}s): the stamp "
+            f"({stamps[0]}) is {side} the mtime the OS recorded ({mtime_iso})",
+        )
+
+    reference, source = (
+        reference if reference is not None else _last_advance_reference(pointer, state)
+    )
+    if reference is None:
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, True,
+            f"stamp {stamps[0]} agrees with mtime — stamp/mtime consistency only: "
+            "this run has no advance timestamp to compare against (no pointer with "
+            "`last_advance_at`, and no completed step carries a `completed_at`)",
+        )
+    ref_iso = reference.isoformat(timespec="seconds")
+    # Floor the reference to whole seconds before comparing. The stamp is
+    # written at second resolution (checkpoint_template() uses
+    # timespec="seconds") while `last_advance_at` carries microseconds, so
+    # a checkpoint written in the *same second* as the advance would
+    # otherwise read as 0.4s stale and fail. Found by the live run, not by
+    # the unit tests -- see .verification/2026-09-08/s6.1-five-gates-live-run.md.
+    ref_seconds = int(reference.timestamp())
+    if stamp.timestamp() < ref_seconds:
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, False,
+            f"the content stamp side is stale: `{CHECKPOINT_STAMP_LABEL} {stamps[0]}` "
+            f"predates the last advance ({ref_iso}, from {source})",
+        )
+    if mtime < ref_seconds:
+        mtime_iso = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+        return CheckpointGate(
+            CHECKPOINT_GATE_FRESHNESS, False,
+            f"the filesystem mtime side is stale: {path.name} was last written at "
+            f"{mtime_iso}, before the last advance ({ref_iso}, from {source})",
+        )
+    return CheckpointGate(
+        CHECKPOINT_GATE_FRESHNESS, True,
+        f"stamp {stamps[0]} and mtime both at or after the last advance "
+        f"({ref_iso}, from {source})",
+    )
+
+
+def _gate_shape(text: str) -> CheckpointGate:
+    """Gate 4: all four contract elements present, once each, with content.
+
+    Validates the same _CHECKPOINT_ELEMENT_LABELS the instruction text and
+    `checkpoint --template` hand out, so the shape cannot exist in prose
+    only (I-063).
+    """
+    missing: list[str] = []
+    duplicated: list[str] = []
+    unfilled: list[str] = []
+    for label in _CHECKPOINT_ELEMENT_LABELS:
+        values = _checkpoint_element_values(text, label)
+        if not values:
+            missing.append(label)
+            continue
+        if len(values) > 1:
+            duplicated.append(f"{label} (x{len(values)})")
+            continue
+        if not values[0] or values[0] == CHECKPOINT_PLACEHOLDER:
+            unfilled.append(label)
+
+    problems: list[str] = []
+    if missing:
+        problems.append(f"missing: {', '.join(missing)}")
+    if duplicated:
+        problems.append(f"written more than once: {', '.join(duplicated)}")
+    if unfilled:
+        problems.append(f"left empty or still `{CHECKPOINT_PLACEHOLDER}`: {', '.join(unfilled)}")
+    if problems:
+        return CheckpointGate(
+            CHECKPOINT_GATE_SHAPE, False,
+            "; ".join(problems) + " — the four elements are the whole contract",
+        )
+    return CheckpointGate(
+        CHECKPOINT_GATE_SHAPE, True,
+        f"all {len(_CHECKPOINT_ELEMENT_LABELS)} contract elements present and filled",
+    )
+
+
+def _gate_identity(path: Path) -> CheckpointGate:
+    """Gate 5: a regular file, not a symlink, whose bytes do not change
+    across the read.
+
+    sha256 is taken three times -- before opening, from the open
+    descriptor, and after the read -- and the descriptor's (dev, ino) is
+    compared against the lstat that authorized it. AgentFlow reports three
+    identity fields (tracker-contract.js:75-93) but fills all three from a
+    single hash; taking them separately is what actually rejects a file
+    replaced between the check and the read.
+    """
+    try:
+        entry = os.lstat(path)
+    except OSError as exc:
+        return CheckpointGate(CHECKPOINT_GATE_IDENTITY, False, f"cannot lstat {path}: {exc}")
+    if stat.S_ISLNK(entry.st_mode):
+        return CheckpointGate(
+            CHECKPOINT_GATE_IDENTITY, False,
+            f"{path.name} is a symlink; the checkpoint must be a regular file at "
+            "the canonical path, not a pointer at something else",
+        )
+    if not stat.S_ISREG(entry.st_mode):
+        return CheckpointGate(
+            CHECKPOINT_GATE_IDENTITY, False, f"{path.name} is not a regular file",
+        )
+
+    try:
+        checked = _sha256_of_path(path)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened_stat = os.fstat(fd)
+            if (opened_stat.st_dev, opened_stat.st_ino) != (entry.st_dev, entry.st_ino):
+                return CheckpointGate(
+                    CHECKPOINT_GATE_IDENTITY, False,
+                    f"{path.name} was replaced between the check and the open "
+                    "(inode changed)",
+                )
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            opened = hashlib.sha256(b"".join(chunks)).hexdigest()
+        finally:
+            os.close(fd)
+        read = _sha256_of_path(path)
+    except OSError as exc:
+        return CheckpointGate(CHECKPOINT_GATE_IDENTITY, False, f"cannot read {path}: {exc}")
+
+    if not checked == opened == read:
+        return CheckpointGate(
+            CHECKPOINT_GATE_IDENTITY, False,
+            f"{path.name} changed while being verified "
+            f"(checked={checked[:12]} opened={opened[:12]} read={read[:12]})",
+        )
+    return CheckpointGate(
+        CHECKPOINT_GATE_IDENTITY, True,
+        f"regular file, sha256 {checked[:12]} stable across checked/opened/read",
+    )
+
+
+def verify_checkpoint(
+    plan_path: Path,
+    *,
+    pointer: dict[str, Any] | None = None,
+    state: dict[str, Any] | None = None,
+    reference: tuple[datetime | None, str] | None = None,
+    now: float | None = None,
+) -> CheckpointVerdict:
+    """Run all five gates against this plan's checkpoint file.
+
+    Facts come from the filesystem, never from the model's report that it
+    wrote something -- that inversion is the entire point of S6.1. Reads
+    only; nothing here creates, repairs or deletes a checkpoint, because a
+    checkpoint the program wrote would be a receipt for work nobody did.
+
+    See this section's TRUST BOUNDARY note: the file's prose is checked
+    for shape and freshness and is never read back into any decision.
+
+    `now` is accepted for symmetry with decide_budget()'s injected clock
+    and for future gates that need it; the freshness gate compares the
+    file's own two timestamps against the pointer's last advance, so it
+    does not currently read a clock at all.
+    """
+    path = checkpoint_path_for(plan_path)
+    existence = _gate_existence(path)
+    if not existence.ok:
+        skipped = tuple(
+            CheckpointGate(name, False, _CHECKPOINT_NOT_EVALUATED)
+            for name in CHECKPOINT_GATE_ORDER
+            if name != CHECKPOINT_GATE_EXISTENCE
+        )
+        return CheckpointVerdict(str(path), (existence,) + skipped)
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        text = ""
+        existence = CheckpointGate(
+            CHECKPOINT_GATE_EXISTENCE, False, f"{path} exists but cannot be read: {exc}",
+        )
+
+    gates = {
+        CHECKPOINT_GATE_EXISTENCE: existence,
+        CHECKPOINT_GATE_UNIQUENESS: _gate_uniqueness(plan_path, path),
+        CHECKPOINT_GATE_FRESHNESS: _gate_freshness(path, text, pointer, state, reference),
+        CHECKPOINT_GATE_SHAPE: _gate_shape(text),
+        CHECKPOINT_GATE_IDENTITY: _gate_identity(path),
+    }
+    return CheckpointVerdict(str(path), tuple(gates[name] for name in CHECKPOINT_GATE_ORDER))
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint delivery -- who gets told, and where
+# ---------------------------------------------------------------------------
+#
+# The other half of S6.1. Verifying a file nobody was ever asked to write
+# buys nothing: until now the instruction reached only the Stop hook's
+# `reason`, while `plan-run/SKILL.md` names the CLI as the default mode.
+# Three surfaces print a ready step, and all three must carry it --
+# `_ready_step_header_and_fields()` is the shared prefix precisely so a
+# fourth surface inherits it by construction rather than by memory.
+
+
+def _phase_finished(state: dict[str, Any], phase: str) -> bool:
+    """True when `phase` has at least one step and every one of them is
+    completed or skipped. Anything else -- pending, in_progress, failed,
+    blocked -- counts as unfinished, so a phase abandoned with a failed
+    step is never reported as closed.
+    """
+    steps = [s for s in state.get("steps", {}).values() if isinstance(s, dict)]
+    in_phase = [s for s in steps if s.get("phase") == phase]
+    if not in_phase:
+        return False
+    return all(s.get("status") in (COMPLETED, SKIPPED) for s in in_phase)
+
+
+def _phase_finished_any(state: dict[str, Any], phase: str) -> bool:
+    """True when at least one step in `phase` is completed or skipped --
+    i.e. work in the new phase is already under way and the handover
+    moment has passed."""
+    return any(
+        isinstance(s, dict) and s.get("phase") == phase
+        and s.get("status") in (COMPLETED, SKIPPED)
+        for s in state.get("steps", {}).values()
+    )
+
+
+def _phase_boundary_just_crossed(state: dict[str, Any]) -> bool:
+    """True when the run has just closed out a phase and has not yet
+    finished anything in the next one -- the plan's own handover point.
+
+    Structural, not chronological: the next ready step sits in phase N,
+    phase N-1 (its immediate predecessor in `phase_order`) is fully
+    finished, and nothing in phase N has finished yet. No timestamps are
+    consulted -- `completed_at` is written for `completed` and `failed`
+    but NOT for `skipped` (see transition_step()), so a phase closed by a
+    skip would be invisible to a "most recently finished step" reading.
+
+    Deliberately not the hook's rule. decide_budget()'s phase test is
+    `_phase_completes_after(ready_step) and consecutive_blocks >=
+    PHASE_MIN` -- forward-looking, and gated on a per-turn auto-advance
+    counter that is structurally always 0 in CLI mode. Reusing it here
+    would read a value that can never satisfy it. This one asks the
+    question the CLI can actually answer.
+
+    Self-limiting by construction, which is why no sticky flag or counter
+    is needed to stop it repeating: it stays true only until the first
+    step of phase N finishes, and while it is true the obligation is
+    discharged by *writing the file* -- after which the same surfaces
+    collapse to a single `CHECKPOINT OK` line instead of the request. The
+    repetition is the pressure, and satisfying it removes the repetition.
+
+    All done -> False. There is a real argument that finishing the last
+    phase is the highest-value handover of all, but a checkpoint answers
+    "what do I do next", and at completion that answer is the completion
+    block itself (acceptance criteria, then `/plan-archive`). No ready
+    step also means no ready-step surface to carry the note, so returning
+    True here would only ever produce a request nothing prints.
+    `plan_runner.py checkpoint <plan>` still verifies on demand.
+    """
+    ready = compute_ready_steps(state)
+    if not ready:
+        return False
+    current = state.get("steps", {}).get(ready[0], {})
+    phase = current.get("phase")
+    order = state.get("phase_order") or []
+    if phase not in order:
+        return False
+    index = order.index(phase)
+    if index == 0:
+        return False  # nothing has been crossed yet
+    if not _phase_finished(state, order[index - 1]):
+        return False
+    return not _phase_finished_any(state, phase)
+
+
+def _pointer_matches_plan(pointer: dict[str, Any], plan_path: Path) -> bool:
+    """Does this cwd's pointer describe the plan we were asked about?
+
+    A pointer with no readable `plan_path` field is treated as a match:
+    new_pointer_record() always writes one, so a blank means a malformed
+    or hand-edited file, and the rest of this module's convention for such
+    a pointer is to degrade rather than to condemn.
+    """
+    raw = pointer.get("plan_path")
+    if not isinstance(raw, str) or not raw:
+        return True
+    try:
+        return Path(raw).resolve() == plan_path.resolve()
+    except OSError:
+        return False
+
+
+def _advance_fields(
+    state: Any, pointer: dict[str, Any], now: str | None = None
+) -> dict[str, Any]:
+    """The pointer fields that plan state's progress implies, or {} for none.
+
+    The single definition of "did this run advance", shared by the Stop
+    hook (_record_advance_if_progressed()) and the CLI (_record_cli_advance()).
+    Extracted when the CLI writer was added: two copies of this rule would
+    be two chances for `last_advance_at` to mean something different
+    depending on which path wrote it, and that field has already caused
+    one outage of its own by being half-wired.
+
+    The rule is state.json's completed+skipped count moving -- see
+    _record_advance_if_progressed()'s docstring for why nothing weaker
+    (assignment, a turn boundary) can stand in for it.
+    """
+    current = _hook_completed_count(state)
+    if current is None:
+        return {}
+    previous = pointer.get("last_seen_completed_count")
+    if isinstance(previous, bool) or not isinstance(previous, int):
+        previous = None
+    if previous is not None and current == previous:
+        return {}
+    if previous is None or current > previous:
+        return {"last_advance_at": now or now_iso(), "last_seen_completed_count": current}
+    return {"last_seen_completed_count": current}
+
+
+def _record_cli_advance(plan_path: Path, state: dict[str, Any]) -> None:
+    """Write `last_advance_at` on the CLI's `complete` / `skip` paths.
+
+    Until this existed, the field's only writer lived inside _HookContext,
+    so in default (CLI) mode it stayed None for the life of every run and
+    both of its consumers silently fell back to `created_at` -- a
+    timestamp that never moves. Two consequences, both observed live
+    (.verification/2026-09-08/s6.1-five-gates-live-run.md): decide_budget()'s
+    wall-clock rule measured *pointer age* rather than stalling, and the
+    freshness gate compared checkpoints against a frozen reference, so a
+    checkpoint written hours and several steps ago still reported
+    `CHECKPOINT OK`. The second is the serious one: a gate whose whole job
+    is catching a stale checkpoint could not catch one.
+
+    `complete` and `skip` only. `start` hands work out, which is not doing
+    it; `fail` does not move the completed+skipped count and writes a stop
+    marker instead. No pointer, or a pointer driving a different plan,
+    means no write -- this must never touch another plan's record.
+
+    Best-effort: a plan run is not worth aborting over a pointer write,
+    and every reader of the field already tolerates its absence.
+    """
+    try:
+        resolved = resolve_pointer_for_hook(Path.cwd())
+    except OSError:
+        return
+    if resolved is None or not isinstance(resolved.data, dict):
+        return
+    if not _pointer_matches_plan(resolved.data, plan_path):
+        return
+    fields = _advance_fields(state, resolved.data)
+    if not fields:
+        return
+    updated = dict(resolved.data)
+    updated.update(fields)
+    # Same rationale as _HookContext.updates(): a write is itself proof
+    # this session is alive and driving, so the lease timestamp rides
+    # along on a write we were making anyway.
+    updated["last_seen_at"] = now_iso()
+    try:
+        write_pointer_atomic(resolved.path, updated)
+    except OSError:
+        return
+
+
+def _advance_reference_before_command(
+    plan_path: Path, state: dict[str, Any]
+) -> tuple[datetime | None, str]:
+    """The run's last advance as of *this command's start*.
+
+    Call before `transition_step()`. `complete` and `skip` record an
+    advance of their own (_record_cli_advance()) and then render a
+    checkpoint verdict in the same breath; without this snapshot the
+    freshness gate would compare a checkpoint that already existed
+    against a timestamp this very command had just written. A checkpoint
+    cannot describe work recorded after it, so that comparison can only
+    ever fail -- and it failed *nondeterministically*, on whether the two
+    writes landed either side of a second boundary (the stamp has
+    one-second resolution), which made it a 1-in-3 flake rather than an
+    obvious bug.
+
+    The invariant this restores: a checkpoint is fresh when it is newer
+    than every advance that happened *before* the command reporting on
+    it. Nothing is weakened -- a checkpoint older than any earlier
+    completion still fails, which is the case the gate exists for. The
+    following `next` derives its reference normally and does include the
+    completion, so a checkpoint written before the transition still shows
+    as stale there; the checkpoint contract tells the writer to stop after
+    writing rather than to keep completing steps, so that ordering is not
+    the designed flow.
+    """
+    try:
+        resolved = resolve_pointer_for_hook(Path.cwd())
+    except OSError:
+        resolved = None
+    pointer = resolved.data if resolved else None
+    return _last_advance_reference(pointer, state)
+
+
+def _checkpoint_obligation_active(
+    plan_path: Path,
+    pointer: dict[str, Any] | None,
+    now: float | None,
+    state: dict[str, Any] | None = None,
+) -> bool:
+    """Is a checkpoint owed for `plan_path` right now?
+
+    Three triggers:
+
+    1. `checkpoint_pending` on the pointer, which the Stop hook persists
+       when the turn budget or its own phase test calls for a check-in;
+    2. the wall-clock rule -- longer than the stale threshold since the
+       last real advance, derived live from `last_advance_at`; and
+    3. a phase boundary just crossed (`_phase_boundary_just_crossed()`),
+       derived from plan state alone.
+
+    (1) needs the hook to be installed and running. (2) and (3) do not,
+    which matters because the default mode is the CLI: leaving the phase
+    boundary to (1) would have left the mechanism's most natural trigger
+    dead in its main mode, which is the same shape as the bug S6.1 fixed.
+    (2) fires on "stuck", an anomaly; (3) fires on "this is a good place
+    to hand over", which is what N2 is actually about.
+
+    A pointer attached to a *different* plan suppresses all three: this
+    cwd is driving something else, and a note about plan A while the
+    reader asked about plan B is worse than silence. With no pointer at
+    all there is no wrong-plan risk, so (3) still applies -- a plan run
+    with `init --no-attach` is a supported mode and gets the same
+    handover prompt.
+    """
+    if isinstance(pointer, dict):
+        if not _pointer_matches_plan(pointer, plan_path):
+            return False
+        if pointer.get("checkpoint_pending") is True:
+            return True
+        if _wall_clock_checkpoint_due(pointer, now):
+            return True
+    return _phase_boundary_just_crossed(state) if isinstance(state, dict) else False
+
+
+def _cli_checkpoint_note(
+    plan_path: Any,
+    state: dict[str, Any] | None = None,
+    reference: tuple[datetime | None, str] | None = None,
+) -> str | None:
+    """The checkpoint note for a CLI surface, or None when none is owed.
+
+    The one place in the CLI that reads the clock and the pointer registry
+    for this purpose; `_build_state_view()` and `cmd_recap()` call it so
+    every ready-step surface shares one answer. A pointer that cannot be
+    resolved is not an error -- the state-derived phase-boundary trigger
+    still applies without one.
+    """
+    if not isinstance(plan_path, (str, Path)) or not str(plan_path):
+        return None
+    path = Path(plan_path)
+    try:
+        resolved = resolve_pointer_for_hook(Path.cwd())
+    except OSError:
+        resolved = None
+    pointer = resolved.data if resolved else None
+    if not _checkpoint_obligation_active(path, pointer, time.time(), state):
+        return None
+    return _render_checkpoint_note(
+        path,
+        verify_checkpoint(path, pointer=pointer, state=state, reference=reference),
+    )
+
+
+def _hook_checkpoint_verdict(
+    plan_path: Any, state: dict[str, Any] | None = None
+) -> "CheckpointVerdict | None":
+    """The gate verdict for the Stop hook's `next_step` reason.
+
+    The hook has already decided a checkpoint is owed (that is what
+    `budget_info.checkpoint_pending` means), so unlike _cli_checkpoint_note()
+    this does not re-derive the obligation -- it only goes and looks at the
+    file. Returns None when there is no usable plan path, in which case the
+    reason falls back to the plain instruction.
+
+    This is a filesystem read on the reason-rendering path, which is fine:
+    the renderer runs inside the `hook-stop` I/O layer. decide_hook_action()
+    itself stays pure -- it never calls this.
+    """
+    if not isinstance(plan_path, (str, Path)) or not str(plan_path):
+        return None
+    try:
+        return verify_checkpoint(Path(plan_path), state=state)
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2933,7 +3830,12 @@ def _reset_turn_counters(ctx: _HookContext) -> None:
 
 
 def _record_advance_if_progressed(ctx: _HookContext) -> None:
-    """`last_advance_at`'s only writer (S3.4).
+    """`last_advance_at`'s writer on the Stop hook path (S3.4).
+
+    NOT its only writer any more: S6.1 added _record_cli_advance() for the
+    `complete` / `skip` commands, because "only writer" plus "hook-only
+    caller" meant the field was dead in the default CLI mode. Both share
+    _advance_fields() so the rule cannot fork.
 
     Without this, `last_advance_at` was schema-only: `new_pointer_record()`
     set it to None and nothing else in the file ever wrote to it, so
@@ -2979,18 +3881,9 @@ def _record_advance_if_progressed(ctx: _HookContext) -> None:
     current value so a later real increase is measured against it rather
     than a stale high-water mark.
     """
-    current = _hook_completed_count(ctx.state)
-    if current is None:
-        return
-    previous = ctx.pointer.get("last_seen_completed_count")
-    if isinstance(previous, bool) or not isinstance(previous, int):
-        previous = None
-    if previous is not None and current == previous:
-        return
-    if previous is None or current > previous:
-        ctx.update(last_advance_at=now_iso(), last_seen_completed_count=current)
-    else:
-        ctx.update(last_seen_completed_count=current)
+    fields = _advance_fields(ctx.state, ctx.pointer)
+    if fields:
+        ctx.update(**fields)
 
 
 def _branch_paused(ctx: _HookContext) -> HookDecision | None:
@@ -3584,7 +4477,12 @@ def _require_state(plan_path: Path) -> dict[str, Any]:
     return state
 
 
-def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, Any]:
+def _build_state_view(
+    state: dict[str, Any],
+    mode: str = "delta",
+    plan_path: Path | None = None,
+    advance_reference: tuple[datetime | None, str] | None = None,
+) -> dict[str, Any]:
     """Shared state-view payload — embed in transition outputs so callers
     don't need a follow-up `next` call.
 
@@ -3596,6 +4494,13 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
 
     Side effect: updates `state["previously_reported_ready"]` to current
     ready set so the next call's delta is computed correctly.
+
+    `plan_path` (S6.1) is the single injection point for the checkpoint
+    note: every CLI surface that embeds a ready-step block goes through
+    this payload, so passing it here is what makes `next` and the
+    transition commands carry the instruction without each of them
+    having to remember. Omitting it (tests, callers with no plan on
+    hand) yields exactly the payload this function produced before.
     """
     current_ready = compute_ready_steps(state)
     in_progress = sorted(
@@ -3617,6 +4522,7 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
     return {
         "summary": summary(state),
         "parent_task_id": state.get("parent_task_id"),
+        "checkpoint_note": _cli_checkpoint_note(plan_path, state, advance_reference),
         "ready_steps_new": [step_to_instruction(state, sid) for sid in newly],
         "ready_steps_still": still,  # IDs only — Claude already saw these
         "large_work_warnings": _large_work_warnings(state, newly),
@@ -3686,7 +4592,7 @@ def cmd_next(args: argparse.Namespace) -> int:
             })
         return 2
 
-    payload = _build_state_view(state, mode="full")
+    payload = _build_state_view(state, mode="full", plan_path=plan_path)
     if drift.status != DRIFT_OK:
         payload["plan_drift"] = drift._asdict()
 
@@ -3778,13 +4684,22 @@ def cmd_complete(args: argparse.Namespace) -> int:
     if sid not in state["steps"]:
         emit({"error": f"Unknown step: {sid}"})
         return 1
+    # Snapshot before the transition: this command is about to record an
+    # advance of its own, and a checkpoint written earlier cannot be
+    # judged against it (see _advance_reference_before_command()).
+    advance_before = _advance_reference_before_command(plan_path, state)
     try:
         transition_step(state, sid, COMPLETED)
     except ValueError as e:
         emit({"error": str(e)})
         return 1
     task_id = state["steps"][sid].get("task_id")
-    view = _build_state_view(state)
+    # Before _build_state_view(), which reads the pointer back to decide
+    # whether a checkpoint is owed.
+    _record_cli_advance(plan_path, state)
+    view = _build_state_view(
+        state, plan_path=plan_path, advance_reference=advance_before
+    )
     save_state(plan_path, state)
     payload = {"status": "completed", "step": sid, "task_id": task_id, **view}
     emit_formatted(payload, args.format, lambda d: format_transition_md("completed", d))
@@ -3804,7 +4719,7 @@ def cmd_fail(args: argparse.Namespace) -> int:
         emit({"error": str(e)})
         return 1
     task_id = state["steps"][sid].get("task_id")
-    view = _build_state_view(state)
+    view = _build_state_view(state, plan_path=plan_path)
     save_state(plan_path, state)
     # S2.2 Addendum: pure side effect on disk, no payload/format change --
     # see _write_stop_marker_on_fail()'s docstring for why this exists.
@@ -4057,13 +4972,17 @@ def cmd_skip(args: argparse.Namespace) -> int:
     if sid not in state["steps"]:
         emit({"error": f"Unknown step: {sid}"})
         return 1
+    advance_before = _advance_reference_before_command(plan_path, state)
     try:
         transition_step(state, sid, SKIPPED)
     except ValueError as e:
         emit({"error": str(e)})
         return 1
     task_id = state["steps"][sid].get("task_id")
-    view = _build_state_view(state)
+    _record_cli_advance(plan_path, state)
+    view = _build_state_view(
+        state, plan_path=plan_path, advance_reference=advance_before
+    )
     save_state(plan_path, state)
     payload = {"status": "skipped", "step": sid, "task_id": task_id, **view}
     emit_formatted(payload, args.format, lambda d: format_transition_md("skipped", d))
@@ -4153,7 +5072,7 @@ def cmd_recap(args: argparse.Namespace) -> int:
 
     # mode="full" + no save_state(): recomputes the ready set for display
     # without persisting previously_reported_ready (print-only, T6).
-    view = _build_state_view(state, mode="full")
+    view = _build_state_view(state, mode="full", plan_path=plan_path)
     next_step = view["ready_steps_new"][0] if view["ready_steps_new"] else None
 
     # cwd-keyed, same lookup cmd_pointer() uses; require_valid=False so a
@@ -4168,6 +5087,7 @@ def cmd_recap(args: argparse.Namespace) -> int:
             "plan_drift": drift._asdict(),
             "checkpoint_path": str(checkpoint_path_for(plan_path)),
             "checkpoint_text": checkpoint_text,
+            "checkpoint_note": view.get("checkpoint_note"),
             "summary": view["summary"],
             "next_step": next_step,
             "pointer": None,
@@ -4203,7 +5123,9 @@ def cmd_recap(args: argparse.Namespace) -> int:
     lines.append("")
     lines.append("## Next")
     if next_step is not None:
-        lines.extend(_format_recap_next_step(next_step, plan_path))
+        lines.extend(
+            _format_recap_next_step(next_step, plan_path, view.get("checkpoint_note"))
+        )
     elif s["all_done"]:
         lines.append("(plan 全部完成，無下一步)")
     else:
@@ -4237,6 +5159,55 @@ def cmd_recap(args: argparse.Namespace) -> int:
 
     print("\n".join(lines))
     return 0
+
+
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    """`checkpoint <plan>` — dispense the canonical shape, or verify the
+    file against the five gates (S6.1).
+
+    `--template` prints the shape and nothing else; it deliberately does
+    NOT create the file. A subcommand that wrote a checkpoint would be the
+    program issuing a receipt for work only a person or an agent can do,
+    which is the failure this whole mechanism exists to end. Redirect it
+    yourself, fill it in, then run this command again without the flag.
+
+    Without the flag it runs the gates and prints one line per gate; exit
+    status is 0 when all five pass and 1 otherwise, so it is usable as a
+    shell gate. It never repairs anything it finds wrong.
+    """
+    plan_path = Path(args.plan).resolve()
+    if args.template:
+        print(checkpoint_template(plan_path), end="")
+        return 0
+
+    resolved = resolve_pointer_for_hook(Path.cwd())
+    pointer = resolved.data if resolved else None
+    # Best-effort: the gates work without state (the freshness gate
+    # then has one fewer source for its reference and says so), and
+    # `checkpoint` must stay usable on a plan whose state is missing.
+    try:
+        state = load_state(plan_path)
+    except (OSError, ValueError):
+        state = None
+    verdict = verify_checkpoint(
+        plan_path, pointer=pointer, state=state, now=time.time()
+    )
+
+    if args.format == "json":
+        emit({
+            "ok": verdict.ok,
+            "checkpoint_path": verdict.path,
+            "gates": [g._asdict() for g in verdict.gates],
+        })
+        return 0 if verdict.ok else 1
+
+    print(f"# Checkpoint gates: {verdict.path}")
+    for gate in verdict.gates:
+        print(f"{'PASS' if gate.ok else 'FAIL'}  {gate.name}: {gate.detail}")
+    if not verdict.ok:
+        print()
+        print(_render_checkpoint_note(plan_path, verdict))
+    return 0 if verdict.ok else 1
 
 
 def cmd_reset(args: argparse.Namespace) -> int:
@@ -4878,6 +5849,18 @@ def main() -> None:
     p_recap.add_argument("plan")
     add_format_flag(p_recap)
     p_recap.set_defaults(func=cmd_recap)
+
+    p_checkpoint = sub.add_parser(
+        "checkpoint",
+        help="Dispense the checkpoint template (--template) or verify the file",
+    )
+    p_checkpoint.add_argument("plan")
+    p_checkpoint.add_argument(
+        "--template", action="store_true",
+        help="Print the canonical checkpoint shape to stdout (writes nothing)",
+    )
+    add_format_flag(p_checkpoint)
+    p_checkpoint.set_defaults(func=cmd_checkpoint)
 
     p_reset = sub.add_parser("reset", help="Reset step(s) to pending")
     p_reset.add_argument("plan")

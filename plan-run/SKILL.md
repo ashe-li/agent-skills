@@ -131,20 +131,61 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 ### 3. `checkpoint.md` + wall-clock 觸發
 
-`.plan-state/<slug>.checkpoint.md`：推進到輪數預算邊界或 phase 邊界時，hook reason 會多印一段指示，把進度**寫進檔案**而不是只在回合裡輸出摘要——摘要留在 transcript 裡，compaction 或新 session 一來就沒了。reason 裡附這份檔案的完整絕對路徑（`checkpoint_path_for()` 沿用 `state_path_for()` 同一套路徑推導，只是同目錄換副檔名）。
+`.plan-state/<slug>.checkpoint.md`：需要 check-in 時，**每一個會印出 ready step 的輸出**（`next`、`complete`／`fail`／`skip` 的 Newly unlocked 區塊、`recap`、Stop hook reason）都會多印一段指示，把進度**寫進檔案**而不是只在回合裡輸出摘要——摘要留在 transcript 裡，compaction 或新 session 一來就沒了。指示裡附這份檔案的完整絕對路徑（`checkpoint_path_for()` 沿用 `state_path_for()` 同一套路徑推導，只是同目錄換副檔名）。
 
-**四要件缺一不可**（借自 AgentFlow 的 10 分鐘 WIP checkpoint，`agentflow/skills/agentflow/SKILL.md:62`）：
+> **這一段以前只送到 Stop hook**，而預設模式走 CLI，所以整個機制存在期間產出零份檔案（普查：`.verification/2026-09-08/mechanism-3-checkpoint-zero-artifacts.md`）。S6.1 把送達補到全部表面，並讓程式自己去檔案系統驗。
+
+**程式會驗，不只是請你寫**（S6.1，五道 gate，全部是純檔案系統操作）：
+
+| Gate | 驗什麼 | 失敗長相 |
+|---|---|---|
+| existence | `.plan-state/<slug>.checkpoint.md` 真的在磁碟上 | 檔案不存在 |
+| uniqueness | `.plan-state/` 裡**恰好一份**檔案帶著 `Plan: <slug>` 這行，且就是正規路徑那份 | 0 份（沒寫／沒掛 identity 行）或 >1 份（另開一份充數） |
+| freshness | 內容時間戳與 `os.stat().st_mtime` **互相吻合**，且兩者都不早於上次真正推進 | 訊息會講明是**內容時間戳**還是**mtime**那一側對不上，以及 reference 來自哪裡 |
+| shape | 四要件各出現一次且有內容（還留著 `<...>` 佔位字串也算沒寫） | 列出缺哪一項 |
+| identity | `os.lstat` 是 regular file 非 symlink；sha256 在 checked／opened／read 三次之間不變 | symlink、或讀取期間檔案被換掉 |
+
+五道全過時，輸出收斂成一行 `CHECKPOINT OK — 5/5 gates pass: <path>`；沒過就逐條列出未過的關卡。手動跑：`plan_runner.py checkpoint <plan>`（exit 0／1）。
+
+**freshness 的「上次真正推進」從哪來**：pointer 的 `last_advance_at` 與 plan state 裡最新的 `completed_at`，**取兩者較晚的那一個**（訊息會標 `from pointer` 或 `from plan state`）。兩個來源都拿不到時（沒有 pointer，且還沒有任何 step completed），這道 gate **只驗 stamp 與 mtime 一致**，訊息會明講 `stamp/mtime consistency only` 與原因——不會印成像驗過的樣子。
+
+> `skipped` 的 step **不寫 `completed_at`**（`transition_step()` 只對 completed／failed 寫），所以純靠 skip 推進的 plan 在 state 這一側取不到值。取「較晚者」的用意就在這裡：缺一側只會少一層嚴格度，不會讓 gate 誤判成新鮮。
+
+**`complete` / `skip` 會記錄推進**：兩個指令寫 pointer 的 `last_advance_at`（`start` 不寫——發工作不等於做完；`fail` 也不寫——完成計數沒動，而且它會寫 stop 標記）。這件事以前只發生在 Stop hook 路徑上，所以預設 CLI 模式下 `last_advance_at` 永遠是 `None`，wall-clock 規則退化成量 pointer 年齡、freshness 則拿一個凍住的 `created_at` 當基準——一份三小時前寫的過期 checkpoint 會一直顯示 `CHECKPOINT OK`。
+
+**一個指令自己記錄的推進，不會用來評判它執行前就存在的 checkpoint**：`complete` / `skip` 在轉換前先取一次基準，再拿那個基準去驗。不變量是「checkpoint 比**在這個指令之前**發生的每一次推進都新」——一份檔案不可能預先涵蓋在它之後才被記錄的工作。比這更早的推進照樣擋得住，該抓的一項都沒放掉。**這個豁免只限記錄那次推進的那個指令**：接下來的 `next` 會照常把它算進去，所以「寫完 checkpoint 又繼續完成 step」在下一個指令就會顯示過期——checkpoint 契約本來就要求寫完停下，不是繼續推。
+
+**取得標準格式**：`plan_runner.py checkpoint <plan> --template`。它**只印不寫**——程式代寫的 checkpoint 是替沒做的事開收據，這正是這個機制要終結的失敗。範本由程式產生（不是文件裡的靜態字串），所以「發下去的形狀」與「驗的形狀」不會各自漂移（AgentFlow I-063 的教訓）。
+
+**四要件缺一不可**（借自 AgentFlow 的 10 分鐘 WIP checkpoint，`agentflow/skills/agentflow/SKILL.md:62`），另加兩行由 gate 使用的標頭：
 
 ```markdown
+Plan: <slug>                       # uniqueness gate 用來認領檔案
+Checkpoint at: <ISO-8601>          # freshness gate 用來與 mtime 交叉比對
+
 Finished: 已完成什麼
 Running now: 現在正在跑什麼
 Still to do: 還剩什麼
 Next work action: 下一個具體動作
 ```
 
+**信任邊界**：程式只驗這份檔案「有沒有、唯不唯一、新不新、形狀對不對、是不是同一個檔案」，**絕不把裡面寫的東西讀回來當後續決策的輸入**——不會照著 `Next work action:` 派工，也不會把 `Still to do:` 解析成 step 狀態。`Plan:` 與 `Checkpoint at:` 兩個欄位是唯一被讀取的內容，且只用來判斷這份檔案自身是否有效。與 §2 對 `stop.md` 的原則同一條線。
+
 **自足性規則（契約核心）**：checkpoint **不得要求讀者回頭讀 plan.md、state.json 或前一則 checkpoint 才看得懂**。判準是——一個完全沒有本次 context 的人，只讀這一份檔案，就要能回答「下一步該做什麼」。這條後續由 fresh-context agent 驗收。
 
-**觸發時機是兩條規則之一，不是只看 turn 數**：(a) 續推輪數逼近本輪預算上限，或 (b) 距上次真正推進（`pointer['last_advance_at']`）超過 `CHECKPOINT_STALE_SECONDS`（預設 2700 秒 = 45 分鐘，`PLAN_RUN_CHECKPOINT_STALE_SECONDS` 環境變數可調）的 wall-clock 逾時——這條抓的是「卡住不動」，跟 turn 數無關，即使一輪只推了 1 步、但那 1 步真的跑了 50 分鐘，一樣會觸發。
+**觸發時機是三條規則之一，不是只看 turn 數**：
+
+| # | 條件 | 需要 Stop hook？ | 抓的是 |
+|---|---|---|---|
+| 1 | 續推輪數逼近本輪預算上限（hook 判定後寫進 pointer 的 `checkpoint_pending`） | 是 | 一輪塞太多 |
+| 2 | 距上次真正推進（`pointer['last_advance_at']`）超過 `CHECKPOINT_STALE_SECONDS`（預設 2700 秒 = 45 分鐘，`PLAN_RUN_CHECKPOINT_STALE_SECONDS` 可調） | 否 | **卡住不動**（異常訊號） |
+| 3 | **剛跨過 phase 邊界**：下一個 ready step 在 phase N，phase N-1 已全部 completed/skipped，且 phase N 還沒有任何 step 完成 | 否 | **這裡是好的交接點**（N2 主要靠這條） |
+
+規則 2 抓的是異常，規則 3 抓的才是「該收尾了」。**兩條在預設 CLI 模式（沒裝 Stop hook）下都會觸發**——規則 3 純由 plan state 推導，不讀時鐘、不讀 pointer、不需要 attach。cwd 的 pointer 若指向另一份 plan，三條都不觸發。
+
+**整份 plan 完成時不索取 checkpoint**：沒有 ready step 就沒有下一步要交接，該講的話在完成區塊（對 Acceptance Criteria 逐項確認、然後 `/plan-archive`）。要查驗仍可隨時跑 `plan_runner.py checkpoint <plan>`。
+
+**沒有 sticky 旗標，也不需要**：沒寫就每次都印，寫了就塌成一行 `CHECKPOINT OK`——重複印本身就是壓力，而且會自己解除。新 phase 一有 step 完成，規則 3 也自行失效。
 
 **內容安全規則**：明文禁止貼 log 原文、禁止任何 token / key / password / JWT。`.plan-state/*.checkpoint.md` **在 `.gitignore` 裡，不進版控**（高頻改寫的 WIP 快照，每次 `checkpoint_pending` 觸發都可能整份重寫）——但這是最後一道防線，不是可以鬆懈的理由，寫的當下就當作可能外流處理。
 

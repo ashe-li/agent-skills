@@ -696,6 +696,18 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
   - Dependencies: S5.1
   - Why: N2「停下來那一刻人回來能 30 秒接上」是本 plan 宣稱要解決的問題之一，而它在整段存在期間產出零份檔案（全機器普查：`.plan-state/` 只有 `.state.json` 與 `.state.lock` 兩種副檔名，跨 4 repo 約 70 份 plan；git history 全 branch 亦空）。**驗收必須實跑到真的生出一份**——修完送達之後檔案仍依賴 agent 照做，程式只能驗「有沒有」不能代寫，所以「跑出一份真的 checkpoint」是這個 step 唯一有意義的完成證據。
 
+  - Addendum（2026-09-08，派工前修正）：Action 裡引用的 `ReadyStepHardStopDeliveryTestCase` **已於 S6.2 隨機制 5 一併刪除**，該類別現已不存在。要沿用的是它的**模式**而非那個名字——枚舉「每一個會印出 ready-step 的表面」，任何一個漏接就紅。目前的表面共三處：`_format_full_step_block()`（`next` 全量列表 + start/complete/fail/skip 的 Newly unlocked 區塊）、`_format_recap_next_step()`（`recap`）、`_render_next_step()`（Stop hook reason，唯一已接上 `_render_checkpoint_note()` 的一處）。前兩者共用 `_ready_step_header_and_fields()`（`plan_runner.py:1047`），那個共用前綴就是 S4.3 留下來的機制，checkpoint 送達應優先掛在那裡而不是各自複製。
+
+  - Addendum-2（2026-09-08，實作回報後裁決七項分歧，全部採納）：
+    1. **義務判定不做成 sticky 欄位**，每次從 `checkpoint_pending`（hook 寫）OR wall-clock 重新推導。**追加第三條觸發：phase 邊界，純由 state 推導**——原設計讓預設 CLI 模式只剩 wall-clock（那條抓的是「卡住不動」，是異常訊號而非「好的收尾點」），等於機制的主要觸發條件在主要模式下是死的，與修之前的病灶同構。成本很低：CLI 的 note 只是多印幾行，沒有 AskUserQuestion、不 exit non-zero、不擋任何事；20 step / 7 phase 的 plan 一輪最多 7 次。**不得沿用 hook 那條的 `auto-advanced >= PHASE_MIN` 條件**（CLI 無 auto-advance 計數，硬套會讀到永遠為 0 的東西）。
+    2. **唯一性掃描口徑**改為「掃同類檔案、用本 plan 的 identity 行篩、再判 0/多」。字面規格（`.plan-state/` 裡 `*.checkpoint.md` 不是恰好一份就 fail）會在同一個 `plans/active/` 跑多份 plan 時必然誤判——**本 repo 自己就是這種結構**。改後的做法才是 AgentFlow 真正在做的事。
+    3. **契約多兩行標頭**（`Plan: <slug>`、`Checkpoint at: <ISO>`）：四要件本身沒有時間戳與 plan 標記，而唯一性與新鮮度兩道 gate 需要它們。這兩個欄位是**唯一被程式讀取的內容**，且只用來判斷檔案自身是否有效——信任邊界不變。
+    4. **`start` 不是 ready-step 表面**：本 step Action 寫的「start/complete/fail/skip 的 Newly unlocked 區塊」有誤，`cmd_start()` 不建 state view。枚舉測試涵蓋 5 個 CLI 表面 + hook，另加 source-level guard（呼叫三個 renderer 而未把 note 傳下去的行會紅）。
+    5. **同一輪解鎖多個 step 時指示只印一次**（掛第一個 block）。掛在共用前綴會讓 4 個 ready step 印 4 份同樣的十二行——那正是 S6.2 移除機制 5 的理由。
+    6. **`checkpoint <plan>`（無旗標）跑 gate 並回 exit 0/1**，超出字面上的「`checkpoint --template` 子指令」。沒有它就無法從 shell 逐一驗破壞，驗收本身會做不到。
+    7. **模板直接填真實時間戳**（AgentFlow 留佔位字串）。依據是 AgentFlow 自己的 I-056（model 猜過時間）；我們的模板是即時產生的，可以給真值，重用舊模板由 mtime 交叉比對抓。
+  - Addendum-3（設計性質，值得保留）：checkpoint 指示**不靠 sticky 旗標壓抑，靠「把檔案寫出來」滿足**——沒寫就每次都印，寫了就塌成一行 `CHECKPOINT OK — 5/5 gates pass`。所以不需要為防重複而引進計數器或新 pointer 欄位；重複印本身就是壓力來源，而且會自己解除。這是「facts 由程式收集」相對「model 自報」的直接紅利：狀態不必被記住，因為它每次都可以被重新查證。
+
 - [ ] **S6.2** — 機制 5（auto-reply 與 hard-stop 送達）整個移除
   - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `scripts/tests/test_plan_run_hook.py`, `plan-run/SKILL.md`, `CHANGELOG.md`
   - Agent: general-purpose (Sonnet)

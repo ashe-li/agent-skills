@@ -14,7 +14,7 @@
   "auto_reply": "off",
   "parent_task_id": null,
   "created_at": "2026-09-08T08:33:28.706936+00:00",
-  "updated_at": "2026-09-08T09:02:49.217262+00:00",
+  "updated_at": "2026-09-08T10:54:23.875435+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -323,10 +323,10 @@
       "action": "先寫測試再實作。**核心改動是讓 hook 自己去檔案系統取事實，不再只生一段指示要 model 自己寫。** 依 `.verification/2026-09-08/agentflow-portability-study.md` 的 A 類技術 #3–#7 實作五道 gate：**存在性**（`checkpoint_pending` 成立過之後，`.plan-state/<slug>.checkpoint.md` 必須真的在磁碟上）、**唯一性**（找到 0 份或多份都 fail）、**新鮮度**（內容時間戳需 ≥ 最近一次推進；另**交叉比對 `os.stat().st_mtime`**——研究指出 AgentFlow 用內容時間戳是為了跨 clone 穩定，我們是本機場景，mtime 是作業系統寫的、model 要偽造需額外呼叫）、**格式**（四要件形狀由一個 `checkpoint --template` 子指令發配、strict parser 驗——直接抄 I-063 的教訓：形狀不能只活在散文裡）、**檔案身分**（`os.lstat` 非 symlink、讀取期間 sha256 不變）。**同時修送達**：`_render_checkpoint_note()` 目前只掛在 Stop hook 的 `next_step` reason 上，而預設模式走 CLI——必須比照 S4.3 對 hard-stop 做過的做法接進 CLI ready-step 輸出，並沿用 `ReadyStepHardStopDeliveryTestCase` 那個「漏接就紅」的枚舉測試模式。",
       "risk": null,
       "estimated": 150,
-      "status": "pending",
+      "status": "completed",
       "task_id": null,
-      "started_at": null,
-      "completed_at": null,
+      "started_at": "2026-09-08T09:22:11.453148+00:00",
+      "completed_at": "2026-09-08T10:54:23.850314+00:00",
       "failure_reason": null
     },
     "S6.2": {
@@ -440,7 +440,6 @@
   },
   "plan_sha256": "0d253578034db557e3b687aab1e98dcfb53dd8aa7aaee5ae1477e802b825fcfa",
   "previously_reported_ready": [
-    "S6.1",
     "S6.3",
     "S6.4"
   ]

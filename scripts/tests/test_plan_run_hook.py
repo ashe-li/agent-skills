@@ -2700,5 +2700,164 @@ class FailAutoStopMarkerTests(unittest.TestCase):
         self.assertNotIn("stop_marker", payload)
 
 
+
+# ---------------------------------------------------------------------------
+# S5.1 finding S2: secret-shape redaction in the stop marker's Reason field.
+#
+# stop.md is the one free-text field in this feature that is *tracked by git*
+# (.gitignore deliberately excludes *.checkpoint.md but not *.stop.md), and
+# `_write_stop_marker_on_fail()` fills it from whatever `--reason` an
+# unattended `fail` was handed -- very plausibly a pasted error log. The
+# content contract already forbids secrets; these tests are the enforcement
+# the contract never had.
+# ---------------------------------------------------------------------------
+
+
+def _shape_sample(prefix: str, body: str) -> str:
+    """Assemble a synthetic secret sample at runtime.
+
+    The samples below are realistic on purpose: a redaction test that feeds
+    the redactor something a scanner would not recognise proves nothing. But
+    GitHub push protection matches on *shape*, not on validity -- it cannot
+    tell these from live keys, and a contiguous literal here blocks every
+    push of this repository.
+
+    Splitting the prefix from the body costs the test nothing -- the redactor
+    still receives the complete string at runtime -- and keeps the file
+    pushable. Do not re-inline these; the fix for a blocked push is this,
+    not the "allow secret" URL.
+    """
+    return prefix + body
+
+
+# One sample per shape named in ~/.claude/claude-security-guidance.md.
+# All values are synthetic (several are the vendors' own doc examples).
+_SECRET_SHAPES = tuple(
+    (label, _shape_sample(prefix, body))
+    for label, prefix, body in (
+        ("sk_live_", "sk_live_", "4eC39HqLyjWDarjtT1zdp7dc"),
+        ("sk-ant-", "sk-ant-", "api03-AAAABBBBCCCCDDDD1234"),
+        ("AKIA", "AKIA", "IOSFODNN7EXAMPLE"),
+        ("ghp_", "ghp_", "16C7e42F292c6912E7710c838347Ae178B4a"),
+        ("github_pat_", "github_pat_", "11ABCDEFG0abcdefghijkl_1234567890"),
+        ("xoxb-", "xoxb-", "123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"),
+        ("xoxp-", "xoxp-", "123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"),
+        ("AIza", "AIza", "SyA0abcdefghijklmnopqrstuvwxyz012345"),
+        ("PEM private key", "-----BEGIN ", "RSA PRIVATE KEY-----"),
+    )
+)
+
+_GH_PAT = dict(_SECRET_SHAPES)["ghp_"]
+_AWS_KEY = dict(_SECRET_SHAPES)["AKIA"]
+
+
+class StopMarkerSecretRedactionTests(unittest.TestCase):
+    """`Reason` must never carry a known secret shape into a tracked file."""
+
+    SHAPES = _SECRET_SHAPES
+
+    def _state(self):
+        return make_state({"S0.1": make_step(status="failed", title="Do thing")})
+
+    def _render(self, reason: str) -> str:
+        return pr.render_stop_marker(Path(FAKE_PLAN_PATH), self._state(), reason)
+
+    def test_every_known_shape_is_removed_from_the_rendered_marker(self):
+        for label, sample in self.SHAPES:
+            with self.subTest(shape=label):
+                text = self._render(f"部署失敗，log 貼上：{sample} 之後就爆了")
+                self.assertNotIn(sample, text, f"{label} survived into stop.md")
+
+    def test_redaction_leaves_a_visible_trace(self):
+        """Silent redaction is its own failure: the operator must be told
+        that what they typed is not what landed on disk."""
+        text = self._render(f"token={_GH_PAT}")
+        self.assertIn("Redacted:", text)
+        self.assertIn("ghp_", text)  # the *shape name*, not the value
+
+    def test_redaction_names_every_distinct_shape_it_hit(self):
+        text = self._render(
+            f"{_AWS_KEY} 與 {_GH_PAT} 都在 log 裡"
+        )
+        marker = [ln for ln in text.split("\n") if ln.startswith("- Redacted:")]
+        self.assertEqual(len(marker), 1, "exactly one Redacted line expected")
+        self.assertIn("AKIA", marker[0])
+        self.assertIn("ghp_", marker[0])
+
+    def test_clean_reason_gets_no_redaction_line(self):
+        text = self._render("S0.1 造成 CI 一直紅")
+        self.assertIn("Reason: S0.1 造成 CI 一直紅", text)
+        self.assertNotIn("Redacted:", text)
+
+    def test_redaction_runs_before_truncation_so_a_late_secret_cannot_ride_along(self):
+        """_sanitize_plan_field() caps the reason at PLAN_FIELD_TRUNCATE_CHARS.
+        If redaction ran after that cut, a secret straddling the boundary would
+        leave a usable prefix behind."""
+        # Padded so the secret straddles the truncation boundary, leaving an
+        # 8-char prefix -- shorter than the pattern's minimum run, so a
+        # redact-after-truncate implementation would silently miss it.
+        padding = "說" * (pr.PLAN_FIELD_TRUNCATE_CHARS - 8)
+        secret = _GH_PAT
+        text = self._render(padding + secret)
+        self.assertNotIn("ghp_16C7", text)
+
+    def test_helper_reports_shapes_and_is_pure(self):
+        before = _AWS_KEY
+        redacted, shapes = pr._redact_secret_shapes(before)
+        self.assertNotIn(before, redacted)
+        self.assertEqual(shapes, ["AKIA"])
+        self.assertEqual(before, _AWS_KEY)  # input untouched
+        self.assertEqual(pr._redact_secret_shapes("nothing here"), ("nothing here", []))
+
+    def test_non_string_reason_does_not_raise(self):
+        self.assertEqual(pr._redact_secret_shapes(None), ("", []))
+
+
+class StopMarkerRedactionBothWritePathsTests(unittest.TestCase):
+    """Both writers must be covered, not just the manual one.
+
+    `cmd_stop --write` is the path a human takes; `_write_stop_marker_on_fail()`
+    is the path an unattended `fail` takes at 3am with an agent-supplied
+    reason -- the more dangerous of the two. Wiring only one of them repeats
+    this session's own "only one delivery path" failure.
+    """
+
+    SECRET = _GH_PAT
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(dir=Path.home(), prefix=".plan-run-test-")
+        self.addCleanup(self._tmp.cleanup)
+        self.plan_path = Path(self._tmp.name).resolve() / "plan.md"
+        self.plan_path.write_text("# plan\n", encoding="utf-8")
+        self.marker = pr.stop_marker_path_for(self.plan_path)
+
+    def _state(self):
+        return make_state({"S0.1": make_step(status="failed", title="Do thing")})
+
+    def test_automatic_fail_path_redacts(self):
+        written = pr._write_stop_marker_on_fail(
+            self.plan_path, self._state(), f"agent 貼上 log: {self.SECRET}",
+        )
+        self.assertTrue(written)
+        text = self.marker.read_text(encoding="utf-8")
+        self.assertNotIn(self.SECRET, text)
+        self.assertIn("Redacted:", text)
+
+    def test_manual_stop_write_path_redacts(self):
+        args = argparse.Namespace(
+            plan=str(self.plan_path), write=True, clear=False,
+            reason=f"手動停機: {self.SECRET}", reason_reviewed=False, format="md",
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = pr.cmd_stop(args)
+        self.assertEqual(rc, 0)
+        text = self.marker.read_text(encoding="utf-8")
+        self.assertNotIn(self.SECRET, text)
+        self.assertIn("Redacted:", text)
+        self.assertNotIn(self.SECRET, out.getvalue())
+
+
+
 if __name__ == "__main__":
     unittest.main()

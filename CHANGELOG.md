@@ -39,10 +39,6 @@
 
   路徑推導沿用 `checkpoint_path_for()` 的 `plan_path.stem` 模式，不用 state 的 `slug` 欄位字串拼接——避免一個被竄改的 `slug`（state.json 使用者可寫）透過拼接跳出 `.plan-state/`。
 
-- **`plan_runner.py` 新增選用機制 `auto_reply`（S4.2/S4.3），預設 `off`**：state JSON 新增 `auto_reply: "on"|"off"` 欄位，開啟後例行問題（有既有慣例可循、完全可逆、不離開本機、不超預算）可不停下來問人就自動決定，非例行的（四類硬停止 H1–H4：owner-only 決定／不可逆操作／對外送出／超支）不論開關一律照常停下等人。新增 `plan_runner.py auto-reply <plan> on|off` 開關指令（開啟前檢查 checkpoint 路徑可寫，不可寫則拒絕啟用）、`plan_runner.py hard-stop <plan> <step>` 唯讀查詢單一 step 的四類硬停止判定、`next` 的一次性旗標 `--keep-going`（臨時視為 on）與 `--no-auto-reply`（臨時視為 off，兩者同給時後者贏），以及 checkpoint 模板新增的 `## Auto-answered` 留痕區塊（內容契約，非程式強制）。完整的四類硬停止對映表與使用說明見 `plan-run/SKILL.md`「長跑治理」節。
-
-  **不是 behavior change**：`auto_reply` 缺欄位或未設定時等同 `off`，既有 plan 與既有 state 的行為完全不變——這是刻意設計，理由與漂移偵測缺 `plan_sha256` 欄位時放行相同：新欄位不能讓升級前就存在的 state 靜默改變行為。
-
 - **`plan_runner.py` 新增 `checkpoint.md` 進度快照契約（S3.1/S3.2）**：`.plan-state/<slug>.checkpoint.md` 是寫給**人**看的進度快照，四要件模板——`Finished:`（已完成什麼）／`Running now:`（現在在跑什麼）／`Still to do:`（還剩什麼）／`Next work action:`（下一個實質動作）。契約要求是**自足性**：讀的人只憑這份檔案就要能回答「下一步該做什麼」，不得依賴對話脈絡、不得寫「見上文」。內容安全規則：禁止貼 log 原文，禁止任何 token / key / password / JWT。
 
   何時被要求寫：`decide_budget()` 新增一條 wall-clock 規則——距上次推進超過 `CHECKPOINT_STALE_SECONDS`（預設 2700 秒／45 分鐘，可用 `PLAN_RUN_CHECKPOINT_STALE_SECONDS` 覆寫）就設 `checkpoint_pending`。門檻值取自 567 筆真實 step 間隔的實測分佈（median 3.9 分／p90 21.2 分／p95 40.8 分）。

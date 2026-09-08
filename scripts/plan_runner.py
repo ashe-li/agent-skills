@@ -810,11 +810,6 @@ def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
         "slug": parsed["slug"],
         "title": parsed["title"],
         "phase_order": parsed["phase_order"],
-        # S4.2: default off, and `init --force` / the documented drift remedy
-        # (`rm state && init`) both rebuild state wholesale and so clear any
-        # opt-in. Failing back to "ask every time" is the safe direction --
-        # a setting that survived a plan rewrite would be the dangerous one.
-        "auto_reply": AUTO_REPLY_OFF,
         "parent_task_id": None,
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -1050,22 +1045,19 @@ def _format_step_action_block(
 
 
 def _ready_step_header_and_fields(step: dict[str, Any]) -> list[str]:
-    """Header + agent/skill/command/files/action fields + hard-stop
-    findings (S4.3) -- the field prefix every ready-step renderer shares.
+    """Header + agent/skill/command/files/action fields -- the field
+    prefix every ready-step renderer shares.
 
-    Extracted so a new renderer inherits hard-stop delivery by
-    construction instead of by remembering to copy these lines: this is
-    exactly the failure mode found in review -- `_format_full_step_block()`
+    Extracted so a new renderer inherits this prefix by construction
+    instead of by remembering to copy these lines: `_format_full_step_block()`
     and `_format_recap_next_step()` had each grown their own copy of this
-    block, so wiring hard-stop into one did not wire it into the other.
-    See `_hard_stop_hook_note()`'s docstring for the full list of surfaces
-    this function (transitively) backs, and
-    `ReadyStepHardStopDeliveryTestCase` for the test enumerating them.
+    block before it was pulled out here.
 
-    `budget_state` is always None here: no real per-step token accounting
-    reaches any of these rendering call sites (S4.2 finding; see plan-run/
-    SKILL.md's H4 caveat), so H4 stays silent in every one of them, never
-    falsely clear.
+    S6.2 removed mechanism 5's per-step findings, which this function used
+    to append (plans/active/unattended-long-run-governance.md Phase 6) --
+    see the removal notice near `decide_budget()`. A future renderer that
+    needs to surface per-step findings again should hang them here, for
+    the same reason the block was extracted in the first place.
     """
     lines: list[str] = []
     title = step["title"]
@@ -1079,24 +1071,15 @@ def _ready_step_header_and_fields(step: dict[str, Any]) -> list[str]:
         lines.append(f"- files: {step['files']}")
     if step.get("action"):
         lines.append(f"- action: {step['action']}")
-    findings = hard_stop_findings(step.get("action") or "", step, None)
-    if findings:
-        lines.append(_hard_stop_hook_note(findings))
     return lines
 
 
 def _format_full_step_block(step: dict[str, Any]) -> list[str]:
-    """Full ready-step block: header + fields + hard-stop findings (S4.3)
-    + next action sequence.
+    """Full ready-step block: header + fields + next action sequence.
 
     Backs `next`'s full listing AND every transition command's ("start" /
     "complete" / "fail" / "skip") "Newly unlocked" delta block -- both
-    route through `_format_state_view_lines()` -> this function. That
-    makes this one of the CLI-path counterparts of `_branch_ready_step()`'s
-    Stop hook suffix (mode B): mode A (the *default* mode, plan-run/
-    SKILL.md Step 1.5) drives entirely off these CLI outputs and never
-    touches the hook path at all, so hard-stop findings have to reach the
-    driving agent here too, not only there.
+    route through `_format_state_view_lines()` -> this function.
     """
     lines = _ready_step_header_and_fields(step)
     deps = step["deps"]
@@ -1114,11 +1097,10 @@ def _format_full_step_block(step: dict[str, Any]) -> list[str]:
 
 def _format_recap_next_step(step: dict[str, Any], plan_path: Path) -> list[str]:
     """`recap`'s ready-step block (S3.3) -- same field layout as
-    _format_full_step_block() (both build on _ready_step_header_and_fields(),
-    S4.3, hard-stop findings included), but threads the real `plan_path`
-    through to _format_step_action_block() so the printed dispatch
-    commands are runnable verbatim instead of carrying the `<plan>`
-    placeholder.
+    _format_full_step_block() (both build on _ready_step_header_and_fields()),
+    but threads the real `plan_path` through to _format_step_action_block()
+    so the printed dispatch commands are runnable verbatim instead of
+    carrying the `<plan>` placeholder.
 
     Kept as its own function rather than adding a plan_path parameter to
     _format_full_step_block(): that function backs `next`/transition
@@ -1126,12 +1108,6 @@ def _format_recap_next_step(step: dict[str, Any], plan_path: Path) -> list[str]:
     already has a documented reason (_format_step_action_block's
     docstring) tied to the Stop hook's fenced-data boundary -- not
     something to disturb for a single new caller.
-
-    Hard-stop findings reaching here matters more than at the other call
-    sites: `recap` is the single recovery entrypoint after compaction, a
-    fresh session, or a handoff (S3.3's whole reason to exist), so its
-    reader is the person with the *least* context and the least reason to
-    think of separately running `hard-stop`.
     """
     lines = _ready_step_header_and_fields(step)
     if step.get("risk"):
@@ -2110,8 +2086,12 @@ def decide_budget(
     4. (S3.2) the pointer has not advanced for longer than
        _effective_checkpoint_stale_seconds() -> also checkpoint_pending.
     5. otherwise -> plain block.
-    An `allow` here does NOT reset consecutive_blocks; only a fresh user
-    turn (stop_hook_active=false, handled by S1.2) does that.
+    An `allow` here does NOT reset consecutive_blocks; only a fresh prompt
+    (stop_hook_active=false, handled by S1.2) does that -- and "fresh prompt"
+    is not "fresh *user* turn": a teammate or cross-session message resets it
+    too (measured, see _HOOK_TURN_COUNTERS). Rule 2's checkpoint trigger
+    therefore effectively never fires in a message-rich session; rule 4 (wall
+    clock) is the only checkpoint trigger here that survives it.
 
     `now` is an injected epoch-seconds clock (time.time() in production,
     a fixed value in tests). It exists so rule 4 can be time-dependent
@@ -2191,597 +2171,15 @@ def decide_budget(
 
 
 # ---------------------------------------------------------------------------
-# auto-reply setting + four-category hard stops (S4.2)
+# Two mechanisms were designed here and both were removed after being
+# built, each on the user's own call: S4.4's four-choice pre-flight
+# confirmation gate (2026-09-08), and mechanism 5 -- the settle-without-
+# waking-the-owner setting plus its four-category owner/irreversible/
+# outward-channel/over-budget check -- that stood in this section
+# (2026-09-08, S6.2). Neither is coming back by re-adding a constant --
+# see plans/active/unattended-long-run-governance.md section 2.6 and
+# Phase 6 (S6.2) for the design record and both removal notices.
 # ---------------------------------------------------------------------------
-#
-# This section decides ONE question: "may this be settled without waking the
-# owner?" It never settles anything itself. Auto-answering, its mandatory
-# `Auto-answered:` provenance record and the `--keep-going` one-shot flag are
-# S4.3. S4.4 proposed a fifth mechanism on top of these; it was built and
-# then removed. Why it exists nowhere in this file:
-# plans/active/unattended-long-run-governance.md section 2.6 (design +
-# removal notice).
-#
-# The safety envelope is a REVERSE whitelist, taken verbatim from
-# ~/Documents/agentflow/skills/agentflow/docs/AG_GUIDE.zh-tw.md:119 --
-# "但有四件事不管怎麼設都一定停下來等你：只有主人能做的決定、無法復原的事、
-# 會透過新管道離開你機器的事、超過約定花費上限的事。"
-# (see also agentflow/skills/agentflow/SKILL.md:104)
-#
-# The direction matters more than the contents. Enumerating "what may be
-# automated" fails toward doing something nobody approved; enumerating "what
-# must stop" fails toward asking one extra question. Every ambiguity below is
-# therefore resolved toward a hit, and every predicate is traced to a rule the
-# user already wrote -- inventing a new rule here would be inventing a new
-# hole.
-
-AUTO_REPLY_ON = "on"
-AUTO_REPLY_OFF = "off"
-
-
-def auto_reply_setting(state: Any) -> str:
-    """Read `auto_reply` off a state dict. Anything but a literal "on" is off.
-
-    S1.2 inventoried ~187 in-flight states across every repo sharing this
-    runner: none carries an auto-reply field of any spelling. "Missing field
-    == off" is therefore the entire backward-compatibility story -- no
-    version negotiation, and a missing field is never a validation failure
-    (load_state() must keep accepting it, which is why this lives here and
-    not in a validator).
-
-    Deliberately asymmetric: only the exact opt-in string enables the
-    mechanism. A typo, a bool, a null, a truthy-looking "yes" -- all read as
-    off, because the failure direction of "misread as off" is one extra
-    question and the failure direction of "misread as on" is an unattended
-    decision.
-    """
-    if not isinstance(state, dict):
-        return AUTO_REPLY_OFF
-    raw = state.get("auto_reply")
-    if not isinstance(raw, str):
-        return AUTO_REPLY_OFF
-    return AUTO_REPLY_ON if raw.strip().lower() == AUTO_REPLY_ON else AUTO_REPLY_OFF
-
-
-def resolve_auto_reply(
-    state: Any, *, no_auto_reply: bool = False, keep_going: bool = False
-) -> str:
-    """Effective setting for one invocation.
-
-    `--no-auto-reply` is the escape hatch (T11d): it turns the mechanism
-    off for this call only and never writes back, so leaving it out of the
-    next command restores the stored value rather than silently having
-    disabled the feature.
-
-    `keep_going` is S4.3's `--keep-going` (plan §S4.3 Addendum-2): the
-    opposite direction, turning the mechanism on for this call only, also
-    never written back. It is `next`-only by construction -- nothing wires
-    it into the Stop hook's argument-less decide_hook_action() path, which
-    is the whole reason Addendum-2 settled on "not written to state" (a
-    hook path with no CLI args could not honor a one-shot flag any other
-    way). `no_auto_reply` still wins when both are set: turning the
-    mechanism off is always the safe direction, on either input.
-    """
-    if no_auto_reply:
-        return AUTO_REPLY_OFF
-    if keep_going:
-        return AUTO_REPLY_ON
-    return auto_reply_setting(state)
-
-
-HARD_STOP_OWNER_ONLY = "H1"
-HARD_STOP_IRREVERSIBLE = "H2"
-HARD_STOP_OUTWARD_CHANNEL = "H3"
-HARD_STOP_OVER_BUDGET = "H4"
-
-HARD_STOP_CATEGORIES = (
-    HARD_STOP_OWNER_ONLY,
-    HARD_STOP_IRREVERSIBLE,
-    HARD_STOP_OUTWARD_CHANNEL,
-    HARD_STOP_OVER_BUDGET,
-)
-
-HARD_STOP_LABELS = {
-    HARD_STOP_OWNER_ONLY: "只有主人能做的決定",
-    HARD_STOP_IRREVERSIBLE: "無法復原的事",
-    HARD_STOP_OUTWARD_CHANNEL: "會透過新管道離開你機器的事",
-    HARD_STOP_OVER_BUDGET: "超過約定花費上限的事",
-}
-
-# `dispatch-loop/SKILL.md:68` -- 「單 step 超預算 2 倍 → 停下重估，不加派補洞」.
-# The phase ratio comes from plan §2.5's H4 row (phase subtotal × 1.5).
-HARD_STOP_STEP_BUDGET_RATIO = 2.0
-HARD_STOP_PHASE_BUDGET_RATIO = 1.5
-
-_MEM = "~/.claude/projects/-Users-shiun-Documents-knowledge-base/memory/"
-_RULES = "~/.claude/rules/common/"
-
-RULE_DESIGNER_SPEC = _MEM + "feedback_designer_spec_no_unilateral_change.md:15"
-RULE_VISUAL_ADJUDICATION = "~/.claude/CLAUDE.md:20"
-RULE_RESUME_FRAMING = _MEM + "feedback_resume_claims_verify_and_honest_framing.md:10"
-RULE_EXTERNAL_DOC = _MEM + "feedback_external_doc_no_casual_label.md:12"
-RULE_EXPLICIT_LIST = _MEM + "feedback_explicit_list_before_authorize.md:12"
-RULE_GROUP_DECISIONS = _MEM + "feedback_group_decisions_not_per_item.md:13"
-
-RULE_PRE_DESTROY = _MEM + "feedback_pre_destroy_three_axis_check.md:26"
-RULE_FORCE_PUSH = _MEM + "feedback_force_push_confirm.md:13"
-RULE_NO_WILDCARD_DELETE = _MEM + "feedback_delete_explicit_paths_no_wildcard.md:11"
-RULE_GIT_WORKFLOW_STASH = _RULES + "git-workflow.md:16"
-
-RULE_REPO_OWNERSHIP_BACKEND = _RULES + "repo-ownership.md:8"
-RULE_REPO_OWNERSHIP_OTHERS = _RULES + "repo-ownership.md:9"
-RULE_AUTO_MERGE_MICRO_ONLY = _MEM + "feedback_auto_merge_small_infra_prs.md:42"
-RULE_NO_DEV_TO_PROD_API = _MEM + "feedback_no_dev_pointed_to_prod_api.md:22"
-RULE_OUTWARD_CHANNEL = (
-    "~/Documents/agentflow/skills/agentflow/docs/AG_GUIDE.zh-tw.md:119"
-)
-
-RULE_TOKEN_DISCIPLINE = "~/Documents/agent-skills/dispatch-loop/SKILL.md:68"
-
-
-class HardStopHit(NamedTuple):
-    """One reason to stop. `rule` is the file:line the predicate came from --
-    S5.1 re-derives every predicate from these, so a hit that cannot name its
-    source is a bug, not a finding."""
-
-    category: str
-    rule: str
-    evidence: str
-
-
-# --- command-position anchoring --------------------------------------------
-#
-# `guard-regex-must-anchor-on-command-position-not-word-presence` (KB, 2026-09-02):
-# a guard matching "whitespace then the word" mistook `helm/frontend/values.yaml`
-# and the string "helm render" for helm invocations, three times in one session.
-# The fix there was "require the word to be followed by whitespace or EOL".
-#
-# The same anchoring is applied here, but note the failure direction is
-# INVERTED relative to that hook. There, a false positive blocked a legitimate
-# command and sent the user chasing a problem that did not exist -- expensive.
-# Here, a false positive means "ask the owner one extra time" -- cheap, and
-# explicitly the direction plan §7.1/T11(a) asks for. So the anchoring exists
-# to kill the *path-substring* class of false positives the KB lesson
-# documents (`rm-guide.md`, `dropdown`, `performance`), and nothing more; we do
-# not attempt to distinguish "a command being described" from "a command being
-# run", because guessing wrong in the safe direction costs a question.
-
-_HARD_STOP_SEGMENT_RE = re.compile(r"\|\||&&|\$\(|[\n;|&`(){}]")
-_HARD_STOP_TOKEN_SPLIT_RE = re.compile(r"[\s\"'<>]+")
-_HARD_STOP_TOKEN_TRIM = "，。、；：？！「」『』【】…·,.;:!?"
-
-
-def _command_segments(text: str) -> list[list[str]]:
-    """Split free text into command segments, then into standalone words.
-
-    A segment boundary is anything that can start a new command in a shell:
-    newline, `;`, `|`, `||`, `&`, `&&`, backtick, `$(`, and bracketing. Words
-    are then split on whitespace and quote characters, so a command reached
-    through a wrapper (`sudo rm`, `xargs rm`, `bash -c "rm x"`) is still a
-    standalone word -- "command position" is emphatically NOT "token index 0",
-    which is exactly what a wrapper defeats.
-    """
-    segments: list[list[str]] = []
-    for raw_segment in _HARD_STOP_SEGMENT_RE.split(text):
-        words = []
-        for raw in _HARD_STOP_TOKEN_SPLIT_RE.split(raw_segment):
-            word = raw.strip(_HARD_STOP_TOKEN_TRIM)
-            if word:
-                words.append(word)
-        if words:
-            segments.append(words)
-    return segments
-
-
-def _has_word(words: list[str], *candidates: str) -> str | None:
-    """Return the matched word if any candidate appears as a *standalone*
-    word. `helm/frontend/x.yaml`, `rm-guide.md` and `dropdown` never match."""
-    wanted = {c.lower() for c in candidates}
-    for word in words:
-        if word.lower() in wanted:
-            return word
-    return None
-
-
-def _word_with_prefix(words: list[str], prefix: str) -> str | None:
-    for word in words:
-        if word.lower().startswith(prefix.lower()):
-            return word
-    return None
-
-
-def _word_containing(words: list[str], *needles: str) -> str | None:
-    """Substring match *within a single word* -- for path fragments like
-    `smb-` in `helm/smb-api/values.yaml`, where the fragment is by definition
-    not standalone."""
-    for word in words:
-        low = word.lower()
-        for needle in needles:
-            if needle.lower() in low:
-                return word
-    return None
-
-
-# --- H1: only the owner can decide -----------------------------------------
-#
-# Vocabulary, not commands: these are properties of the *decision*, not of a
-# shell line, so they are matched against the whole text.
-
-_H1_DESIGN_PARAM_TERMS = (
-    # feedback_designer_spec_no_unilateral_change.md:15 lists these verbatim.
-    r"border-width", r"border-radius", r"font-size", r"font-weight",
-    r"line-height", r"letter-spacing", r"padding", r"margin", r"gap",
-    r"opacity", r"shadow", r"easing", r"className", r"design token",
-    r"color token", r"icon size", r"animation duration", r"hex",
-    "色票", "設計參數", "設計稿", "設計規格",
-)
-_H1_VISUAL_TERMS = (
-    # CLAUDE.md:20 -- 主模型才做「Figma 判讀、UI 對齊裁決、截圖比對」.
-    "Figma", "截圖比對", "視覺比對", "視覺裁決", "UI 對齊", r"screenshot diff",
-)
-_H1_OUTWARD_COPY_TERMS = (
-    "履歷", r"resume", "LinkedIn", "對外文案", "對外文件", "電子報", "社群貼文",
-)
-_H1_DECISION_TERMS = (
-    r"AskUserQuestion", "待裁決", "請使用者選", "請使用者決定", "由使用者裁決",
-    "擇一", "二選一", "三選一", "四選一",
-)
-_H1_ALTERNATIVE_RE = re.compile(r"(?:方案|選項|option)\s*[A-Za-z1-9]", re.IGNORECASE)
-
-
-def _term_hit(text: str, terms: tuple[str, ...]) -> str | None:
-    for term in terms:
-        if term.isascii():
-            if re.search(r"(?<![\w-])" + re.escape(term) + r"(?![\w-])", text, re.IGNORECASE):
-                return term
-        elif term in text:
-            return term
-    return None
-
-
-def _hard_stop_owner_only(text: str, step: dict[str, Any]) -> list[HardStopHit]:
-    hits: list[HardStopHit] = []
-
-    owner = step.get("owner")
-    if isinstance(owner, str) and owner.strip():
-        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, RULE_EXPLICIT_LIST, f"Owner: {owner.strip()}"))
-    elif re.search(r"^\s*[-*]?\s*Owner\s*[:：]", text, re.MULTILINE):
-        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, RULE_EXPLICIT_LIST, "Owner: marker on step"))
-
-    for terms, rule in (
-        (_H1_DESIGN_PARAM_TERMS, RULE_DESIGNER_SPEC),
-        (_H1_VISUAL_TERMS, RULE_VISUAL_ADJUDICATION),
-        (_H1_DECISION_TERMS, RULE_EXPLICIT_LIST),
-    ):
-        term = _term_hit(text, terms)
-        if term:
-            hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, rule, term))
-
-    term = _term_hit(text, _H1_OUTWARD_COPY_TERMS)
-    if term:
-        rule = RULE_RESUME_FRAMING if term in ("履歷", "resume", "LinkedIn") else RULE_EXTERNAL_DOC
-        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, rule, term))
-
-    # ≥3 parallel alternatives: feedback_explicit_list_before_authorize.md:12
-    # (≥3 decisions get a list first) escalating to
-    # feedback_group_decisions_not_per_item.md:13 (>10 get grouped first).
-    # Either way the choosing is the owner's.
-    alternatives = _H1_ALTERNATIVE_RE.findall(text)
-    if len(alternatives) >= 3:
-        rule = RULE_GROUP_DECISIONS if len(alternatives) > 10 else RULE_EXPLICIT_LIST
-        hits.append(HardStopHit(HARD_STOP_OWNER_ONLY, rule, f"{len(alternatives)} 個並列選項"))
-
-    return hits
-
-
-# --- H2: irreversible -------------------------------------------------------
-
-_FORCE_PUSH_FLAGS = ("--force", "-f", "--force-with-lease", "--force-if-includes")
-_WRITE_HTTP_METHODS = ("POST", "PUT", "PATCH", "DELETE")
-_HTTP_CLIENTS = ("curl", "wget", "http", "httpie")
-
-
-def _http_method(words: list[str]) -> str | None:
-    if not _has_word(words, "-X", "--request", "--method"):
-        return None
-    return _has_word(words, *_WRITE_HTTP_METHODS)
-
-
-def _hard_stop_irreversible(words: list[str]) -> list[HardStopHit]:
-    hits: list[HardStopHit] = []
-
-    def add(rule: str, evidence: str) -> None:
-        hits.append(HardStopHit(HARD_STOP_IRREVERSIBLE, rule, evidence))
-
-    if _has_word(words, "rm"):
-        add(RULE_PRE_DESTROY, "rm")
-        glob = _word_containing(words, "*")
-        if glob:
-            # feedback_delete_explicit_paths_no_wildcard.md:11 -- 刪除一律逐一
-            # 列出具體路徑，禁 * / glob；展開結果在下指令當下不可預見。
-            add(RULE_NO_WILDCARD_DELETE, f"rm + wildcard {glob}")
-
-    if _has_word(words, "git") and _has_word(words, "push"):
-        flag = _has_word(words, *_FORCE_PUSH_FLAGS)
-        if flag:
-            add(RULE_FORCE_PUSH, f"git push {flag}")
-    if _has_word(words, "git") and _has_word(words, "reset") and _has_word(words, "--hard"):
-        add(RULE_PRE_DESTROY, "git reset --hard")
-    if _has_word(words, "git") and _has_word(words, "stash"):
-        flag = _has_word(words, "-u", "--include-untracked")
-        add(RULE_GIT_WORKFLOW_STASH, f"git stash {flag}" if flag else "git stash")
-
-    # feedback_pre_destroy_three_axis_check.md:26 names these verbatim:
-    # terraform destroy / aws ... delete-* / kubectl delete / helm uninstall /
-    # CF API DELETE / IAM policy overwrite.
-    if _has_word(words, "kubectl") and _has_word(words, "delete"):
-        add(RULE_PRE_DESTROY, "kubectl delete")
-    if _has_word(words, "terraform") and _has_word(words, "destroy"):
-        add(RULE_PRE_DESTROY, "terraform destroy")
-    if _has_word(words, "helm") and _has_word(words, "uninstall", "delete"):
-        add(RULE_PRE_DESTROY, "helm uninstall")
-    if _has_word(words, "aws"):
-        sub = _word_with_prefix(words, "delete-")
-        if sub:
-            add(RULE_PRE_DESTROY, f"aws {sub}")
-    if _has_word(words, *_HTTP_CLIENTS) and _http_method(words) == "DELETE":
-        add(RULE_PRE_DESTROY, "HTTP DELETE")
-
-    verb = _has_word(words, "drop", "dropdb", "dropuser", "delete", "truncate")
-    if verb:
-        add(RULE_PRE_DESTROY, verb)
-
-    return hits
-
-
-# --- H3: leaves the machine through a new channel ---------------------------
-
-_GH_WRITE_NOUNS = ("pr", "issue", "release", "repo", "gist", "workflow", "run")
-_GH_WRITE_VERBS = (
-    "create", "merge", "comment", "close", "edit", "review", "ready",
-    "delete", "dispatch", "upload", "publish",
-)
-_OUTWARD_PAYLOAD_FLAGS = (
-    "-d", "--data", "--data-raw", "--data-binary", "-F", "--form",
-    "-T", "--upload-file",
-)
-# feedback_no_dev_pointed_to_prod_api.md:22 -- E2E/dev/本地實驗一律 staging.
-# A URL carrying one of these markers is not a *new* outward channel.
-_NON_PROD_URL_MARKERS = (
-    "staging", "localhost", "127.0.0.1", "0.0.0.0", "preview", "example.com",
-    ".test", ".local", "host.docker.internal",
-)
-_ASSIGNED_URL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=(https?://\S+)$")
-
-
-def _hard_stop_outward_channel(words: list[str]) -> list[HardStopHit]:
-    hits: list[HardStopHit] = []
-
-    def add(rule: str, evidence: str) -> None:
-        hits.append(HardStopHit(HARD_STOP_OUTWARD_CHANNEL, rule, evidence))
-
-    # A force-push is the canonical two-category hit: irreversible (H2, via
-    # feedback_force_push_confirm) *and* outward (H3) -- it rewrites history
-    # on a remote other people may have checked out, and repo-ownership.md:9
-    # puts other people's state off-limits. Reporting only H2 would make
-    # S4.3's `Hard-stop check: ... H3 no` line a false statement.
-    if _has_word(words, "git") and _has_word(words, "push"):
-        flag = _has_word(words, *_FORCE_PUSH_FLAGS)
-        if flag:
-            add(RULE_REPO_OWNERSHIP_OTHERS, f"git push {flag}")
-
-    if _has_word(words, "gh"):
-        noun = _has_word(words, *_GH_WRITE_NOUNS)
-        verb = _has_word(words, *_GH_WRITE_VERBS)
-        if noun and verb:
-            # repo-ownership.md:9 -- PR 的 approve/review 狀態屬於給出它的人;
-            # feedback_auto_merge_small_infra_prs.md:42 -- 只有微調 PR 可自動
-            # merge，邊界模糊一律當作非微調、問使用者。
-            rule = RULE_AUTO_MERGE_MICRO_ONLY if verb in ("merge",) else RULE_REPO_OWNERSHIP_OTHERS
-            add(rule, f"gh {noun} {verb}")
-        elif _has_word(words, "api") and _http_method(words):
-            add(RULE_REPO_OWNERSHIP_OTHERS, "gh api write")
-
-    channel = _word_containing(words, "notion", "slack.com", "hooks.slack") or _has_word(
-        words, "slack", "sendmail", "msmtp", "mailx", "mutt", "mail"
-    )
-    if channel:
-        add(RULE_OUTWARD_CHANNEL, channel)
-
-    if _has_word(words, *_HTTP_CLIENTS) and (
-        _http_method(words) or _has_word(words, *_OUTWARD_PAYLOAD_FLAGS)
-    ):
-        add(RULE_OUTWARD_CHANNEL, "HTTP write")
-
-    # repo-ownership.md:8 -- 後端團隊 own: smb-* / payment-* 的 helm values &
-    # secrets、prod 的 cloudflared / alloy deploy trigger、cert-manager。
-    backend = _word_containing(words, "smb-", "payment-", "cert-manager")
-    if backend:
-        add(RULE_REPO_OWNERSHIP_BACKEND, backend)
-    infra = _word_containing(words, "cloudflared", "alloy")
-    if infra and (_has_word(words, "prod", "production") or _word_containing(words, "phase=prod")):
-        add(RULE_REPO_OWNERSHIP_BACKEND, f"{infra} (prod)")
-
-    # feedback_no_dev_pointed_to_prod_api.md:22 -- 「read-only 不是 read-only」:
-    # 任何頁面瀏覽都會帶 pageview / analytics 等 client-side write 進 prod。
-    for word in words:
-        m = _ASSIGNED_URL_RE.match(word)
-        if m and not any(marker in m.group(1).lower() for marker in _NON_PROD_URL_MARKERS):
-            add(RULE_NO_DEV_TO_PROD_API, word)
-            break
-
-    return hits
-
-
-# --- H4: over the agreed spend ceiling --------------------------------------
-
-
-def _hard_stop_over_budget(budget_state: dict[str, Any]) -> list[HardStopHit]:
-    """H4 is the only category whose inputs this file cannot observe.
-
-    plan_runner.py has no token meter -- §10's per-step estimates live in the
-    plan prose, and actual consumption is known only to whoever dispatched the
-    agent. So the caller supplies both numbers, and the contract is:
-
-    * no estimate supplied -> no ceiling was agreed -> nothing to exceed, no
-      hit. "超過約定花費上限" presupposes an 約定; inventing one here would
-      make H4 fire on every step of every plan and the mechanism would be
-      switched off wholesale, which is worse than not having it.
-    * estimate supplied but actual missing -> a ceiling exists and we cannot
-      certify we are under it -> hit. This is the ambiguity-stops-us rule; it
-      also means a caller cannot buy a pass by omitting the measurement.
-    * actual over the ratio -> hit.
-
-    Residual, called out for S4.3: a caller that supplies nothing gets no H4
-    coverage. Wiring real per-step accounting is S4.3's job, not this step's.
-    """
-    hits: list[HardStopHit] = []
-    for est_key, act_key, ratio, label in (
-        ("step_estimated_tokens", "step_actual_tokens", HARD_STOP_STEP_BUDGET_RATIO, "step"),
-        ("phase_estimated_tokens", "phase_actual_tokens", HARD_STOP_PHASE_BUDGET_RATIO, "phase"),
-    ):
-        estimate = budget_state.get(est_key)
-        if not isinstance(estimate, (int, float)) or estimate <= 0:
-            continue
-        ceiling = estimate * ratio
-        actual = budget_state.get(act_key)
-        if not isinstance(actual, (int, float)):
-            hits.append(HardStopHit(
-                HARD_STOP_OVER_BUDGET, RULE_TOKEN_DISCIPLINE,
-                f"{label} ceiling {ceiling:.0f} declared, actual unmeasured",
-            ))
-        elif actual > ceiling:
-            hits.append(HardStopHit(
-                HARD_STOP_OVER_BUDGET, RULE_TOKEN_DISCIPLINE,
-                f"{label} {actual:.0f} > {ratio}× {estimate:.0f}",
-            ))
-    return hits
-
-
-def hard_stop_findings(
-    action_text: Any, step: Any, budget_state: Any
-) -> list[HardStopHit]:
-    """Every reason this work must stop for its owner, with provenance.
-
-    Pure: reads its three arguments, touches no file, no clock and no state.
-
-    ALL matching categories are returned, not the first. Any hit already means
-    "stop", so first-match-wins would behave identically -- but S4.3 records a
-    per-question `Hard-stop check: H1 .. H4` line, and a force-push reported as
-    "H2 yes / H3 no" would put a false statement into the audit record. The
-    record is the point of the mechanism, so accuracy of the *set* matters.
-
-    `action_text` is scanned in full, deliberately un-truncated:
-    PLAN_ACTION_TRUNCATE_CHARS bounds what the hook renders, and letting it
-    bound what the guard reads would make "put the rm past character 600" a
-    one-line bypass.
-
-    Unreadable input hits all four. Ambiguity resolves toward stopping in
-    every branch below; an input we cannot parse is maximum ambiguity, and
-    "we could not clear any of the four" is the honest thing to record.
-    """
-    if (
-        not isinstance(action_text, str)
-        or not isinstance(step, dict)
-        or not isinstance(budget_state, (dict, type(None)))
-    ):
-        return [
-            HardStopHit(cat, RULE_OUTWARD_CHANNEL, "unreadable input; nothing could be cleared")
-            for cat in HARD_STOP_CATEGORIES
-        ]
-
-    text_parts = [action_text]
-    for key in ("title", "files", "command"):
-        value = step.get(key)
-        if isinstance(value, str) and value:
-            text_parts.append(value)
-    text = "\n".join(text_parts)
-
-    hits = _hard_stop_owner_only(text, step)
-    for words in _command_segments(text):
-        hits.extend(_hard_stop_irreversible(words))
-        hits.extend(_hard_stop_outward_channel(words))
-    hits.extend(_hard_stop_over_budget(budget_state or {}))
-
-    seen: set[tuple[str, str, str]] = set()
-    unique: list[HardStopHit] = []
-    for hit in hits:
-        key = (hit.category, hit.rule, hit.evidence)
-        if key not in seen:
-            seen.add(key)
-            unique.append(hit)
-    return unique
-
-
-def hard_stop_check(action_text: Any, step: Any, budget_state: Any) -> list[str]:
-    """The category IDs hit, sorted and deduplicated. Empty == may proceed.
-
-    Thin projection of hard_stop_findings(); use that when you need the rule
-    provenance (S4.3's `Auto-answered:` entries do).
-    """
-    return sorted({hit.category for hit in hard_stop_findings(action_text, step, budget_state)})
-
-
-def format_hard_stop_check_line(categories: list[str]) -> str:
-    """The `Hard-stop check: H1 no / H2 no / H3 no / H4 no` line. All four
-    always appear: an omitted category reads as "not considered", and the
-    whole value of a reverse whitelist is that every category was considered."""
-    hit = set(categories)
-    return "Hard-stop check: " + " / ".join(
-        f"{cat} {'yes' if cat in hit else 'no'}" for cat in HARD_STOP_CATEGORIES
-    )
-
-
-def _hard_stop_hook_note(findings: list[HardStopHit]) -> str:
-    """Render `hard_stop_findings()` hits for the Stop hook `reason`
-    suffix -- S4.3's main deliverable (plan §S4.3 Addendum: "判定的送達可以
-    強制，留痕的執行不行"). `_hook_block()`'s `suffix` is not something the
-    driving agent can skip past the way it could skip ever running
-    `hard-stop` on its own initiative, so this is the enforceable half.
-
-    Distinct from `cmd_hard_stop`'s human-triggered report: this is meant
-    to sit inline next to other hook-reason suffixes (`_ASSIGN_REPEAT_NOTE`
-    in particular), so it stays compact rather than a full multi-line
-    report. Evidence goes through `_sanitize_plan_field()` -- this text
-    lands in the reason's authoritative (non-fenced) region, same as every
-    other hook-authored string there.
-
-    Every renderer that hands a ready step to a driving agent/human calls
-    this on that step's `hard_stop_findings()` -- a hit must never reach
-    someone through a path that stays silent. As of S4.3's follow-up, the
-    known call sites are (kept in sync with
-    ReadyStepHardStopDeliveryTestCase.RENDERERS, which enumerates and
-    tests all of them):
-
-      - `_format_full_step_block()` -- backs CLI `next`'s full listing and
-        every transition command's ("start"/"complete"/"fail"/"skip")
-        "Newly unlocked" delta block (mode A, the default per
-        plan-run/SKILL.md Step 1.5).
-      - `_format_recap_next_step()` -- backs CLI `recap` (S3.3), the
-        single post-compaction/handoff recovery entrypoint; the reader
-        here has the least context of anyone, so this path matters most.
-      - `_branch_ready_step()` -- backs the Stop hook's block `reason`
-        (mode B).
-
-    Adding a fourth renderer of a ready step? Wire it through this
-    function too, and add it to `RENDERERS` in the test above -- that
-    test fails loudly (naming the missing renderer) if the wiring is
-    forgotten, instead of the gap sitting unnoticed the way this one did.
-    """
-    categories = sorted({f.category for f in findings})
-    labels = "、".join(f"{c}（{HARD_STOP_LABELS[c]}）" for c in categories)
-    lines = [f"HARD-STOP：本步命中 {labels}，不得自動決定，需人工裁決："]
-    for category in categories:
-        for finding in findings:
-            if finding.category != category:
-                continue
-            lines.append(
-                f"  - {finding.category} rule: {finding.rule} "
-                f"evidence: {_sanitize_plan_field(finding.evidence)}"
-            )
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Hook reason renderer (S1.3)
 # ---------------------------------------------------------------------------
@@ -3222,10 +2620,21 @@ HOOK_ASSIGN_REPEAT_ESCALATE_AT = 2
 HOOK_ALLOW = "allow"
 HOOK_BLOCK = "block"
 
-# Reset to 0 whenever a human speaks (stop_hook_active false). Note what is
-# deliberately absent: `assign_repeat_count`. A fresh user turn does not
-# retroactively execute the `start` we already asked for, so that counter is
-# reset by the assignment changing, not by the turn changing.
+# Reset to 0 whenever `stop_hook_active` is false. MEASURED 2026-09-08 (S5.1,
+# .verification/2026-09-08/stop-hook-active-semantics-probe.md): that flag means
+# "this Stop is NOT a continuation caused by a previous Stop-hook block" -- it
+# does NOT mean "a human spoke". Every incoming prompt starts a new `prompt_id`
+# and clears it, whatever the source: a human, `-p`, `--resume`, a teammate
+# message, a cross-session message. So these three counters reset on every
+# message, not on every human turn. Correct for `consecutive_blocks` (the
+# harness's own block cap is per *turn*, so a new prompt really does get a
+# fresh cap); WRONG for anything meant as a "check in with the human" valve --
+# in a multi-agent session, agent reports keep the counters near zero and such
+# a valve never fires. See S5.1's finding on bg_poll_count / nag_counts.
+# Note what is deliberately absent: `assign_repeat_count`. A fresh turn does
+# not retroactively execute the `start` we already asked for, so that counter
+# is reset by the assignment changing, not by the turn changing -- which is
+# also why it is the only one of these that still escalates in practice.
 _HOOK_TURN_COUNTERS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
 
 _INVALID_POINTER_MESSAGE = (
@@ -3493,8 +2902,16 @@ def _hook_plain_budget(ctx: _HookContext) -> BudgetDecision:
 
 
 def _reset_turn_counters(ctx: _HookContext) -> None:
-    """`stop_hook_active` false means a human just spoke — a fresh turn, so
-    our own counters go back to zero.
+    """`stop_hook_active` false means this Stop was NOT caused by a previous
+    Stop-hook block — a fresh prompt — so our own counters go back to zero.
+
+    It does NOT mean a human spoke. Measured 2026-09-08 (S5.1,
+    .verification/2026-09-08/stop-hook-active-semantics-probe.md): two `-p`
+    runs against one session id, no human input at any point, and the second
+    run's first Stop arrives with `stop_hook_active=false` under a new
+    `prompt_id`. A teammate message or a cross-session message reaches the
+    session the same way, so it resets these counters too. See the
+    _HOOK_TURN_COUNTERS note above for which consumers that breaks.
 
     We only *mirror* the harness's flag here; we never set it, and we never
     touch the harness's own consecutive-block counter.
@@ -3813,17 +3230,6 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
         ctx.update(checkpoint_pending=budget.checkpoint_pending)
 
     suffix_parts: list[str] = []
-    # S4.3 main deliverable: hard-stop findings ride the hook reason
-    # unconditionally -- no separate command for the agent to remember to
-    # run. budget_state is None: this call site has no real per-step token
-    # accounting to hand H4 (S4.2 finding, not resolved by this step -- see
-    # plan-run/SKILL.md's H4 caveat), so H4 can only ever stay silent here,
-    # never falsely read as clear.
-    step = ctx.state["steps"].get(step_id)
-    if isinstance(step, dict):
-        findings = hard_stop_findings(step.get("action") or "", step, None)
-        if findings:
-            suffix_parts.append(_hard_stop_hook_note(findings))
     if repeats >= HOOK_ASSIGN_REPEAT_ESCALATE_AT:
         suffix_parts.append(_ASSIGN_REPEAT_NOTE.format(
             count=repeats,
@@ -4284,37 +3690,6 @@ def cmd_next(args: argparse.Namespace) -> int:
     if drift.status != DRIFT_OK:
         payload["plan_drift"] = drift._asdict()
 
-    # S4.2/S4.3: report the effective auto-reply setting -- but only when
-    # the stored value is the opt-in "on", or `--keep-going` turns it on
-    # for this call. Every one of the ~187 in-flight states S1.2
-    # inventoried reads as "off", and adding an unconditional line/key
-    # would change `next` output for all of them.
-    stored_auto_reply = auto_reply_setting(state)
-    no_auto_reply = bool(getattr(args, "no_auto_reply", False))
-    keep_going = bool(getattr(args, "keep_going", False))
-    if stored_auto_reply == AUTO_REPLY_ON or keep_going:
-        effective = resolve_auto_reply(
-            state, no_auto_reply=no_auto_reply, keep_going=keep_going,
-        )
-        payload["auto_reply"] = effective
-        if args.format != "json":
-            if effective == AUTO_REPLY_OFF:
-                if no_auto_reply and keep_going:
-                    suffix = "（--no-auto-reply 覆蓋 --keep-going，維持 off，未寫回）"
-                elif no_auto_reply and stored_auto_reply == AUTO_REPLY_ON:
-                    suffix = "（本次 --no-auto-reply 覆蓋 state 的 on，未寫回）"
-                else:
-                    suffix = "（本次 --no-auto-reply，未寫回）"
-            elif keep_going:
-                suffix = (
-                    "（--keep-going 僅本次 next 生效、不寫回 state；"
-                    "四類硬停止仍照常送達；Stop hook 路徑不吃這個旗標）"
-                )
-            else:
-                suffix = "（四類硬停止仍生效）"
-            print(f"AUTO-REPLY: {effective}{suffix}")
-            print()
-
     save_state(plan_path, state)  # persist previously_reported_ready update
     emit_formatted(payload, args.format, format_next_md)
     return 0
@@ -4490,6 +3865,60 @@ def _stop_marker_failing_step(state: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+# S5.1 finding S2. Shapes taken from ~/.claude/claude-security-guidance.md's
+# own detection list, in that document's order. Each pattern requires a run of
+# credential-shaped characters after the prefix, so prose that merely mentions
+# a prefix ("別把 ghp_ token 貼進來") is left alone -- resolving ambiguity
+# toward fewer false positives, the same direction a command-position
+# anchor would (see guard-regex-must-anchor-on-command-position-not-word-
+# presence, KB 2026-09-02).
+_SECRET_SHAPE_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("github_pat_", re.compile(r"github_pat_[A-Za-z0-9_]{10,}")),
+    ("ghp_", re.compile(r"ghp_[A-Za-z0-9]{10,}")),
+    ("sk_live_", re.compile(r"sk_live_[A-Za-z0-9]{10,}")),
+    ("sk-ant-", re.compile(r"sk-ant-[A-Za-z0-9_-]{10,}")),
+    ("AKIA", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("xoxb-", re.compile(r"xoxb-[A-Za-z0-9-]{10,}")),
+    ("xoxp-", re.compile(r"xoxp-[A-Za-z0-9-]{10,}")),
+    ("AIza", re.compile(r"AIza[A-Za-z0-9_-]{30,}")),
+    ("PEM private key", re.compile(r"-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----")),
+)
+
+
+def _redact_secret_shapes(raw: Any) -> tuple[str, list[str]]:
+    """Replace known secret shapes with `[redacted: <shape>]`.
+
+    Returns the redacted text and the distinct shape names that were hit,
+    in pattern order. Pure: builds new strings, mutates nothing.
+
+    **This is a safety net, not a trust boundary.** It catches the accidental
+    paste of a *known* shape -- the realistic failure here being
+    `_write_stop_marker_on_fail()` writing an unattended `fail`'s
+    agent-supplied `--reason`, which is very plausibly a chunk of error log.
+    It does not and cannot stop someone who means to write a secret into a
+    file they can already edit by hand: `.plan-state/` is user-writable, and
+    a credential of an unlisted shape, or one split across the text, passes
+    straight through. Do not build anything on top of this that assumes
+    stop.md is secret-free; the content contract in plan-run/SKILL.md remains
+    the actual rule, and this only stops the contract from being violated
+    silently in the one case we can recognize.
+
+    Why it exists at all despite that: stop.md is the only free-text field in
+    this feature that is *tracked by git* (.gitignore excludes
+    *.checkpoint.md and deliberately does not exclude *.stop.md), so a
+    mistake here is a mistake in history, not on a scratch file.
+    """
+    if not isinstance(raw, str):
+        return "", []
+    text = raw
+    hit: list[str] = []
+    for label, pattern in _SECRET_SHAPE_PATTERNS:
+        text, count = pattern.subn(f"[redacted: {label}]", text)
+        if count:
+            hit.append(label)
+    return text, hit
+
+
 def render_stop_marker(plan_path: Path, state: dict[str, Any], reason: str) -> str:
     """Render the Markdown body of `.plan-state/<slug>.stop.md` (plan
     section 2.2). Human-facing, not machine-parsed -- `next` and the Stop
@@ -4500,6 +3929,18 @@ def render_stop_marker(plan_path: Path, state: dict[str, Any], reason: str) -> s
     sanitized the same way plan-authored fields are before being embedded
     -- collapsed to one line, byte-stripped, length-capped -- because this
     file is printed verbatim into a Stop hook systemMessage an LLM reads.
+
+    It additionally passes through `_redact_secret_shapes()` **before**
+    sanitizing, not after: `_sanitize_plan_field()` cuts at
+    PLAN_FIELD_TRUNCATE_CHARS, and a secret straddling that cut would leave
+    a prefix too short for the patterns to recognize, so redacting second
+    would leak exactly the tokens that landed near the boundary. When
+    anything was redacted the marker says so on its own line -- a silent
+    redaction would leave the operator believing the file says what they
+    typed, and "what actually landed in a tracked file" is precisely what
+    they need to know here. Both writers (`cmd_stop --write` and
+    `_write_stop_marker_on_fail()`) render through this function, so
+    neither can bypass it.
     """
     slug = _sanitize_plan_field(state.get("slug")) or plan_path.stem
     failing = _stop_marker_failing_step(state)
@@ -4511,7 +3952,16 @@ def render_stop_marker(plan_path: Path, state: dict[str, Any], reason: str) -> s
         failing_text = "N/A"
     sha, branch, dirty = _git_head_info(plan_path.parent)
     dirty_text = "unknown" if dirty is None else ("yes" if dirty else "no")
-    reason_text = _sanitize_plan_field(reason) or "(no reason given)"
+    reason_redacted, redacted_shapes = _redact_secret_shapes(reason)
+    reason_text = _sanitize_plan_field(reason_redacted) or "(no reason given)"
+    if redacted_shapes:
+        redaction_line = (
+            f"- Redacted: 偵測到疑似 secret 形狀（{'、'.join(redacted_shapes)}），"
+            "已在寫檔前遮蔽——原文未寫入本檔。這是盡力而為的防線，"
+            "請自行確認沒有其他憑證跟著貼進來。\n"
+        )
+    else:
+        redaction_line = ""
     runner = _runner_invocation(str(plan_path))
     plan_arg = _quote_plan_path(str(plan_path))
     suggested = f"{runner} status {plan_arg}"
@@ -4523,6 +3973,7 @@ def render_stop_marker(plan_path: Path, state: dict[str, Any], reason: str) -> s
         f"- Failing step: {failing_text}\n"
         f"- Git HEAD: {sha} ({branch}, dirty: {dirty_text})\n"
         f"- Reason: {reason_text}\n"
+        f"{redaction_line}"
         f"- Suggested next: {suggested}\n"
     )
 
@@ -4916,19 +4367,24 @@ def _checkpoint_writable(path: Path) -> str | None:
     be written to right now? Returns None when yes, else a short
     human-readable reason.
 
-    R11/T12 gate (S4.3): `auto_reply` may only flip to "on" when this
-    returns None -- a live filesystem check, not an assumption drawn from
-    the directory merely existing. Two failure shapes are distinguished:
-    `path` itself exists but lost its write bit, and the *directory*
-    cannot accept a new file (missing, read-only, wrong owner). The second
-    check writes and removes a hidden sibling probe file rather than
-    touching `path` itself -- enabling auto-reply must never have the side
+    No caller currently -- its one caller (mechanism 5's settle-without-
+    the-owner enable gate) was removed in S6.2; S6.1 (plans/active/
+    unattended-long-run-governance.md Phase 6) wires this into checkpoint
+    writability checking instead. Kept because the probe logic is still
+    correct and still needed, just not yet connected to anything.
+
+    A live filesystem check, not an assumption drawn from the directory
+    merely existing. Two failure shapes are distinguished: `path` itself
+    exists but lost its write bit, and the *directory* cannot accept a new
+    file (missing, read-only, wrong owner). The second check writes and
+    removes a hidden sibling probe file rather than touching `path`
+    itself -- any future caller gating on this must not have the side
     effect of creating an empty checkpoint.md where `recap`'s reader
     (S3.1) would otherwise correctly report "no checkpoint yet".
     """
     if path.exists() and not os.access(path, os.W_OK):
         return f"checkpoint file exists but is not writable: {path}"
-    probe = path.parent / f".{path.name}.autoreply-probe"
+    probe = path.parent / f".{path.name}.writable-probe"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         probe.write_text("", encoding="utf-8")
@@ -4936,116 +4392,6 @@ def _checkpoint_writable(path: Path) -> str | None:
     except OSError as exc:
         return f"{path.parent} is not writable: {exc}"
     return None
-
-
-def cmd_auto_reply(args: argparse.Namespace) -> int:
-    """Flip `state["auto_reply"]` on or off -- the only place it is ever
-    written (S4.2 added the field and the off-by-default read path;
-    `init_state()` only ever writes "off", including on `--force`).
-
-    Turning it on is gated on `_checkpoint_writable()` (R11/T12): the
-    entire safety property of auto-reply is that every decision it makes
-    gets a same-pass `Auto-answered:` record (plan-run/SKILL.md), and that
-    record has nowhere to land if the checkpoint path is not writable.
-    Refusing here, at enable time, is the one half of that guarantee this
-    file can make good on by itself -- whether an agent actually writes
-    the record once enabled is a content contract (plan-run/SKILL.md), not
-    something this command, or anything else in this file, can verify.
-
-    Turning it off never probes the filesystem: off writes no records
-    anywhere, so there is nothing for an unwritable checkpoint path to
-    threaten, and the safe direction must never be refusable.
-    """
-    plan_path = Path(args.plan).resolve()
-    state = _require_state(plan_path)
-
-    if args.value == AUTO_REPLY_OFF:
-        state["auto_reply"] = AUTO_REPLY_OFF
-        save_state(plan_path, state)
-        emit({"status": "ok", "auto_reply": AUTO_REPLY_OFF})
-        return 0
-
-    checkpoint_path = checkpoint_path_for(plan_path)
-    problem = _checkpoint_writable(checkpoint_path)
-    if problem is not None:
-        if args.format == "json":
-            emit({
-                "status": "refused",
-                "auto_reply": AUTO_REPLY_OFF,
-                "checkpoint_path": str(checkpoint_path),
-                "reason": problem,
-            })
-        else:
-            print("REFUSED: checkpoint 路徑不可寫，auto_reply 維持 off")
-            print(f"  path: {checkpoint_path}")
-            print(f"  reason: {problem}")
-        return 1
-
-    state["auto_reply"] = AUTO_REPLY_ON
-    save_state(plan_path, state)
-    emit({"status": "ok", "auto_reply": AUTO_REPLY_ON})
-    return 0
-
-
-def cmd_hard_stop(args: argparse.Namespace) -> int:
-    """Answer "may this step be settled without waking the owner?" -- and
-    only answer it.
-
-    Read-only by construction: no state write, no auto-answering, no
-    `Auto-answered:` entry (that is S4.3, and until it exists nothing in this
-    file may settle anything on its own). Exists so the judgment is
-    inspectable by a human, by tests and by S5.2's acceptance run without
-    importing the module.
-    """
-    plan_path = Path(args.plan).resolve()
-    state = _require_state(plan_path)
-
-    step = state["steps"].get(args.step)
-    if step is None:
-        emit({"error": f"unknown step: {args.step}"})
-        return 1
-
-    budget_state = {
-        key: getattr(args, key)
-        for key in (
-            "step_estimated_tokens", "step_actual_tokens",
-            "phase_estimated_tokens", "phase_actual_tokens",
-        )
-        if getattr(args, key, None) is not None
-    }
-    findings = hard_stop_findings(step.get("action") or "", step, budget_state)
-    categories = sorted({f.category for f in findings})
-    auto_reply = resolve_auto_reply(
-        state, no_auto_reply=bool(getattr(args, "no_auto_reply", False))
-    )
-
-    if args.format == "json":
-        emit({
-            "step": args.step,
-            "auto_reply": auto_reply,
-            "hard_stop": categories,
-            "clear": not categories,
-            "findings": [f._asdict() for f in findings],
-        })
-        return 0
-
-    print(f"HARD-STOP: {args.step} — {_sanitize_plan_title(step.get('title'), args.step)}")
-    print(f"Auto-reply: {auto_reply}")
-    print(format_hard_stop_check_line(categories))
-    print()
-    if not categories:
-        print("Verdict: CLEAR — 四類皆未命中（例行預設可自動決定，留痕規則見 S4.3）")
-        return 0
-    for category in categories:
-        print(f"- {category} {HARD_STOP_LABELS[category]}")
-        for finding in findings:
-            if finding.category != category:
-                continue
-            print(f"    rule: {finding.rule}")
-            print(f"    matched: {_sanitize_plan_field(finding.evidence)}")
-    print()
-    print(f"Verdict: STOP — 需人工裁決（命中 {', '.join(categories)}）")
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -5459,20 +4805,6 @@ def main() -> None:
     p_next = sub.add_parser("next", help="Show ready steps")
     p_next.add_argument("plan")
     p_next.add_argument(
-        "--no-auto-reply",
-        action="store_true",
-        help="Disable auto-reply for this call only; never written back to state",
-    )
-    p_next.add_argument(
-        "--keep-going",
-        action="store_true",
-        help=(
-            "One-shot: treat auto-reply as 'on' for this call only; never "
-            "written back to state; hard stops still apply; `next`-only, "
-            "the Stop hook path does not see this flag"
-        ),
-    )
-    p_next.add_argument(
         "--ignore-drift",
         action="store_true",
         help="Hand out steps even though plan.md no longer matches the state snapshot",
@@ -5533,33 +4865,6 @@ def main() -> None:
     p_status.add_argument("plan")
     add_format_flag(p_status)
     p_status.set_defaults(func=cmd_status)
-
-    p_hard_stop = sub.add_parser(
-        "hard-stop",
-        help="Report which of the four hard-stop categories a step hits",
-    )
-    p_hard_stop.add_argument("plan")
-    p_hard_stop.add_argument("step")
-    p_hard_stop.add_argument("--no-auto-reply", action="store_true")
-    for _budget_flag in (
-        "--step-estimated-tokens", "--step-actual-tokens",
-        "--phase-estimated-tokens", "--phase-actual-tokens",
-    ):
-        p_hard_stop.add_argument(_budget_flag, type=int, default=None)
-    add_format_flag(p_hard_stop)
-    p_hard_stop.set_defaults(func=cmd_hard_stop)
-
-    p_auto_reply = sub.add_parser(
-        "auto-reply",
-        help=(
-            "Enable/disable auto-reply for this plan; "
-            "refuses 'on' when the checkpoint path is not writable (R11/T12)"
-        ),
-    )
-    p_auto_reply.add_argument("plan")
-    p_auto_reply.add_argument("value", choices=[AUTO_REPLY_ON, AUTO_REPLY_OFF])
-    add_format_flag(p_auto_reply)
-    p_auto_reply.set_defaults(func=cmd_auto_reply)
 
     p_index = sub.add_parser("index", help="Ultra-compact ID+status trace view")
     p_index.add_argument("plan")

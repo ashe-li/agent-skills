@@ -23,7 +23,7 @@ redundancy-peers: [design, dispatch-loop]
 ## 設計原則
 
 - **一輪最多推 8 步，這是 harness 的硬限制**：實測 always-block 的續推機制會被呼叫 **9 次、第 9 次不被採納**（= 8 次續推），而且上限的單位是**每個 turn 的輪數、由所有 blocker 共用**——`/goal` 量到的也是 9。**多掛一個驅動器換不到更多步**，只換到同一輪兩則互相稀釋的指令。撞到邊界就是該讓人看一眼，回一句話就從下一步接著跑，不會退回去
-- **State 持久化**：step 狀態存 `<plan-dir>/.plan-state/<slug>.state.json`，在檔案系統上，**新 session／compaction 之後照樣接得上**。Stop hook 模式另有 pointer（`~/.claude/plan-run/active/<hash(cwd)>.json`）記住「這個 cwd 在推哪份 plan」，那是它相對 `/goal` 模式唯一多出來的能力
+- **State 持久化**：step 狀態存 `<plan-dir>/.plan-state/<slug>.state.json`，在檔案系統上，**新 session／compaction 之後照樣接得上**。Stop hook 模式另有 pointer（`~/.claude/plan-run/active/<hash(cwd)>.json`）記住「這個 cwd 在推哪份 plan」，那是它相對 `/goal` 模式唯一多出來的能力。**接手一份正在跑的 plan（compaction 後、新 session、換人接手）時，第一個動作是跑 `recap <plan>`**，不要自己兜 `status` + 開 checkpoint.md + 查 stop.md 三份東西——見下方「recap — 單一恢復入口」節
 - **Stop hook 模式每 7 步一次 check-in**：主動在第 7 步（或更早的 phase 邊界）停，留一輪餘裕，讓停的那刻落在有意義的地方而不是撞上限被截斷。每次注入結尾印 `Auto-advance N/7`；要用滿 8 步設 `PLAN_RUN_BLOCK_BUDGET=8`
 - **Task 追蹤工具 best-effort，且預設不存在**：frontmatter 列的那三個 Task 工具在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不註冊（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。**推進順序、依賴檢查、續推能力全在 state file**，`task_id` 只用於 audit 與 UI 面板；工具不存在或呼叫失敗即 continue，不中止 DAG（下文不再重述）
 - **Output 分層**：`next` 是 full bootstrap（~2.8KB，列出全部 ready 的完整模板）；`complete / fail / skip` 是 delta（只列本次新解鎖的完整模板，先前給過的只列 ID）；`index` 是 ~500 chars 的純 trace。全部預設 markdown，`--format=json` 給 tooling
@@ -106,9 +106,32 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 `complete / fail / skip` 的 output 依現況附帶 `## Newly unlocked (N)`（新解鎖的完整模板）、`## Still ready (M): <ids>`（只列 ID，模板已給過）、`## In progress`、`## Blocked`（含原因），有 task_id 時多一段 `## Required sync`。這些是補充，**推進本身不靠你讀完它們**——漏讀了 hook 下一輪還會再講一次。
 
-## Checkpoint 內容契約（`checkpoint_pending` 觸發時）
+## 長跑治理
 
-推進到輪數預算邊界或 phase 邊界時，hook reason 會多印一段指示，把進度**寫進檔案**而不是只在回合裡輸出摘要——摘要留在 transcript 裡，compaction 或新 session 一來就沒了；寫進磁碟上的 `.plan-state/<slug>.checkpoint.md` 才能跨 session 接得上。reason 裡會附這份檔案的**完整絕對路徑**（用既有的 `state_path_for()` 同一套路徑推導與 slug，`checkpoint_path_for()` 只是同目錄下換副檔名，不是另外拼字串）。
+無人值守長跑靠五個機制撐著，各防一種失敗模式：plan 改了沒重跑（漂移）、跑壞了沒人知道（停機）、跑太久失憶（checkpoint）、一次塞太多（工作量路由）、每個小問題都要停下來問人（auto-reply）。全部落在 state file 或旁路檔案，**不落聊天視窗**——與 `rules/common/reporting-cadence.md`「跑完整條鏈再一次回報」不衝突。設計依據與被排除的替代方案見 `plans/active/unattended-long-run-governance.md`。
+
+**方案邊界（先讀這句）**：**一輪仍然最多推 8 步，本節五個機制沒有一個能突破這個上限**——它們解決的是「停下來的那一刻夠不夠乾淨」，不是「步數上限」本身。要真正突破 8 步需要在 harness 外面另建一個驅動器接管排程，那是完全不同量級的工程，缺件清單見該 plan §3（B1–B9）。不要因為裝了這五個機制就以為 8 步的限制被解決了。
+
+### 1. Plan 指紋（漂移偵測）
+
+`init` 把 plan.md 正規化後的內容算 SHA-256，寫進 state 的 `plan_sha256`；`status`／`next` 每次讀取都重算並比對。
+
+- 不符時，`status`／`next` 的輸出**最頂端**印一段 `DRIFT:` 警告。`next` 預設**拒絕**派下一步（exit code 2，且不消耗 delta 追蹤），逃生口是 `next <plan> --ignore-drift`（照舊派工，警告仍印）。`status` 只警告，不 block。
+- 標準修法固定是 `rm <state> && plan_runner.py init <plan>`——`init` 會整份重建 state，**清掉全部已完成進度，也清掉 `auto_reply` 設定**（回到預設 `off`）。這帖藥沒有分輕重：純散文變更（例如把一段裁決補進 plan）跟真正改了 step 結構，觸發的是同一套修法。動手前先確認真的值得清掉進度；不想清就手動重算 `plan_fingerprint()` 回寫 `plan_sha256`，或整份保留、改跑 `--ignore-drift` 先繼續。
+- 既有 state 若缺 `plan_sha256` 欄位，視為 legacy，只印一次性提示，**永不 block**——這是為了讓升級前就存在的 state 不會被靜默改變行為。
+
+### 2. `stop.md` 停機閘門
+
+`.plan-state/<slug>.stop.md`：不可續跑標記，需人工審過才清得掉。`next` 與 Stop hook 在做任何事之前一律先查這個檔案存不存在——存在就印出全文、自然收手，**不解析內容做任何決策**（純存在性判斷；內容只給人看，這樣一個 user-writable 的檔案就不會變成控制流的後門）。與漂移偵測同時成立時，`stop.md` 完全優先，`next` 甚至不會走到 drift 檢查那一步（drift 的修法是刪 state，正是調查停機原因時最不該被引導去做的事）。
+
+- **自動寫入**：`fail` 讓某 step 失敗轉態成功後，若 `stop.md` 尚不存在，自動寫一份（含該 step、失敗原因、當下 git HEAD/branch/dirty、可執行的建議下一步）。已存在的標記不會被覆寫——保留的是**最早**那次失敗的現場，不是最新一次。
+- 手動寫入：`plan_runner.py stop <plan> --write --reason "<一段話>"`
+- 清除：`plan_runner.py stop <plan> --clear --reason-reviewed`（旗標防手滑，缺旗標拒絕）
+- **內容安全規則，且理由比 checkpoint 更硬**：`Reason` 欄位禁止貼 log 原文、禁止任何 token / key / password / JWT。`stop.md` **不在 `.gitignore` 裡、會被 commit 進 git history**（少見、值得留存的事件，是刻意決定，見 `.gitignore` 裡的說明）——這一點與下面第 3 點的 `checkpoint.md`（刻意排除在版控外）恰好相反，兩者的安全規則看起來一樣，但 `stop.md` 多一層「這份檔案真的會進 repo」的理由。
+
+### 3. `checkpoint.md` + wall-clock 觸發
+
+`.plan-state/<slug>.checkpoint.md`：推進到輪數預算邊界或 phase 邊界時，hook reason 會多印一段指示，把進度**寫進檔案**而不是只在回合裡輸出摘要——摘要留在 transcript 裡，compaction 或新 session 一來就沒了。reason 裡附這份檔案的完整絕對路徑（`checkpoint_path_for()` 沿用 `state_path_for()` 同一套路徑推導，只是同目錄換副檔名）。
 
 **四要件缺一不可**（借自 AgentFlow 的 10 分鐘 WIP checkpoint，`agentflow/skills/agentflow/SKILL.md:62`）：
 
@@ -121,7 +144,166 @@ Next work action: 下一個具體動作
 
 **自足性規則（契約核心）**：checkpoint **不得要求讀者回頭讀 plan.md、state.json 或前一則 checkpoint 才看得懂**。判準是——一個完全沒有本次 context 的人，只讀這一份檔案，就要能回答「下一步該做什麼」。這條後續由 fresh-context agent 驗收。
 
-**內容安全規則**：明文禁止貼 log 原文、禁止任何 token / key / password / JWT。`.plan-state/*.checkpoint.md` 預設在 `.gitignore`，但那是最後一道防線，不是可以鬆懈的理由——寫的當下就當作可能外流處理。
+**觸發時機是兩條規則之一，不是只看 turn 數**：(a) 續推輪數逼近本輪預算上限，或 (b) 距上次真正推進（`pointer['last_advance_at']`）超過 `CHECKPOINT_STALE_SECONDS`（預設 2700 秒 = 45 分鐘，`PLAN_RUN_CHECKPOINT_STALE_SECONDS` 環境變數可調）的 wall-clock 逾時——這條抓的是「卡住不動」，跟 turn 數無關，即使一輪只推了 1 步、但那 1 步真的跑了 50 分鐘，一樣會觸發。
+
+**內容安全規則**：明文禁止貼 log 原文、禁止任何 token / key / password / JWT。`.plan-state/*.checkpoint.md` **在 `.gitignore` 裡，不進版控**（高頻改寫的 WIP 快照，每次 `checkpoint_pending` 觸發都可能整份重寫）——但這是最後一道防線，不是可以鬆懈的理由，寫的當下就當作可能外流處理。
+
+### 4. `Estimated:` 工作量路由（warn-only）
+
+Step 可選填欄位 `Estimated: <N>m`（例：`Estimated: 90m`）。`parse_plan()` 收進 state 後，若某個 phase 的小計超過 `LARGE_PHASE_MINUTES`（預設 180 分鐘，`PLAN_RUN_LARGE_PHASE_MINUTES` 環境變數可調），`next` 的 delta 輸出會多印一行，建議拆 phase。實跑範例：
+
+```
+LARGE-WORK: Phase 1: 大工程 估計 210 分鐘，建議拆分
+```
+
+**只警告，不 block**——`next` 照常把 ready step 派出去。理由是這裡沒有外層 looper 可以承接一個失敗的 block：AgentFlow 對應的 `round-linter.js` 敢直接 fail，是因為它跑在 headless 迴圈裡，硬 block 只是換下一輪重跑；我們是人在看終端，硬 block 只會卡住使用者。
+
+機制 5（auto-reply）內容較長，獨立成下一節「Auto-reply」；`recap`（跨機制的單一恢復入口）獨立成再下一節「recap — 單一恢復入口」。
+
+## Auto-reply
+
+`auto_reply` 讓 state 裡「有既有慣例可循、完全可逆、不離開本機、不超預算」的例行問題可以不停下來問人就自動決定，**預設關閉，且沒有理由不看完這節就打開**。啟用前先搞清楚一件事的分界：**判定的送達可以強制，留痕的執行不行**（下面第三小節說明）。
+
+#### 四類硬停止（H1–H4，逐字，永遠優先）
+
+不論 `auto_reply` 開或關、`--keep-going` 有沒有帶，以下四類命中一律停下來等人——這是反面白名單：只列「什麼一定不能自動」，不是列「什麼可以自動」。四類判定條件不是新發明的，是既有規則翻成程式可判定的形式：
+
+| # | 硬停止類別 | agent-skills 的程式可判定條件 | 對映的既有規則 |
+|---|---|---|---|
+| H1 | 只有主人能做的決定 | step 的 `Action` 命中設計參數／視覺裁決／履歷或對外文案／≥3 項並列選擇；或 plan 中標 `Owner:` 的 step | `feedback_designer_spec_no_unilateral_change`、`feedback_explicit_list_before_authorize`、`feedback_group_decisions_not_per_item`、模型分工（主模型才做視覺裁決） |
+| H2 | 無法復原的事 | 命令位置出現 `rm`／`git push --force`／`git reset --hard`／`git stash`／`drop`／`delete`／`kubectl delete`；或萬用字元批次刪除 | `feedback_pre_destroy_three_axis_check`、`feedback_force_push_confirm`、`feedback_delete_explicit_paths_no_wildcard`、`rules/common/git-workflow.md` |
+| H3 | 會透過新管道離開機器的事 | 對外送出（`gh pr create/merge/comment`、Notion 寫入、Slack、寄信）；或觸及後端 own 資源（`smb-*`／`payment-*` helm values、prod cloudflared/alloy、cert-manager）；或 dev 指向 prod API | `rules/common/repo-ownership.md`、`feedback_no_dev_pointed_to_prod_api`、`feedback_auto_merge_small_infra_prs` |
+| H4 | 超過約定花費上限的事 | 單一 step 實際消耗超過 plan Token 預算該 step 估計的 2 倍；或 phase 累計超過小計 1.5 倍 | plan 的 Token 預算章節、`dispatch-loop/SKILL.md` 的 token 紀律 |
+
+H2/H3 的命令判定錨定在**命令位置**，不是字面出現——`Action` 裡寫「不要跑 `rm -rf`」不會誤觸；反面教材見 `wiki/learned/guard-regex-must-anchor-on-command-position-not-word-presence.md`。
+
+**H4 目前沒有真實的 token 計量管道**：四條送達路徑都沒有呼叫端傳入實際消耗數字。**H4 需呼叫端提供實際值，否則不成立**，不會自動生效——看到某個 step 的 H4 顯示 `no`，只代表「沒有資料」，不代表「已經確認沒超支」。
+
+**判定送達的四條路徑，看到的東西不一樣**：
+
+- **模式 A（預設）：CLI `next` 與每個 transition 指令（`start`/`complete`/`fail`/`skip`）的輸出。** 每次交出一個 ready step 的完整區塊時（`next` 的全量列表，或 `complete` 等指令的「Newly unlocked」delta），都先跑 `hard_stop_findings()`；命中就直接印出「HARD-STOP：本步命中 H2（rule: …，evidence: …），不得自動決定」，緊跟在 `action` 欄位後面——即使 `auto_reply` 是 `off`，這行照樣印，不是只有開啟時才顯示
+- **`recap`（見下方「recap — 單一恢復入口」節）。** 印出下一個 ready step 時同樣先跑這個檢查，命中就印在 `action` 欄位後、`next:` 執行序列前——接手的人 context 最少，最不該是靠自己想到要另外跑 `hard-stop` 查一次的那個人
+- **模式 B：Stop hook 的 block reason。** 指派 ready step 前跑同一個檢查，命中時接進 hook 的 block reason，跟既有的連續指派提醒共存、不互相覆蓋
+- **手動查詢：`plan_runner.py hard-stop <plan> <step>`。** 三條自動路徑之外，隨時可以對任一 step 單獨查判定，唯讀、不寫 state，也不會自動決定任何事。實跑範例：
+
+```
+$ plan_runner.py hard-stop <plan> S1.1
+HARD-STOP: S1.1 — 清理舊資料
+Auto-reply: off
+Hard-stop check: H1 no / H2 yes / H3 no / H4 no
+
+- H2 無法復原的事
+    rule: feedback_pre_destroy_three_axis_check.md
+    matched: rm
+
+Verdict: STOP — 需人工裁決（命中 H2）
+```
+
+#### 落點與啟用/關閉
+
+`auto_reply` 存在 state JSON 裡（`"on"` / `"off"`，預設 `"off"`），不另開 `settings.json`——單一真相來源，且失效方向安全：漂移修法 `rm state && init` 會把它連帶清回 `off`（每題都問人），不會有一個被使用者已經改過的舊設定悄悄存活下來。
+
+```bash
+python3 <絕對路徑>/plan_runner.py auto-reply <plan> on
+python3 <絕對路徑>/plan_runner.py auto-reply <plan> off
+```
+
+打開時程式會即時檢查 checkpoint 檔案路徑是否可寫——若不可寫，**拒絕啟用**、印出警告與原因、state 維持 `off`，不會「先開再看情況」。原因是 auto-reply 的整個安全性建立在「每一筆自動決定都有同一份留痕」上，留痕沒地方寫，開了也是白開。關閉永遠不做這個檢查、永遠成功，因為關閉不寫任何記錄，沒有東西可能寫失敗。
+
+#### `Auto-answered:` 留痕（內容契約，不是程式 gate）
+
+checkpoint 模板多一個第五區塊，僅 `auto_reply="on"` 且本輪有自動決定時才需要：
+
+```markdown
+## Auto-answered
+- Q: <問題原文>
+  Took: <採用值>
+  Safe because: <一句話理由>
+  Hard-stop check: H1 no / H2 no / H3 no / H4 no
+```
+
+**規則：沒有這段就不准自動答。** `Hard-stop check` 四項全 `no` 才成立，任一 `yes` 就必須保持 open 並停下——這正是 H1–H4 表的判定結果對應到這裡。程式沒有攔截點可以驗證這段有沒有真的被寫進 checkpoint（`plan_runner.py` 只回 `{decision, reason}`，沒有「這題被自動答了」這種事件可以掛 gate），所以**判定的送達可以強制，留痕的執行不行**——這一段是否落實只能靠這份文件的約定要求。內容安全規則同 checkpoint 本體：禁止貼 log 原文，禁止任何 token / key / password / JWT。
+
+#### `--keep-going` 與 `--no-auto-reply`
+
+兩者都是 `next` 專屬的一次性旗標，**只影響這一次呼叫的輸出，不寫回 state**，而且方向相反：
+
+| 旗標 | 效果 | 用途 |
+|---|---|---|
+| `next --keep-going` | 這一次呼叫把 auto-reply 臨時視為 `on`，即使 state 裡是 `off` | 「我現在坐在這裡，這批小問題你自己決定，我等下就走」 |
+| `next --no-auto-reply` | 這一次呼叫把 auto-reply 臨時視為 `off`，即使 state 裡是 `on` | 「這一次我想全部自己看過，先不要自動答」 |
+
+兩者同時給時，`--no-auto-reply` 贏（維持 `off`）——實跑訊息分別是：
+
+```
+AUTO-REPLY: off（本次 --no-auto-reply 覆蓋 state 的 on，未寫回）
+AUTO-REPLY: on（--keep-going 僅本次 next 生效、不寫回 state；四類硬停止仍照常送達；Stop hook 路徑不吃這個旗標）
+AUTO-REPLY: off（--no-auto-reply 覆蓋 --keep-going，維持 off，未寫回）
+```
+
+`--keep-going` 是 `next` 專屬旗標，**Stop hook 路徑不吃這個旗標**：hook 的呼叫沒有 CLI 參數可帶，掛了 Stop hook 也不能靠 `--keep-going` 達到無人值守——這個旗標的一次性語義只在你自己手動跑 `next` 的那一次成立。`--no-auto-reply` 同理，也是 `next` 專屬旗標，Stop hook 路徑同樣不吃。兩者都不能用來改變 Stop hook 那一輪的行為，只能改 state 裡的 `auto_reply` 本身。四類硬停止在這兩個旗標下**一律照常送達**，不因任何一個放寬或收緊。
+
+#### 與既有「要問使用者」規則的關係（重要——auto-reply 不廢除這些規則）
+
+這個機制**不廢除**任何既有的提問規則，它做的是**把「什麼算例行」界定清楚，非例行的照舊問**。下面這張表照抄自 `plans/active/unattended-long-run-governance.md` §2.5，之所以照抄而不是改寫，是因為這正是未來 session 最容易誤用這個機制的地方——以為裝了 auto-reply 就不用再問了：
+
+| 既有規則 | auto-reply 開啟後 | 為什麼 |
+|---|---|---|
+| `feedback_task_tracking_askuser_default_enabled`（複雜任務問是否啟用 task tracking） | **照舊問** | 這是 session 層級的模式選擇，不是 plan 內的例行預設；且使用者明示「用 AskUserQuestion 問，不自動啟用」 |
+| `feedback_group_decisions_not_per_item`（>10 項待裁決先分群再問） | **照舊問，但分群後群內的例行項可自動答** | 分群本身是 owner-only（H1）；群內若全是安全預設值則可批次自動答並逐筆留痕 |
+| `feedback_explicit_list_before_authorize`（≥3 決策先列 list） | **照舊問** | 明確落在 H1 |
+| Teammate 編隊 / 模型分工的 AskUserQuestion | **照舊問** | 涉及 token 預算承諾，落在 H4 的精神 |
+| step 內部的實作細節選擇（檔名、測試命名、錯誤訊息措辭、既有慣例的沿用） | **可自動答** | 這才是「安全的例行預設」——有既有慣例可循、可逆、不對外、不超預算 |
+
+一句話界定：**「例行」＝有既有慣例可循、完全可逆、不離開本機、不超預算，四者同時成立。** 缺任何一項就不是例行。
+
+## recap — 單一恢復入口
+
+`recap <plan>` 是 compaction 之後、開新 session、或把 plan 交接給別人時的**單一恢復入口**：一個指令看完「這份 plan 現在是什麼狀態」需要的全部東西，不必自己兜 `status` + 開 checkpoint.md + 查 stop.md + 查 pointer 四份東西。**接手的人 context 最少，最不該是靠自己想到要多跑三個指令的那個人**——這正是這個指令存在的理由。
+
+**與 `status` 的分工**：`status` 印出**全部** step 的 DAG 與狀態（想知道「整份 plan 現在走到哪、還剩哪些」時用）；`recap` 只印**接手當下要做的最小子集**——stop 標記（若存在，其他全部略過，只印這個）、drift 狀態、checkpoint 內容（若存在）、下一個 ready step 的完整可執行派工指令（用真實 plan 路徑，不是 `<plan>` 佔位字串）、cwd 的 pointer 狀態。要看全貌用 `status`，要知道接下來該做什麼用 `recap`。
+
+**固定輸出順序**（`stop.md` 存在時只印它，其餘全部略過）：
+
+```
+1. stop.md 全文（若存在，其餘略過）
+2. drift 狀態（乾淨時一行 OK，有 drift 時印完整 banner）
+3. checkpoint.md 內容（若尚無 checkpoint，整段省略，不印佔位字串）
+4. 下一個 ready step，含可直接執行的 start/complete/fail 三行
+5. cwd 的 pointer：last_advance_at（或 created_at）與經過時間，或「無 active pointer」
+```
+
+實跑範例（有 checkpoint、無 stop.md、無 drift 時）：
+
+```
+# Recap: 測試 Plan
+Progress: 1/3
+
+## Drift: ok
+
+## Checkpoint (/path/.plan-state/g.checkpoint.md)
+Finished: S1.1 量測完成，報告見 .verification/2026-09-08/measure.md
+Running now: 無（等待下一步派工）
+Still to do: S1.2 補測試、S2.1 實作功能
+Next work action: 跑 plan_runner.py next 拿 S1.2 派工
+
+## Next
+### S1.2 — 補測試 [Phase 1: 準備]
+- agent: general-purpose (Sonnet)
+- files: `scripts/tests/test_foo.py`
+- action: 補上單元測試
+- next:
+  1. python3 <絕對路徑>/plan_runner.py start <plan> S1.2
+  2. Agent(subagent_type='general-purpose (Sonnet)', prompt=<files + action below>)
+  3. ok: ... complete <plan> S1.2 | err: ... fail <plan> S1.2 --reason=<msg>
+
+## Pointer
+此 cwd 無 active pointer。
+```
+
+`recap` 是**唯讀診斷指令**：不寫 state.json、不寫 checkpoint.md、不寫 stop.md、不寫 pointer，也**不解析** stop.md／checkpoint.md 的內容去自動決定任何事——那兩份檔案是寫給人看的散文，不是給程式讀的指令（同 §2 的「stop.md 只作提示，不作控制流授權」原則）。四類硬停止判定同樣會在 `## Next` 區塊裡出現（見上一節），不必另外跑 `hard-stop` 查一次。
+
+**什麼時候跑**：compaction 剛發生、開一個新 session 要接手已存在的 plan、或別人把一份正在跑的 plan 交給你的任何時候——當作接手動作的第一步，跑在讀 plan.md 本體之前。
 
 ## Step 3: 失敗處理（HITL gate）
 
@@ -145,7 +327,7 @@ Next work action: 下一個具體動作
 
 ## 全手動模式（連 `/goal` 都不用時）
 
-Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete` 並讀 `## Newly unlocked` 決定下一步；context 被 compaction 砍掉時跑 `index "$ARGUMENTS"`（~500 chars）看 trace，或 `next "$ARGUMENTS"` 重拿完整模板（會 reset delta 追蹤）。**已知弱點是你可能忘記查狀態**——`/goal` 存在的理由就是把「記得再跑一輪」這件事交出去，成本是一道指令，沒有理由不用。
+Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete` 並讀 `## Newly unlocked` 決定下一步；context 被 compaction 砍掉時跑 `recap "$ARGUMENTS"` 一次看完 stop／drift／checkpoint／下一步／pointer（見上方「recap — 單一恢復入口」節），只想要極簡 trace 才用 `index "$ARGUMENTS"`（~500 chars），或 `next "$ARGUMENTS"` 重拿完整模板（會 reset delta 追蹤）。**已知弱點是你可能忘記查狀態**——`/goal` 存在的理由就是把「記得再跑一輪」這件事交出去，成本是一道指令，沒有理由不用。
 
 ## Plan 格式約束
 

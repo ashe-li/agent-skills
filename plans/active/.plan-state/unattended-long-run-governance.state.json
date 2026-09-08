@@ -14,7 +14,7 @@
   "auto_reply": "off",
   "parent_task_id": null,
   "created_at": "2026-09-08T08:33:28.706936+00:00",
-  "updated_at": "2026-09-08T08:38:49.479919+00:00",
+  "updated_at": "2026-09-08T09:02:49.217262+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -343,10 +343,10 @@
       "action": "比照 S4.4 的移除方式——**不是用常數關掉，是拿掉**。範圍：`auto_reply` state 欄位與 `auto-reply` 子指令、`resolve_auto_reply()`／`auto_reply_setting()`、`hard_stop_findings()` 與四類硬停止的全部詞表與判定函式、`hard-stop` 子指令、`_hard_stop_hook_note()` 與三條送達路徑的接線、`next --keep-going`／`--no-auto-reply`、`_checkpoint_writable()` 的 auto-reply 閘門用途（若 S6.1 需要可寫性檢查則保留函式、改掛新用途）、以及全部對應測試。`plan-run/SKILL.md` 的 `## Auto-reply` 整節刪除。**CHANGELOG 的 `auto_reply` Added 條目一併移除**——它從未發布，整個生命週期都在此 unreleased 分支內。",
       "risk": null,
       "estimated": 90,
-      "status": "in_progress",
+      "status": "completed",
       "task_id": null,
       "started_at": "2026-09-08T08:38:49.479767+00:00",
-      "completed_at": null,
+      "completed_at": "2026-09-08T09:02:49.217068+00:00",
       "failure_reason": null
     },
     "S6.3": {
@@ -441,7 +441,6 @@
   "plan_sha256": "0d253578034db557e3b687aab1e98dcfb53dd8aa7aaee5ae1477e802b825fcfa",
   "previously_reported_ready": [
     "S6.1",
-    "S6.2",
     "S6.3",
     "S6.4"
   ]

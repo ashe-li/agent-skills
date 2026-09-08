@@ -668,13 +668,78 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
   - Action: 對 S2.1–S4.5 的完整 diff 做一輪 review。重點十項：(1) `decide_budget` 純函式性是否被破壞、golden 基準是否真的零變化（R1）(2) 指紋正規化是否真的擋掉 checkbox 誤報，用實際 plan 檔案試（R2）(3) stop.md / checkpoint.md 路徑推導有無穿越風險（T3/R7）(4) **人工抽查一份實際產出的 checkpoint.md 與 stop.md**，確認未夾帶 log 原文或任何 secret（T4）(5) **auto-reply 專項**：四類硬停止是否全部溯源既有規則而非自行發明、命令位置錨定的兩個繞過測試是否真的會紅、缺欄位是否確實等同 `off`、checkpoint 不可寫時是否真的退回 `off`（R9/R11/T11-T13）(6) **人工抽查一份真實 `Auto-answered:` 區塊**，逐筆質疑「這個真的是安全的例行預設嗎」(7) **四選一閘門專項**：`build_scope_question()` 是否真的決定性（同 state 兩次呼叫結果逐字相同）、三條干擾項是否各自照規則生成而非隨機、四選項是否互不相同、**H1 守衛在 `auto_reply="on"` + `--keep-going` 下是否真的擋得住**（R13）、干擾項是否確實不落檔（T14）(8) **自己先做一次那道題**：不看 plan 只看四個選項，若能靠語感挑對，直接在 review 標 R12 命中並升級為 blocker (9) **逐條對照 `~/.claude/claude-security-guidance.md`**，核對本 plan 觸及的安全面（§7 的 T3–T13）有無漏項，缺的補進 §7 並處置 (10) 新增程式碼覆蓋率是否達 80%，以及 `plan_runner.py` 若已超過 4000 行，提出拆檔建議但本輪不執行（R6）。**review 完成後在同一 step 內跑一次 `/security-review`**（針對本次 diff，不另開 step，維持一輪 review 的收斂），其 finding 併入本 step 的 PASS/FAIL 表。輸出逐項 PASS/FAIL 與證據，FAIL 項直接修。
   - Dependencies: S4.5
   - Why: 品保收斂為一輪 review + 一輪驗收；review 是唯一一次有人逐行看過完整 diff 的機會，六個機制之間的交互作用只有在這裡看得到——尤其是機制 5 與機制 6 的交界（auto-reply 會不會把確認閘門吃掉，R13）。auto-reply 的安全信封需要一雙帶著敵意的眼睛（它是唯一會讓事情在沒有人確認下發生的機制），四選一的干擾項則需要一雙願意承認「這題太好猜」的眼睛。
-  - Addendum（2026-09-07）：本輪執行中累積的必查項——(a) `load_state()` 無 validation／不捕捉 `JSONDecodeError`，壞 state 直接 traceback（§2.5 原本誤以為已有）；(b) `FIELD_KEYS` 與 `_NORMALIZE_FIELD_KEYS` 不對稱（後者有 `Test`，前者沒有）；(c) normalize 的自我循環陷阱：`Dependencies: Phase N 完成` 寫在該 phase 最後一步會翻成依賴自己，`init` 只報 `DAG validation failed` 不指出成因；(d) `_checkpoint_path_display()` 傳 `Path` 物件會靜默降級成佔位字串（真實 caller 傳 `str`，非 live bug，但測試未涵蓋該分支）；(e) `plan_runner.py` 已逾 5,000 行，遠超 800 行門檻，提拆檔建議但本輪不執行；(f) H4（花費上限）目前無真實資料來源，僅靠 `hard-stop` 的旗標輸入——若 S4.3 未接上實際計量，H4 在自動路徑上等於不存在。（g）**drift banner 的修法對良性漂移過當**：banner 印 `rm <state> && init`，但 prose-only 變更（補 Addendum、記裁決——正是本 plan 鼓勵的行為）照做會刪掉全部進度。實測本輪觸發兩次，皆手動重算 `plan_fingerprint()` 回寫 `plan_sha256` 才保住 10/15。CLI 目前只有 `--ignore-drift`（不修、下次再擋）與那條核彈，缺「確認 step id 集合未變後 resync」的最小恢復路徑，**優先級 2026-09-08 上調為必修**：依「加一次停必須換到東西」的判準，本 session 它觸發 3 次、全部是散文變更、一次都沒買到東西，且 plan 自己鼓勵的行為（把裁決補進 plan）正是觸發它的行為。（h）**`skip` 沒有 `--reason`，state 也不記 skip 理由**——本次移除 S4.4 時發現，一個被跳過的 step 在 state 裡只剩 `status: skipped`，為什麼跳過完全無處可查。對一個交接導向的長跑工具，這是直接的資訊遺失。（i）**`in_progress` 無法轉 `skipped`**，唯一出口是 `completed` 或 `failed`，而 `fail` 會自動寫 stop.md 停機。但「範圍被砍掉」是長跑中完全正常的事件，狀態機裡卻沒有這個詞彙——本次只能靠 `reset` 退回 pending 再 skip 繞過。S5.1 需裁定是否補 `--reason` 與 `in_progress -> skipped` 轉移。（j）**hard-stop 判定的精確度需實測評估**：2026-09-08 在 S4.5 上實跑，三個命中全是誤報——`H1 evidence: 四選一` 命中的是 Action 裡描述已移除機制的字樣；`H1 evidence: resume` 命中的規則是 `feedback_resume_claims_verify_and_honest_framing`，那條講的是**履歷 claim** 而非 `resume` 子指令，屬同音字誤判、規則溯源錯誤；`H2 evidence: rm` 命中的 `rm state && init` 是**要寫進文件的說明文字**，不是要執行的指令。S4.2 的命令位置錨定解決了「字串中出現 rm」，但解決不了「Action 在談論一個指令而非執行它」。S5.1 需在真實 plan 上量測誤報率——若多數 step 都命中，這個機制就會被讀者自動忽略，而**被忽略的守衛比沒有守衛更糟**（同 §2.6 移除告示的判準：發一張假的收據）。
+  - Addendum（2026-09-07）：本輪執行中累積的必查項——(a) `load_state()` 無 validation／不捕捉 `JSONDecodeError`，壞 state 直接 traceback（§2.5 原本誤以為已有）；(b) `FIELD_KEYS` 與 `_NORMALIZE_FIELD_KEYS` 不對稱（後者有 `Test`，前者沒有）；(c) normalize 的自我循環陷阱：`Dependencies: Phase N 完成` 寫在該 phase 最後一步會翻成依賴自己，`init` 只報 `DAG validation failed` 不指出成因；**（S5.1 2026-09-08 更正：後半句為假。`cmd_init()` 的錯誤 payload 帶 `details` 欄位，內容來自 `validate_dag()`，實測輸出為 `Cycle detected: S1.2 -> S1.2`／`Cycle detected: A -> B -> A`，成因有指出。前半句的翻譯行為在本輪的兩次 fixture 重現嘗試中皆未觸發 `_translate_deps_prose()`，未能證實，維持 unverified。）**(d) `_checkpoint_path_display()` 傳 `Path` 物件會靜默降級成佔位字串（真實 caller 傳 `str`，非 live bug，但測試未涵蓋該分支）；(e) `plan_runner.py` 已逾 5,000 行，遠超 800 行門檻，提拆檔建議但本輪不執行；(f) H4（花費上限）目前無真實資料來源，僅靠 `hard-stop` 的旗標輸入——若 S4.3 未接上實際計量，H4 在自動路徑上等於不存在。（g）**drift banner 的修法對良性漂移過當**：banner 印 `rm <state> && init`，但 prose-only 變更（補 Addendum、記裁決——正是本 plan 鼓勵的行為）照做會刪掉全部進度。實測本輪觸發兩次，皆手動重算 `plan_fingerprint()` 回寫 `plan_sha256` 才保住 10/15。CLI 目前只有 `--ignore-drift`（不修、下次再擋）與那條核彈，缺「確認 step id 集合未變後 resync」的最小恢復路徑，**優先級 2026-09-08 上調為必修**：依「加一次停必須換到東西」的判準，本 session 它觸發 3 次、全部是散文變更、一次都沒買到東西，且 plan 自己鼓勵的行為（把裁決補進 plan）正是觸發它的行為。（h）**`skip` 沒有 `--reason`，state 也不記 skip 理由**——本次移除 S4.4 時發現，一個被跳過的 step 在 state 裡只剩 `status: skipped`，為什麼跳過完全無處可查。對一個交接導向的長跑工具，這是直接的資訊遺失。（i）**`in_progress` 無法轉 `skipped`**，唯一出口是 `completed` 或 `failed`，而 `fail` 會自動寫 stop.md 停機。但「範圍被砍掉」是長跑中完全正常的事件，狀態機裡卻沒有這個詞彙——本次只能靠 `reset` 退回 pending 再 skip 繞過。S5.1 需裁定是否補 `--reason` 與 `in_progress -> skipped` 轉移。（j）**hard-stop 判定的精確度需實測評估**：2026-09-08 在 S4.5 上實跑，三個命中全是誤報——`H1 evidence: 四選一` 命中的是 Action 裡描述已移除機制的字樣；`H1 evidence: resume` 命中的規則是 `feedback_resume_claims_verify_and_honest_framing`，那條講的是**履歷 claim** 而非 `resume` 子指令。**更正（S5.1 實查）**：這**不是**規則溯源錯誤——S5.1 逐條查了 15 個 rule citation 的 file:line 與內容，全部命中正確，該規則講的正是「替使用者寫履歷／CV／LinkedIn」。錯的是英文詞 `resume` 在本 repo 是 CLI 子命令，屬**同形詞誤判**，修法是從 `_H1_OUTWARD_COPY_TERMS` 刪掉英文 `resume`（保留 `履歷`／`LinkedIn`），不是改規則來源；`H2 evidence: rm` 命中的 `rm state && init` 是**要寫進文件的說明文字**，不是要執行的指令。S4.2 的命令位置錨定解決了「字串中出現 rm」，但解決不了「Action 在談論一個指令而非執行它」。S5.1 需在真實 plan 上量測誤報率——若多數 step 都命中，這個機制就會被讀者自動忽略，而**被忽略的守衛比沒有守衛更糟**（同 §2.6 移除告示的判準：發一張假的收據）。（k）**模式 B 的 pointer 綁 cwd，與 worktree 工作流結構性衝突，且租約歸屬會記錯**：2026-09-08 實測——本 session 在 `knowledge-base` 這個 cwd，但實際工作在 `agent-skills-longrun` worktree、走模式 A 手動推進；而 cwd 上掛著另一份 plan（`admin-kyc-backoffice-frontend-pdt-10908`）的 pointer，於是 Stop hook 每輪都 block，要求本 session 去收斂一份它沒有脈絡的 plan 的 step。三個具體問題：(k1) 一個 cwd 只有一個 pointer，而 worktree 工作流刻意讓 session 的 cwd 與工作目錄分離，§3 只討論了 `$HOME` 路徑限制、沒討論這個情境；(k2) **租約歸屬記錯**——`pointer` 顯示 `Driver session` 是本 session，但實際驅動者是另一個 live peer session（實測其狀態為 busy），`_branch_lease` 的仲裁沒能反映真正的驅動者；(k3) **背景工作的歸屬無法分辨**——hook 報「S0.1 有背景工作尚未收斂」，但它偵測到的背景工作是本 session 為**另一份 plan** 派出的 19 隻 agent。hook 判定「這個 session 有背景工作」，卻分不出那些工作屬於哪份 plan。S5.1 需裁定：pointer 是否該綁 plan 路徑而非 cwd、租約如何確認真正的驅動者、背景工作偵測是否該帶 plan 識別。
+
+### Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）
+
+> **為什麼有這個 phase**：S5.1 發現五個機制裡兩個買不到承諾的東西——機制 3 存在期間零產物、機制 5 核心從未實作。
+> 而 `.verification/2026-09-08/agentflow-portability-study.md` 推翻了原本「路線 A 做不到強制」的假設：
+> 決定一個檢查是真 gate 還是形式的，是「**facts 由程式收集還是由 model 自報**」，不是驅動器在 harness 內或外。
+> AgentFlow 的 Stop hook 自己跑 `git status` 與 `readdirSync`，攔截點一直在 hook 裡。機制 3 需要的五道 gate 全是 A 類純檔案系統操作。
+>
+> 使用者裁決（2026-09-08）：**機制 3 修、機制 5 移除**。JS/TS 改寫擱置（見 `plans/backlog/plan-runner-port-to-typescript.md`），原話「先完成跑通，之後再 refactor」。
+
+- [ ] **S6.1** — 機制 3：facts 由 hook 自己收集，五道 gate 落地
+  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`
+  - Agent: general-purpose (Opus)
+  - Estimated: 150m
+  - Action: 先寫測試再實作。**核心改動是讓 hook 自己去檔案系統取事實，不再只生一段指示要 model 自己寫。** 依 `.verification/2026-09-08/agentflow-portability-study.md` 的 A 類技術 #3–#7 實作五道 gate：**存在性**（`checkpoint_pending` 成立過之後，`.plan-state/<slug>.checkpoint.md` 必須真的在磁碟上）、**唯一性**（找到 0 份或多份都 fail）、**新鮮度**（內容時間戳需 ≥ 最近一次推進；另**交叉比對 `os.stat().st_mtime`**——研究指出 AgentFlow 用內容時間戳是為了跨 clone 穩定，我們是本機場景，mtime 是作業系統寫的、model 要偽造需額外呼叫）、**格式**（四要件形狀由一個 `checkpoint --template` 子指令發配、strict parser 驗——直接抄 I-063 的教訓：形狀不能只活在散文裡）、**檔案身分**（`os.lstat` 非 symlink、讀取期間 sha256 不變）。**同時修送達**：`_render_checkpoint_note()` 目前只掛在 Stop hook 的 `next_step` reason 上，而預設模式走 CLI——必須比照 S4.3 對 hard-stop 做過的做法接進 CLI ready-step 輸出，並沿用 `ReadyStepHardStopDeliveryTestCase` 那個「漏接就紅」的枚舉測試模式。
+  - Dependencies: S5.1
+  - Why: N2「停下來那一刻人回來能 30 秒接上」是本 plan 宣稱要解決的問題之一，而它在整段存在期間產出零份檔案（全機器普查：`.plan-state/` 只有 `.state.json` 與 `.state.lock` 兩種副檔名，跨 4 repo 約 70 份 plan；git history 全 branch 亦空）。**驗收必須實跑到真的生出一份**——修完送達之後檔案仍依賴 agent 照做，程式只能驗「有沒有」不能代寫，所以「跑出一份真的 checkpoint」是這個 step 唯一有意義的完成證據。
+
+- [ ] **S6.2** — 機制 5（auto-reply 與 hard-stop 送達）整個移除
+  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `scripts/tests/test_plan_run_hook.py`, `plan-run/SKILL.md`, `CHANGELOG.md`
+  - Agent: general-purpose (Sonnet)
+  - Estimated: 90m
+  - Action: 比照 S4.4 的移除方式——**不是用常數關掉，是拿掉**。範圍：`auto_reply` state 欄位與 `auto-reply` 子指令、`resolve_auto_reply()`／`auto_reply_setting()`、`hard_stop_findings()` 與四類硬停止的全部詞表與判定函式、`hard-stop` 子指令、`_hard_stop_hook_note()` 與三條送達路徑的接線、`next --keep-going`／`--no-auto-reply`、`_checkpoint_writable()` 的 auto-reply 閘門用途（若 S6.1 需要可寫性檢查則保留函式、改掛新用途）、以及全部對應測試。`plan-run/SKILL.md` 的 `## Auto-reply` 整節刪除。**CHANGELOG 的 `auto_reply` Added 條目一併移除**——它從未發布，整個生命週期都在此 unreleased 分支內。
+  - Dependencies: S5.1
+  - Addendum（2026-09-08 派工時補）：**三個不可一併刪除的東西**——大規模移除最容易在這裡出錯。
+    (1) **`_ready_step_header_and_fields()` 函式本身要保留**：它是 S4.3 為了收斂「兩份 renderer 各自漏接 hard-stop」而抽出的共用前綴，拿掉 hard-stop 之後仍是 `_format_full_step_block()` 與 `_format_recap_next_step()` 的共用基礎。只拿掉裡面的 hard-stop 幾行。
+    (2) **`_checkpoint_writable()` 保留**：目前唯一 caller 是 auto-reply 啟用閘門，但 **S6.1 會用它做 checkpoint 可寫性檢查**。移除 caller、保留函式，docstring 註明暫無 caller 及接手者。
+    (3) **`plan_runner.py` 約 line 2200 的 S4.4 移除告示需改寫**（它引用的 S4.2/S4.3 安全信封即將不存在），改成同樣簡短的版本、記下兩個機制都被移除過並指向 plan §2.6 與 Phase 6。**不得寫成長篇**——不存在功能的說明不該住在原始碼。
+    驗收要求：殘留掃描（`auto_reply`／`hard_stop`／`keep-going` 等）四個檔案皆為 0；用 `/tmp/hstest/plans/active/t.md`（action 含 `rm -rf` 與 `git push --force`）實跑 `next` 與 `recap`，確認 HARD-STOP 字樣消失而派工指令正常；`auto-reply` 與 `hard-stop` 子指令皆回 `invalid choice`。
+
+  - Why: 四類硬停止與 same-pass provenance **在 AgentFlow 也只是文字，`scripts/` 零實作**（研究 #21／#22）——我們當初從 `AG_GUIDE.zh-tw.md:119` 抄來時它就不是機制。實際上線的只有 hard-stop 的文字送達，而它不停任何東西，只是把文字附加在本來就會發生的 block 後面，實測誤報 80.6%（24 份 plan／203 步；本 plan 自己 15 步命中 6、6 個全錯）。依「加一次停必須換到東西」的判準：**一份 80% 錯的收據，讀者三天內會學會跳過那一段，而它佔的是 hook reason 裡最貴的版面。**
+
+- [ ] **S6.3** — 計數器拆分與兩級嚴格度
+  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`
+  - Agent: general-purpose (Opus)
+  - Estimated: 120m
+  - Action: 先寫測試再實作。**(a) 拆計數器**：`consecutive_blocks` 維持現狀（對 harness 的 per-turn 8 步上限是**正確的**，不要動）；另立一個只在**真實推進**時遞增的計數，沿用 `_record_advance_if_progressed()` 已有的「completed+skipped 真的增加了」偵測。**(b) 修 `bg_poll_count` 與 `nag_counts`**：兩者目前被每則訊息歸零，導致逃生口永不開、升級訊息永不出現——它們不該掛在 turn 軸上。**(c) 兩級嚴格度**（研究 #14）：把「幾乎每輪都會觸發」的檢查降成警告層（`_hook_allow(ctx, system_message=...)`），只保留少數在阻擋層（`_hook_block`）。篩選原則**逐字寫進程式碼註解**：「一個檢查該不該在進行中就擋，取決於**現在不修會不會讓後面的判定失效或不可逆**，而不是取決於它有多重要。」**(d)** 修正 `_branch_background_tasks()`：限縮成「in_progress step 有 `task_id` 且該 task_id 在 `background_tasks` 裡」才 block——目前它讀的是整個 session 的背景工作、無 plan 識別，而本 repo 的工作模式（指揮官不下場、dispatch-loop）**要求**有背景 agent 在跑，這條 branch 因此幾乎恆真。
+  - Dependencies: S5.1
+  - Why: `stop_hook_active` 的真正語意經實測（n=4）是「這次 Stop 是不是上一次 hook block 造成的續推」，**與人類無關**——三處 docstring 的「a human just spoke」為假（已於 S5.1 更正註解）。後果：7 輪 check-in 安全閥**在它唯一被設計來服務的情境（multi-agent 長跑）裡永遠不觸發**，因為每則 teammate 訊息都開新 turn。兩個獨立 session 觀察到計數器只在 1/7 ↔ 2/7 之間交替。
+
+- [ ] **S6.4** — CLI 表達力：drift resync、skip 理由、in_progress 轉 skipped
+  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`
+  - Agent: general-purpose (Sonnet)
+  - Estimated: 60m
+  - Action: 先寫測試再實作。**(a) `resync` 子指令**：比對 plan 與 state 的 step id 集合與 deps，未變則只回寫 `plan_sha256`、保留全部進度；變了則拒絕並列出差異。**drift banner 的第一順位修法改印 `resync`**，`rm state && init` 降為「step 結構真的變了」才提。**(b) `skip --reason`**，`transition_step()` 在 `SKIPPED` 時寫 `step["skip_reason"]`。**(c) `VALID_TRANSITIONS[IN_PROGRESS]` 加入 `SKIPPED`。** **(d) plan 新增 step 時的進度承接**：2026-09-08 本 plan 從 15 步長到 20 步（追加 Phase 6／7），`init --force` 會**丟掉全部進度**，只能手寫 Python 把 13 步的 `status`／`started_at`／`completed_at`／`previously_reported_ready` 併回重建後的 state。長跑的 plan 本來就會長大——**「plan 長出新 step」是正常事件，不該只有「重建並丟光」一條路**。需一個承接模式（例如 `init --merge`：以新 plan 為結構、既有 step id 的狀態原樣保留、消失的 step id 明確報出來讓人裁決），與 (a) 的 `resync`（結構未變、只回寫指紋）互補。
+  - Dependencies: S5.1
+  - Why: (a) 本 session drift 誤停 **4 次，全部是散文變更**、step 結構一次都沒動；而補 Addendum 記裁決正是這套機制自己鼓勵的行為——**機制鼓勵的行為觸發了機制自己最嚴厲的處置**，且唯一的修法會刪掉全部進度。(b)(c) 移除 S4.4 時實際踩到：`in_progress` 只能轉 `completed` 或 `failed`，而 `fail` 會自動寫 stop.md 停機——等於用「停機」表達「範圍被砍」，那才是加了一次不該有的停。三項都**不加停、純補資訊或降低代價**。
+
+- [ ] **S6.5** — `/security-review` 補跑與文件收束
+  - Files: `plan-run/SKILL.md`, `CHANGELOG.md`, `.verification/2026-09-08/`
+  - Agent: general-purpose (Sonnet)
+  - Estimated: 60m
+  - Action: **(a)** 在一個**有 remote 的 repo** 作為 cwd 的情境下補跑內建 `/security-review`——S5.1 未能執行是因為 session cwd 是 `knowledge-base`（local-only，`git remote -v` 為空），該 skill 硬跑 `git diff origin/HEAD...` 直接失敗。**不得為了跑它去修改任何 repo 的 remote 設定。** 若本輪仍無法執行，**誠實記為未完成並說明原因**，不要用手動 review 代替後標記通過。**(b)** SKILL.md 與 CHANGELOG 依 S6.1–S6.4 的結果收束：機制數從五個改為四個（機制 5 已移除）、補 `resync`／`skip --reason` 的用法、更新 checkpoint 一節為「程式會驗、不只是請你寫」。
+  - Dependencies: S6.1, S6.2, S6.3, S6.4
+  - Why: `/security-review` 是 S5.1 明列的必做項而未能執行，該缺口不隨 S5.1 完成而消失，改以獨立 step 承接——**未完成的事要有地方掛著，不是被上一個 step 的完成宣稱蓋過去。**
+
+
+### Phase 7: 最終驗收
 
 - [ ] **S5.2** — fresh-context 驗收（一輪）
   - Files: `.verification/2026-09-07/acceptance.md`
   - Agent: readonly-verifier (Sonnet)
   - Action: 全新 context，**不讀本 plan 的實作討論**。逐條驗 §11 的 AC1–AC22 並附原始指令輸出。AC17 直接跑 `plan_runner.py init` 對本 plan 檔案驗證 phase 解析（應為 14 steps / 5 phases）。**AC22 必須先做**：在讀本 plan 的任何實作細節之前，先只看四個選項作答一次並記錄結果——讀過 plan 之後就再也測不出這題好不好猜。AC12/AC13 需**實跑一次開啟 auto-reply 的推進**，確認四類硬停止真的攔得住（至少各構造一個命中案例）且每筆自動決定都有留痕；AC14 確認 `auto_reply` 缺欄位的既有 plan 行為零變化。AC7 用真實產出的 checkpoint.md 做自足性測試：**只讀該檔，回答「下一步該做什麼」**，答不出即 FAIL。AC8 用真實推進驗證 8 步預算未因新機制減少（R8）。AC10 確認 `.verification/2026-09-07/` 內容存在且完整。跑全部測試套件（`test_plan_runner_regression.py`、`test_plan_run_hook.py`、golden）並附完整輸出。零 FAIL 才放行；有 FAIL 逐條列出並附證據，**不得代為修復**。
-  - Dependencies: S5.1
+  - Dependencies: S5.1, S6.1, S6.2, S6.3, S6.4, S6.5
+  - Addendum（2026-09-08）：**驗收條件已因兩次機制變更而改變，執行前以本 Addendum 為準。**
+    (a) **AC22（四選一盲測）刪除**——機制 6 已整個移除，該題不存在。
+    (b) **AC17 的數字改為 15 steps / 5 phases + Phase 6**，不是原文的 14/5；實際數字以 `init` 輸出為準，不要照抄 plan 裡的舊值。
+    (c) **AC7（用真實 checkpoint 做自足性測試）在 S6.1 完成前無材料**，且**不得手工生一份讓它通過**——那會變成用假材料通過一個「驗證機制是否真的產出東西」的測試。S6.1 的驗收本身就要求實跑到真的生出一份，AC7 驗的是那一份對不知情讀者是否可用。
+    (d) **AC12／AC13（auto-reply 相關）刪除**——機制 5 已於 S6.2 移除。
+    (e) 新增一條：**逐一 `find` 每個機制的產物**，零產物者需能說出是「沒有寫入者」還是「有寫入者但條件未成立」——這是 S5.1 抓到機制 3 的方法，應成為常規驗收動作。
+
   - Why: 使用者規則「驗證不自驗」——實作者與 reviewer 都看過實作討論，只有 fresh context 能檢驗 checkpoint 的自足性這種「對不知情讀者是否可用」的性質。
 
 ---

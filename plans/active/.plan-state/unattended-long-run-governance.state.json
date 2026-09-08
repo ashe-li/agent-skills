@@ -7,11 +7,14 @@
     "Phase 2: 安全網（漂移偵測與停機閘門）",
     "Phase 3: 停下來那一刻的品質",
     "Phase 4: 少停與確認（工作量路由、auto-reply、起跑閘門）",
-    "Phase 5: 品保"
+    "Phase 5: 品保",
+    "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+    "Phase 7: 最終驗收"
   ],
+  "auto_reply": "off",
   "parent_task_id": null,
-  "created_at": "2026-09-06T17:59:26.574225+00:00",
-  "updated_at": "2026-09-08T03:28:05.375816+00:00",
+  "created_at": "2026-09-08T08:33:28.706936+00:00",
+  "updated_at": "2026-09-08T08:38:49.479919+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -24,6 +27,7 @@
       "files": "`.verification/2026-09-07/plan-run-boundary-measurement.md`",
       "action": "開工先跑 `python3 ~/Documents/knowledge-base/tools/skill-retriever/bm25_retrieve.py \"plan-run stop hook 續推 8 步\"`。實跑一份既有 plan（從 `plans/completed/` 複製到暫存 slug，不動原檔）觀察 Stop hook 續推行為：記錄實際達到的 `consecutive_blocks` 上限、每步 wall-clock 耗時分佈、`checkpoint_pending` 觸發時機、`BLOCK_BUDGET=7` 與 `BLOCK_BUDGET_HARD_CAP=8` 的實際落點。同時 dump 一份 pointer JSON 全欄位快照。**live 證據優先，禁止只讀 SKILL.md 推論**；無法實跑的部分明確標 provisional。輸出必須包含 `CHECKPOINT_STALE_SECONDS` 預設值的建議區間與依據。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-06T18:03:22.362487+00:00",
@@ -41,6 +45,7 @@
       "files": "`.verification/2026-09-07/plan-state-inventory.md`, `.gitignore`",
       "action": "**盤點範圍不限 agent-skills**——`plan_runner.py` 是多 repo 共用腳本，需涵蓋所有共用這支 runner 的 repo（至少含 `~/Documents/knowledge-base`，已知有 44 份 state；agent-skills 本身目前 0 份）。輸出**各 repo 的 state 份數與欄位分佈**，列出欄位聯集與缺漏矩陣，判定 legacy 放行需要涵蓋哪些形狀。檢查 `.gitignore` 與 `git log --stat -- plans/` 確認 `.state.json` / `.state.lock` 目前是否進版控，裁定 `checkpoint.md` 與 `stop.md` 的版控歸屬並落實到 `.gitignore`（`.state.lock` 若未忽略應一併加入）。**不修改任何既有 state 檔內容。** 輸出需明確給出一句話裁定：「checkpoint.md 進／不進版控，理由是 X」。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-06T18:03:22.429031+00:00",
@@ -61,6 +66,7 @@
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `CHANGELOG.md`",
       "action": "先寫測試再實作（紅－綠－重構）。實作 `plan_fingerprint(text) -> str` 純函式：正規化後計 SHA-256，正規化須剝除 checkbox 勾選狀態差異（`- [ ]` vs `- [x]`）與行尾空白（R2 核心）。`init_state()` 寫入 `plan_sha256`；`load_state()` 重算比對並回傳 drift 旗標；`status` / `next` 在輸出頂部印 `DRIFT:` 警告含修法指引（`rm <state> && plan_runner.py init`）；`next` 預設 block，`--ignore-drift` 逃生。缺 `plan_sha256` 欄位 → legacy 放行只印一次性 hint。docstring 明寫「這是完整性提示，非防篡改邊界」（T7）。CHANGELOG 標明 drift block 為 behavior change。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-06T18:21:32.304637+00:00",
@@ -81,6 +87,7 @@
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `.gitignore`",
       "action": "先寫測試再實作。新增 `stop_marker_path_for(slug)`，**沿用既有 state 路徑推導與 slug sanitize，不用字串拼接**，並加 `..`／絕對路徑拒絕測試（T3/R7）。`next` 與 hook 進入點在做任何事之前先檢查存在性 → 立即 `allow` 並印出全文。新增 `plan_runner.py stop --write --reason <text>`（產生含 ISO8601、失敗 step、`git rev-parse HEAD` + branch + dirty 狀態的 Markdown）與 `stop --clear --reason-reviewed`（旗標防手滑）。**程式只判存在性，絕不解析內容做決策**（T6），此性質寫進 docstring。模板內含明文警語：Reason 禁貼 log 原文與任何 token/key/JWT。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-07T06:19:53.377557+00:00",
@@ -100,6 +107,7 @@
       "files": "`plan-run/SKILL.md`, `scripts/plan_runner.py`",
       "action": "在 `plan-run/SKILL.md` 定義 `.plan-state/<slug>.checkpoint.md` 四要件模板（Finished／Running now／Still to do／Next work action）與自足性規則（**不得要求讀者回頭讀 plan.md、state.json 或前一則 checkpoint**）。修改 hook reason renderer（`plan_runner.py` :1490 之後那段）：`checkpoint_pending=True` 時，reason 文字明確要求把四要件寫入該檔並附完整路徑。內容規則明文禁貼 secrets（T4）。**此 step 不改 `decide_budget`**，只改 reason 文字與文件。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-06T18:09:39.387336+00:00",
@@ -119,10 +127,31 @@
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`",
       "action": "先寫測試再實作。新增常數 `CHECKPOINT_STALE_SECONDS`（值取自 S1.1 量測建議，env `PLAN_RUN_CHECKPOINT_STALE_SECONDS` 可覆寫，沿用既有 `_effective_block_budget()` 的 env 讀取與 clamp 慣例）。`decide_budget()` 簽章加 keyword-only `now: float | None = None`，由 caller 傳 `time.time()`；**函式內不得直接呼叫時鐘**。新規則：距 `pointer['last_advance_at']` 超過門檻 → `checkpoint_pending=True`，**`decision` 與 `steps_remaining` 完全不受影響**（R1）。`last_advance_at` 缺失時 fallback 到 `created_at`，兩者皆無則不觸發。跑 golden test 確認 `plan_runner_base_e745670.py` 基準行為零變化。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-07T06:54:32.656745+00:00",
       "completed_at": "2026-09-07T07:04:30.247116+00:00",
+      "failure_reason": null
+    },
+    "S3.4": {
+      "id": "S3.4",
+      "title": "`last_advance_at` writer（S3.2 執行時發現的阻斷缺口）",
+      "phase": "Phase 3: 停下來那一刻的品質",
+      "deps": [
+        "S3.2"
+      ],
+      "agent": "general-purpose (Sonnet)",
+      "skill": null,
+      "command": null,
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`",
+      "action": "`last_advance_at` 在 production **沒有任何 writer**——`new_pointer_record()` 設 `None`（:1385），全檔只有 schema 清單與讀取處，沒有一處寫入。後果實測：因 `created_at` 不會前進，任何存在超過 `CHECKPOINT_STALE_SECONDS` 的 pointer 會在 `consecutive_blocks` 0~6 每一次 block 都回 `checkpoint_pending=True`（未超時只有 budget-1 觸發），S1.1 校準的「約 5% 觸發」實際接近 100%。在推進成功處寫入 `last_advance_at=now_iso()`——候選落點 `_record_assignment()` 或 `_branch_ready_step()` 的推進點，**先讀碼確認哪一個才是「真的往前走了一步」的語意**，不要兩處都寫。順帶修正既有 bug：`_is_pointer_stale()` 也讀同一欄位，所以 24 小時 staleness 一直在量「pointer 建立多久」而非「多久沒推進」，補上 writer 後該判定才符合原意。",
+      "risk": null,
+      "estimated": 0,
+      "status": "completed",
+      "task_id": null,
+      "started_at": "2026-09-07T07:04:30.311111+00:00",
+      "completed_at": "2026-09-07T07:18:59.403190+00:00",
       "failure_reason": null
     },
     "S3.3": {
@@ -139,8 +168,9 @@
       "skill": null,
       "command": null,
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`",
-      "action": "先寫測試再實作。新增 `recap` subcommand（不可叫 resume，已被 pointer 生命週期佔用），單一輸出依序印：(1) stop.md 若存在則印全文並終止，其餘不印 (2) drift 狀態 (3) checkpoint.md 全文 (4) 下一個 ready step 與其派工指令 (5) pointer 的 `last_advance_at` 與距今時長。輸出自我約束上限：checkpoint 超過 200 行則印 head 60 + tail 60 並標明省略行數（借鏡 `resume-intake.js:12-15` 的 bounded 讀取）。**`recap` 只印不寫、不 parse checkpoint 內容做任何判斷**（T6）。",
+      "action": "先寫測試再實作。新增 `recap` subcommand（**不可叫 `resume`**——`pause`/`resume` 已是 pointer 生命週期的既有子命令，S2.2 執行時發現撞名，2026-09-07 改名），單一輸出依序印：(1) stop.md 若存在則印全文並終止，其餘不印 (2) drift 狀態 (3) checkpoint.md 全文 (4) 下一個 ready step 與其派工指令 (5) pointer 的 `last_advance_at` 與距今時長。輸出自我約束上限：checkpoint 超過 200 行則印 head 60 + tail 60 並標明省略行數（借鏡 `resume-intake.js:12-15` 的 bounded 讀取）。**`recap` 只印不寫、不 parse checkpoint 內容做任何判斷**（T6）。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-07T07:19:20.834173+00:00",
@@ -160,6 +190,7 @@
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `design/SKILL.md`",
       "action": "先寫測試再實作。`parse_plan()`（:132）支援選填欄位 `Estimated: <N>m`（缺失視為 0；非法格式印警告但不中止解析，沿用既有寬容策略）。`init_state()` 收進 step 快照。新增 `LARGE_PHASE_MINUTES`（預設 180，env 可調）；`next` 的 delta output 在 phase 小計超門檻時加一行 `LARGE-WORK: phase N 估計 X 分鐘，建議拆分`。**只警告不 block**。更新 `design/` 的 plan 模板說明新欄位為選填、不填不影響任何行為。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-07T07:32:33.174728+00:00",
@@ -180,6 +211,7 @@
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`",
       "action": "開工先跑 `python3 ~/Documents/knowledge-base/tools/skill-retriever/bm25_retrieve.py \"guard regex 命令位置 錨定\"` 取回既有教訓。先寫測試再實作。state 新增 `auto_reply` 欄位（`\"on\"|\"off\"`，預設與缺欄位皆等同 `\"off\"`），`load_state()` 走 legacy 放行。實作 `hard_stop_check(action_text, step, budget_state) -> list[str]` 純函式，回傳命中的硬停止類別 ID，四類判定條件**全部溯源自 §2.5 對映表列出的既有使用者規則，不自行發明新規則**：H1 owner-only、H2 不可逆、H3 新對外管道／後端 own 資源、H4 超花費上限（單 step 超 §10 預估 2 倍、phase 超小計 1.5 倍）。H2/H3 的命令判定**必須錨定命令位置，不是字面出現**，需有兩個繞過測試（字串中出現 `rm` 但不在命令位置／命令位置出現但被別名包裹）。新增 `next --no-auto-reply` 單次關閉逃生口。**此 step 只實作判定與設定，不實作自動作答行為**——沒有 S4.3 的留痕就不准開。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-07T07:46:21.561930+00:00",
@@ -200,6 +232,7 @@
       "files": "`scripts/plan_runner.py`, `plan-run/SKILL.md`, `scripts/tests/test_plan_runner_regression.py`",
       "action": "先寫測試再實作。在 `plan-run/SKILL.md` 的 checkpoint 模板新增第五區塊 `## Auto-answered`，每筆含：問題原文、`Took:` 採用值、`Safe because:` 一句話理由、`Hard-stop check: H1/H2/H3/H4` 四項結果（借 `references/advisors/requirements.md:13` 的 same-pass provenance）。**程式層強制**：`auto_reply=\"on\"` 時若 checkpoint 檔案路徑不可寫 → 拒絕啟用、印警告、退回 `off`（R11/T12），不得「先自動答、留痕盡力而為」。**單筆的程式 gate（不可只靠 hook reason 的文字約束）**：一筆自動作答在其 `Auto-answered:` 條目**寫入成功並讀回確認之前，不得視為已答**；寫入失敗（磁碟錯誤、路徑變為不可寫、格式驗證不過）則該題**退回 open 狀態交還給人**，且該輪不得繼續自動作答。修改 hook reason renderer：`auto_reply=\"on\"` 且本輪有自動決定時，reason 一併帶出已寫入的條目摘要。新增 `next --keep-going`：對當前這批未決項臨時開啟 auto-reply，該次呼叫結束自動重設、**不寫回 state**；四類硬停止在此旗標下**同樣生效**。",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-07T10:06:43.133420+00:00",
@@ -208,7 +241,7 @@
     },
     "S4.4": {
       "id": "S4.4",
-      "title": "開跑前四選一確認閘門",
+      "title": "~~開跑前四選一確認閘門~~【已移除 2026-09-08，理由見 §2.6 移除告示；本 step 以 skip 收束，產出已從程式中拿掉】",
       "phase": "Phase 4: 少停與確認（工作量路由、auto-reply、起跑閘門）",
       "deps": [
         "S3.1",
@@ -221,6 +254,7 @@
       "files": "`scripts/plan_runner.py`, `plan-run/SKILL.md`, `scripts/tests/test_plan_runner_regression.py`",
       "action": "先寫測試再實作。實作 `build_scope_question(state, phase) -> ScopeQuestion` **決定性**純函式（同一份 state 每次產出同一組選項）：正確答案由該 phase 全部 step 的 title、`Files:` 聯集、`Estimated:` 小計、behavior change 標記生成；三個干擾項各依 §2.6 表格的規則從 state 推導——範圍過寬（併入下一 phase 的 `Files:`）、範圍過窄（拿掉依賴深度最大的 step）、動到禁區（測試檔換成 `scripts/tests/golden/`，或目標 repo 換成鄰近 repo）。`next` 在進入超過 `LARGE_PHASE_MINUTES` 的 phase 前用 `AskUserQuestion` 出題，**與 S4.1 共用同一門檻判定，不引入第二套門檻**。選錯處置兩級：第一次印正確答案 + 逐項差異 + 重問；**第二次仍選錯 → 呼叫 S2.2 的 stop.md 機制停機**。選對則把**選中的正確項逐字**寫入 checkpoint.md 的 `## Confirmed scope` 區塊（含 phase 名與 ISO8601 時戳）；**干擾項一律不落檔**（T14）。選項只帶相對 repo root 的路徑（T14）。**H1 守衛（不可省）**：此題歸類為四類硬停止的第一類，`auto_reply=\"on\"` 與 `--keep-going` 下**皆不得自動作答**，需專屬守衛測試。",
       "risk": null,
+      "estimated": 0,
       "status": "skipped",
       "task_id": null,
       "started_at": null,
@@ -246,8 +280,9 @@
       "skill": null,
       "command": null,
       "files": "`plan-run/SKILL.md`, `CHANGELOG.md`, `docs/`",
-      "action": "在 `plan-run/SKILL.md` 補一節「長跑治理」，記載六個機制、drift 的修法（`rm state && init`，引用 KB 教訓原文連結）、stop.md 的人工審核流程、`resume` 的用法與典型輸出。**auto-reply 需獨立一小節**：四類硬停止逐字列出、`Auto-answered:` 模板、預設 `off` 與如何開啟、`--keep-going` 與 `--no-auto-reply` 的差別，以及**它與既有「要問使用者」規則的關係**（§2.5 的對映表照抄一份，避免未來誤以為 auto-reply 廢除了那些規則）。**四選一閘門也需獨立一小節**：觸發條件（只在超門檻 phase、只問一次）、三條干擾項規則、選錯的兩級處置、`Confirmed scope:` 的權威性（後續 agent 擴大範圍以此駁回）、以及**它永遠不可被 auto-reply 自動作答**。CHANGELOG 補齊**兩項** behavior change——drift block（含 `--ignore-drift` 逃生口）與超門檻 phase 的起跑確認——並標明 `auto_reply` 預設 `off`、`Estimated:` 未填則閘門不觸發，皆不改變既有行為。**明確以粗體寫出本方案的邊界：一輪仍是 8 步，本機制不突破該上限；要突破需路線 B，其缺件清單見本 plan §3。**",
+      "action": "在 `plan-run/SKILL.md` 補一節「長跑治理」，記載**五個**機制（機制 6 已移除）、drift 的修法（`rm state && init`，引用 KB 教訓原文連結）、stop.md 的人工審核流程、`resume` 的用法與典型輸出。**auto-reply 需獨立一小節**：四類硬停止逐字列出、`Auto-answered:` 模板、預設 `off` 與如何開啟、`--keep-going` 與 `--no-auto-reply` 的差別，以及**它與既有「要問使用者」規則的關係**（§2.5 的對映表照抄一份，避免未來誤以為 auto-reply 廢除了那些規則）。**四選一閘門已於 2026-09-08 整個移除，SKILL.md 不得記載它**（連「曾經有過」都不要寫進使用說明——使用說明是給人照著做的，不是沿革）。CHANGELOG 只需補**一項** behavior change——drift block（含 `--ignore-drift` 逃生口）。原本的第二項（超門檻 phase 起跑確認）已隨機制 6 移除，不得列入。另標明 `auto_reply` 預設 `off` 不改變既有行為。**明確以粗體寫出本方案的邊界：一輪仍是 8 步，本機制不突破該上限；要突破需路線 B，其缺件清單見本 plan §3。**",
       "risk": null,
+      "estimated": 0,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-08T03:05:27.916700+00:00",
@@ -267,6 +302,110 @@
       "files": "`scripts/plan_runner.py`, `scripts/tests/`, `plan-run/SKILL.md`, `CHANGELOG.md`",
       "action": "對 S2.1–S4.5 的完整 diff 做一輪 review。重點十項：(1) `decide_budget` 純函式性是否被破壞、golden 基準是否真的零變化（R1）(2) 指紋正規化是否真的擋掉 checkbox 誤報，用實際 plan 檔案試（R2）(3) stop.md / checkpoint.md 路徑推導有無穿越風險（T3/R7）(4) **人工抽查一份實際產出的 checkpoint.md 與 stop.md**，確認未夾帶 log 原文或任何 secret（T4）(5) **auto-reply 專項**：四類硬停止是否全部溯源既有規則而非自行發明、命令位置錨定的兩個繞過測試是否真的會紅、缺欄位是否確實等同 `off`、checkpoint 不可寫時是否真的退回 `off`（R9/R11/T11-T13）(6) **人工抽查一份真實 `Auto-answered:` 區塊**，逐筆質疑「這個真的是安全的例行預設嗎」(7) **四選一閘門專項**：`build_scope_question()` 是否真的決定性（同 state 兩次呼叫結果逐字相同）、三條干擾項是否各自照規則生成而非隨機、四選項是否互不相同、**H1 守衛在 `auto_reply=\"on\"` + `--keep-going` 下是否真的擋得住**（R13）、干擾項是否確實不落檔（T14）(8) **自己先做一次那道題**：不看 plan 只看四個選項，若能靠語感挑對，直接在 review 標 R12 命中並升級為 blocker (9) **逐條對照 `~/.claude/claude-security-guidance.md`**，核對本 plan 觸及的安全面（§7 的 T3–T13）有無漏項，缺的補進 §7 並處置 (10) 新增程式碼覆蓋率是否達 80%，以及 `plan_runner.py` 若已超過 4000 行，提出拆檔建議但本輪不執行（R6）。**review 完成後在同一 step 內跑一次 `/security-review`**（針對本次 diff，不另開 step，維持一輪 review 的收斂），其 finding 併入本 step 的 PASS/FAIL 表。輸出逐項 PASS/FAIL 與證據，FAIL 項直接修。",
       "risk": null,
+      "estimated": 0,
+      "status": "completed",
+      "task_id": null,
+      "started_at": "2026-09-08T08:34:07.200701+00:00",
+      "completed_at": "2026-09-08T08:34:07.270815+00:00",
+      "failure_reason": null
+    },
+    "S6.1": {
+      "id": "S6.1",
+      "title": "機制 3：facts 由 hook 自己收集，五道 gate 落地",
+      "phase": "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+      "deps": [
+        "S5.1"
+      ],
+      "agent": "general-purpose (Opus)",
+      "skill": null,
+      "command": null,
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`",
+      "action": "先寫測試再實作。**核心改動是讓 hook 自己去檔案系統取事實，不再只生一段指示要 model 自己寫。** 依 `.verification/2026-09-08/agentflow-portability-study.md` 的 A 類技術 #3–#7 實作五道 gate：**存在性**（`checkpoint_pending` 成立過之後，`.plan-state/<slug>.checkpoint.md` 必須真的在磁碟上）、**唯一性**（找到 0 份或多份都 fail）、**新鮮度**（內容時間戳需 ≥ 最近一次推進；另**交叉比對 `os.stat().st_mtime`**——研究指出 AgentFlow 用內容時間戳是為了跨 clone 穩定，我們是本機場景，mtime 是作業系統寫的、model 要偽造需額外呼叫）、**格式**（四要件形狀由一個 `checkpoint --template` 子指令發配、strict parser 驗——直接抄 I-063 的教訓：形狀不能只活在散文裡）、**檔案身分**（`os.lstat` 非 symlink、讀取期間 sha256 不變）。**同時修送達**：`_render_checkpoint_note()` 目前只掛在 Stop hook 的 `next_step` reason 上，而預設模式走 CLI——必須比照 S4.3 對 hard-stop 做過的做法接進 CLI ready-step 輸出，並沿用 `ReadyStepHardStopDeliveryTestCase` 那個「漏接就紅」的枚舉測試模式。",
+      "risk": null,
+      "estimated": 150,
+      "status": "pending",
+      "task_id": null,
+      "started_at": null,
+      "completed_at": null,
+      "failure_reason": null
+    },
+    "S6.2": {
+      "id": "S6.2",
+      "title": "機制 5（auto-reply 與 hard-stop 送達）整個移除",
+      "phase": "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+      "deps": [
+        "S5.1"
+      ],
+      "agent": "general-purpose (Sonnet)",
+      "skill": null,
+      "command": null,
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `scripts/tests/test_plan_run_hook.py`, `plan-run/SKILL.md`, `CHANGELOG.md`",
+      "action": "比照 S4.4 的移除方式——**不是用常數關掉，是拿掉**。範圍：`auto_reply` state 欄位與 `auto-reply` 子指令、`resolve_auto_reply()`／`auto_reply_setting()`、`hard_stop_findings()` 與四類硬停止的全部詞表與判定函式、`hard-stop` 子指令、`_hard_stop_hook_note()` 與三條送達路徑的接線、`next --keep-going`／`--no-auto-reply`、`_checkpoint_writable()` 的 auto-reply 閘門用途（若 S6.1 需要可寫性檢查則保留函式、改掛新用途）、以及全部對應測試。`plan-run/SKILL.md` 的 `## Auto-reply` 整節刪除。**CHANGELOG 的 `auto_reply` Added 條目一併移除**——它從未發布，整個生命週期都在此 unreleased 分支內。",
+      "risk": null,
+      "estimated": 90,
+      "status": "in_progress",
+      "task_id": null,
+      "started_at": "2026-09-08T08:38:49.479767+00:00",
+      "completed_at": null,
+      "failure_reason": null
+    },
+    "S6.3": {
+      "id": "S6.3",
+      "title": "計數器拆分與兩級嚴格度",
+      "phase": "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+      "deps": [
+        "S5.1"
+      ],
+      "agent": "general-purpose (Opus)",
+      "skill": null,
+      "command": null,
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`",
+      "action": "先寫測試再實作。**(a) 拆計數器**：`consecutive_blocks` 維持現狀（對 harness 的 per-turn 8 步上限是**正確的**，不要動）；另立一個只在**真實推進**時遞增的計數，沿用 `_record_advance_if_progressed()` 已有的「completed+skipped 真的增加了」偵測。**(b) 修 `bg_poll_count` 與 `nag_counts`**：兩者目前被每則訊息歸零，導致逃生口永不開、升級訊息永不出現——它們不該掛在 turn 軸上。**(c) 兩級嚴格度**（研究 #14）：把「幾乎每輪都會觸發」的檢查降成警告層（`_hook_allow(ctx, system_message=...)`），只保留少數在阻擋層（`_hook_block`）。篩選原則**逐字寫進程式碼註解**：「一個檢查該不該在進行中就擋，取決於**現在不修會不會讓後面的判定失效或不可逆**，而不是取決於它有多重要。」**(d)** 修正 `_branch_background_tasks()`：限縮成「in_progress step 有 `task_id` 且該 task_id 在 `background_tasks` 裡」才 block——目前它讀的是整個 session 的背景工作、無 plan 識別，而本 repo 的工作模式（指揮官不下場、dispatch-loop）**要求**有背景 agent 在跑，這條 branch 因此幾乎恆真。",
+      "risk": null,
+      "estimated": 120,
+      "status": "pending",
+      "task_id": null,
+      "started_at": null,
+      "completed_at": null,
+      "failure_reason": null
+    },
+    "S6.4": {
+      "id": "S6.4",
+      "title": "CLI 表達力：drift resync、skip 理由、in_progress 轉 skipped",
+      "phase": "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+      "deps": [
+        "S5.1"
+      ],
+      "agent": "general-purpose (Sonnet)",
+      "skill": null,
+      "command": null,
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`",
+      "action": "先寫測試再實作。**(a) `resync` 子指令**：比對 plan 與 state 的 step id 集合與 deps，未變則只回寫 `plan_sha256`、保留全部進度；變了則拒絕並列出差異。**drift banner 的第一順位修法改印 `resync`**，`rm state && init` 降為「step 結構真的變了」才提。**(b) `skip --reason`**，`transition_step()` 在 `SKIPPED` 時寫 `step[\"skip_reason\"]`。**(c) `VALID_TRANSITIONS[IN_PROGRESS]` 加入 `SKIPPED`。**",
+      "risk": null,
+      "estimated": 60,
+      "status": "pending",
+      "task_id": null,
+      "started_at": null,
+      "completed_at": null,
+      "failure_reason": null
+    },
+    "S6.5": {
+      "id": "S6.5",
+      "title": "`/security-review` 補跑與文件收束",
+      "phase": "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+      "deps": [
+        "S6.1",
+        "S6.2",
+        "S6.3",
+        "S6.4"
+      ],
+      "agent": "general-purpose (Sonnet)",
+      "skill": null,
+      "command": null,
+      "files": "`plan-run/SKILL.md`, `CHANGELOG.md`, `.verification/2026-09-08/`",
+      "action": "**(a)** 在一個**有 remote 的 repo** 作為 cwd 的情境下補跑內建 `/security-review`——S5.1 未能執行是因為 session cwd 是 `knowledge-base`（local-only，`git remote -v` 為空），該 skill 硬跑 `git diff origin/HEAD...` 直接失敗。**不得為了跑它去修改任何 repo 的 remote 設定。** 若本輪仍無法執行，**誠實記為未完成並說明原因**，不要用手動 review 代替後標記通過。**(b)** SKILL.md 與 CHANGELOG 依 S6.1–S6.4 的結果收束：機制數從五個改為四個（機制 5 已移除）、補 `resync`／`skip --reason` 的用法、更新 checkpoint 一節為「程式會驗、不只是請你寫」。",
+      "risk": null,
+      "estimated": 60,
       "status": "pending",
       "task_id": null,
       "started_at": null,
@@ -276,9 +415,14 @@
     "S5.2": {
       "id": "S5.2",
       "title": "fresh-context 驗收（一輪）",
-      "phase": "Phase 5: 品保",
+      "phase": "Phase 7: 最終驗收",
       "deps": [
-        "S5.1"
+        "S5.1",
+        "S6.1",
+        "S6.2",
+        "S6.3",
+        "S6.4",
+        "S6.5"
       ],
       "agent": "readonly-verifier (Sonnet)",
       "skill": null,
@@ -286,34 +430,19 @@
       "files": "`.verification/2026-09-07/acceptance.md`",
       "action": "全新 context，**不讀本 plan 的實作討論**。逐條驗 §11 的 AC1–AC22 並附原始指令輸出。AC17 直接跑 `plan_runner.py init` 對本 plan 檔案驗證 phase 解析（應為 14 steps / 5 phases）。**AC22 必須先做**：在讀本 plan 的任何實作細節之前，先只看四個選項作答一次並記錄結果——讀過 plan 之後就再也測不出這題好不好猜。AC12/AC13 需**實跑一次開啟 auto-reply 的推進**，確認四類硬停止真的攔得住（至少各構造一個命中案例）且每筆自動決定都有留痕；AC14 確認 `auto_reply` 缺欄位的既有 plan 行為零變化。AC7 用真實產出的 checkpoint.md 做自足性測試：**只讀該檔，回答「下一步該做什麼」**，答不出即 FAIL。AC8 用真實推進驗證 8 步預算未因新機制減少（R8）。AC10 確認 `.verification/2026-09-07/` 內容存在且完整。跑全部測試套件（`test_plan_runner_regression.py`、`test_plan_run_hook.py`、golden）並附完整輸出。零 FAIL 才放行；有 FAIL 逐條列出並附證據，**不得代為修復**。",
       "risk": null,
+      "estimated": 0,
       "status": "pending",
       "task_id": null,
       "started_at": null,
       "completed_at": null,
       "failure_reason": null
-    },
-    "S3.4": {
-      "id": "S3.4",
-      "title": "`last_advance_at` writer（S3.2 執行時發現的阻斷缺口）",
-      "phase": "Phase 3: 停下來那一刻的品質",
-      "deps": [
-        "S3.2"
-      ],
-      "agent": "general-purpose (Sonnet)",
-      "skill": null,
-      "command": null,
-      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`",
-      "action": "見 plan S3.4：在推進成功處寫入 last_advance_at=now_iso()，先讀碼確認正確落點；順帶修正 _is_pointer_stale() 一直在量 pointer 建立時間的既有 bug。",
-      "risk": null,
-      "status": "completed",
-      "task_id": null,
-      "started_at": "2026-09-07T07:04:30.311111+00:00",
-      "completed_at": "2026-09-07T07:18:59.403190+00:00",
-      "failure_reason": null
     }
   },
+  "plan_sha256": "1f76e864180796db9061fe464d09a2f5021c4270e41183f6ab33c51a187f2992",
   "previously_reported_ready": [
-    "S5.1"
-  ],
-  "plan_sha256": "5ff3805dd6f848751fe850c1c0fe25848fb2e84cfca44116685f4bb58e8143d1"
+    "S6.1",
+    "S6.2",
+    "S6.3",
+    "S6.4"
+  ]
 }

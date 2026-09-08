@@ -11,7 +11,7 @@
   ],
   "parent_task_id": null,
   "created_at": "2026-09-06T17:59:26.574225+00:00",
-  "updated_at": "2026-09-07T08:03:38.603835+00:00",
+  "updated_at": "2026-09-08T03:28:05.375816+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -200,10 +200,10 @@
       "files": "`scripts/plan_runner.py`, `plan-run/SKILL.md`, `scripts/tests/test_plan_runner_regression.py`",
       "action": "先寫測試再實作。在 `plan-run/SKILL.md` 的 checkpoint 模板新增第五區塊 `## Auto-answered`，每筆含：問題原文、`Took:` 採用值、`Safe because:` 一句話理由、`Hard-stop check: H1/H2/H3/H4` 四項結果（借 `references/advisors/requirements.md:13` 的 same-pass provenance）。**程式層強制**：`auto_reply=\"on\"` 時若 checkpoint 檔案路徑不可寫 → 拒絕啟用、印警告、退回 `off`（R11/T12），不得「先自動答、留痕盡力而為」。**單筆的程式 gate（不可只靠 hook reason 的文字約束）**：一筆自動作答在其 `Auto-answered:` 條目**寫入成功並讀回確認之前，不得視為已答**；寫入失敗（磁碟錯誤、路徑變為不可寫、格式驗證不過）則該題**退回 open 狀態交還給人**，且該輪不得繼續自動作答。修改 hook reason renderer：`auto_reply=\"on\"` 且本輪有自動決定時，reason 一併帶出已寫入的條目摘要。新增 `next --keep-going`：對當前這批未決項臨時開啟 auto-reply，該次呼叫結束自動重設、**不寫回 state**；四類硬停止在此旗標下**同樣生效**。",
       "risk": null,
-      "status": "pending",
+      "status": "completed",
       "task_id": null,
-      "started_at": null,
-      "completed_at": null,
+      "started_at": "2026-09-07T10:06:43.133420+00:00",
+      "completed_at": "2026-09-07T10:43:49.279795+00:00",
       "failure_reason": null
     },
     "S4.4": {
@@ -221,7 +221,7 @@
       "files": "`scripts/plan_runner.py`, `plan-run/SKILL.md`, `scripts/tests/test_plan_runner_regression.py`",
       "action": "先寫測試再實作。實作 `build_scope_question(state, phase) -> ScopeQuestion` **決定性**純函式（同一份 state 每次產出同一組選項）：正確答案由該 phase 全部 step 的 title、`Files:` 聯集、`Estimated:` 小計、behavior change 標記生成；三個干擾項各依 §2.6 表格的規則從 state 推導——範圍過寬（併入下一 phase 的 `Files:`）、範圍過窄（拿掉依賴深度最大的 step）、動到禁區（測試檔換成 `scripts/tests/golden/`，或目標 repo 換成鄰近 repo）。`next` 在進入超過 `LARGE_PHASE_MINUTES` 的 phase 前用 `AskUserQuestion` 出題，**與 S4.1 共用同一門檻判定，不引入第二套門檻**。選錯處置兩級：第一次印正確答案 + 逐項差異 + 重問；**第二次仍選錯 → 呼叫 S2.2 的 stop.md 機制停機**。選對則把**選中的正確項逐字**寫入 checkpoint.md 的 `## Confirmed scope` 區塊（含 phase 名與 ISO8601 時戳）；**干擾項一律不落檔**（T14）。選項只帶相對 repo root 的路徑（T14）。**H1 守衛（不可省）**：此題歸類為四類硬停止的第一類，`auto_reply=\"on\"` 與 `--keep-going` 下**皆不得自動作答**，需專屬守衛測試。",
       "risk": null,
-      "status": "pending",
+      "status": "skipped",
       "task_id": null,
       "started_at": null,
       "completed_at": null,
@@ -248,10 +248,10 @@
       "files": "`plan-run/SKILL.md`, `CHANGELOG.md`, `docs/`",
       "action": "在 `plan-run/SKILL.md` 補一節「長跑治理」，記載六個機制、drift 的修法（`rm state && init`，引用 KB 教訓原文連結）、stop.md 的人工審核流程、`resume` 的用法與典型輸出。**auto-reply 需獨立一小節**：四類硬停止逐字列出、`Auto-answered:` 模板、預設 `off` 與如何開啟、`--keep-going` 與 `--no-auto-reply` 的差別，以及**它與既有「要問使用者」規則的關係**（§2.5 的對映表照抄一份，避免未來誤以為 auto-reply 廢除了那些規則）。**四選一閘門也需獨立一小節**：觸發條件（只在超門檻 phase、只問一次）、三條干擾項規則、選錯的兩級處置、`Confirmed scope:` 的權威性（後續 agent 擴大範圍以此駁回）、以及**它永遠不可被 auto-reply 自動作答**。CHANGELOG 補齊**兩項** behavior change——drift block（含 `--ignore-drift` 逃生口）與超門檻 phase 的起跑確認——並標明 `auto_reply` 預設 `off`、`Estimated:` 未填則閘門不觸發，皆不改變既有行為。**明確以粗體寫出本方案的邊界：一輪仍是 8 步，本機制不突破該上限；要突破需路線 B，其缺件清單見本 plan §3。**",
       "risk": null,
-      "status": "pending",
+      "status": "completed",
       "task_id": null,
-      "started_at": null,
-      "completed_at": null,
+      "started_at": "2026-09-08T03:05:27.916700+00:00",
+      "completed_at": "2026-09-08T03:28:05.375066+00:00",
       "failure_reason": null
     },
     "S5.1": {
@@ -313,8 +313,7 @@
     }
   },
   "previously_reported_ready": [
-    "S4.3",
-    "S4.4"
+    "S5.1"
   ],
-  "plan_sha256": "17b911f4ffe4b0a61e25721d591fe551cba175215a4a56f6b331fa18be929ba7"
+  "plan_sha256": "5ff3805dd6f848751fe850c1c0fe25848fb2e84cfca44116685f4bb58e8143d1"
 }

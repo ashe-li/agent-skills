@@ -39,6 +39,39 @@
 
   路徑推導沿用 `checkpoint_path_for()` 的 `plan_path.stem` 模式，不用 state 的 `slug` 欄位字串拼接——避免一個被竄改的 `slug`（state.json 使用者可寫）透過拼接跳出 `.plan-state/`。
 
+- **`plan_runner.py` 新增選用機制 `auto_reply`（S4.2/S4.3），預設 `off`**：state JSON 新增 `auto_reply: "on"|"off"` 欄位，開啟後例行問題（有既有慣例可循、完全可逆、不離開本機、不超預算）可不停下來問人就自動決定，非例行的（四類硬停止 H1–H4：owner-only 決定／不可逆操作／對外送出／超支）不論開關一律照常停下等人。新增 `plan_runner.py auto-reply <plan> on|off` 開關指令（開啟前檢查 checkpoint 路徑可寫，不可寫則拒絕啟用）、`plan_runner.py hard-stop <plan> <step>` 唯讀查詢單一 step 的四類硬停止判定、`next` 的一次性旗標 `--keep-going`（臨時視為 on）與 `--no-auto-reply`（臨時視為 off，兩者同給時後者贏），以及 checkpoint 模板新增的 `## Auto-answered` 留痕區塊（內容契約，非程式強制）。完整的四類硬停止對映表與使用說明見 `plan-run/SKILL.md`「長跑治理」節。
+
+  **不是 behavior change**：`auto_reply` 缺欄位或未設定時等同 `off`，既有 plan 與既有 state 的行為完全不變——這是刻意設計，理由與漂移偵測缺 `plan_sha256` 欄位時放行相同：新欄位不能讓升級前就存在的 state 靜默改變行為。
+
+- **`plan_runner.py` 新增 `checkpoint.md` 進度快照契約（S3.1/S3.2）**：`.plan-state/<slug>.checkpoint.md` 是寫給**人**看的進度快照，四要件模板——`Finished:`（已完成什麼）／`Running now:`（現在在跑什麼）／`Still to do:`（還剩什麼）／`Next work action:`（下一個實質動作）。契約要求是**自足性**：讀的人只憑這份檔案就要能回答「下一步該做什麼」，不得依賴對話脈絡、不得寫「見上文」。內容安全規則：禁止貼 log 原文，禁止任何 token / key / password / JWT。
+
+  何時被要求寫：`decide_budget()` 新增一條 wall-clock 規則——距上次推進超過 `CHECKPOINT_STALE_SECONDS`（預設 2700 秒／45 分鐘，可用 `PLAN_RUN_CHECKPOINT_STALE_SECONDS` 覆寫）就設 `checkpoint_pending`。門檻值取自 567 筆真實 step 間隔的實測分佈（median 3.9 分／p90 21.2 分／p95 40.8 分）。
+
+  **不是 behavior change**：這條規則**只設 `checkpoint_pending`，絕不改 `decision` 與 `steps_remaining`**——續推預算與一輪能推幾步完全不受影響。`decide_budget()` 維持純函式，時鐘由 caller 以 keyword-only 的 `now` 注入，函式內不讀時鐘，既有 golden test 的可決定性不變。
+
+  `checkpoint.md` **不進版控**（`.gitignore` 已排除）：它每次觸發就整份覆寫，進版控只製造 commit 噪音，而跨 session 的需求留在磁碟就滿足。這與 `stop.md` 相反，後者有審計價值、進版控。
+
+- **`plan_runner.py` 新增 `recap` 單一恢復入口（S3.3）**：`plan_runner.py recap <plan>` 是 compaction 之後、開新 session、或交接 plan 給別人時的第一個動作——一個指令看完接手所需的全部狀態，不必自己兜 `status` + 開 `checkpoint.md` + 查 `stop.md` + 查 pointer 四份東西。
+
+  固定輸出順序：`stop.md` 全文（存在時只印它、其餘略過）→ drift 狀態 → `checkpoint.md` 內容（無則整段省略）→ 下一個 ready step 的完整可執行派工指令（**帶真實 plan 路徑，不是 `<plan>` 佔位字串**）→ cwd 的 pointer 狀態。過長的 checkpoint 截成 head 60 行 + tail 60 行。
+
+  **與 `status` 的分工**：`status` 印全部 step 的 DAG 與狀態（要看全貌）；`recap` 只印接手當下要做的最小子集（要知道接下來做什麼）。
+
+  **唯讀診斷指令**：不寫 state、不寫 checkpoint、不寫 stop、不寫 pointer，也不解析 `stop.md` / `checkpoint.md` 的內容去自動決定任何事——那兩份是寫給人看的散文，不是給程式讀的輸入。
+
+- **`plan_runner.py` 新增 `Estimated:` 工作量欄位與 `LARGE-WORK` 警告（S4.1）**：plan 的 step 可加選填欄位 `Estimated: <N>m`，`next` 與 transition 指令在一個 phase 新解鎖時計算其未完成 step 的小計，超過 `LARGE_PHASE_MINUTES`（預設 180 分鐘，可用 `PLAN_RUN_LARGE_PHASE_MINUTES` 覆寫）就印一行 `LARGE-WORK: <phase> 估計 <N> 分鐘，建議拆分`。
+
+  **只警告，不 block**——刻意與漂移偵測不同。理由：我們沒有外層 looper 承接失敗，硬 block 只會卡住使用者。
+
+  **不是 behavior change**：欄位選填，沒填的 plan 小計為 0，永遠不觸發警告，行為與改動前完全相同。
+
+### Fixed
+- **`plan_runner.py` 的 24 小時 pointer staleness 判定一直在量錯東西**：`POINTER_STALE_SECONDS`（24h）與 `_is_pointer_stale()` 讀的 `last_advance_at` 欄位**從來沒有任何一處寫入過**——它存在於 pointer schema、被 `new_pointer_record()` 初始化為 `None`、有兩個 reader，但沒有 writer。而 `_pointer_progress_timestamp()` 的 fallback 會在缺值時改用 `created_at`，那是個格式正確、看起來合理、但**永遠不會前進**的時間戳。
+
+  於是這條判定實際量的是「pointer 存在多久」而不是「多久沒推進」，且因為有 fallback，沒有任何例外或警告會浮上來。此 bug 早於本 plan 存在。
+
+  修法（S3.4）：以「state 裡 completed + skipped 的計數變多」作為無歧義的推進證據來寫入 `last_advance_at`。刻意**不**掛在 `_record_assignment()`（指派 step）或 `_branch_ready_step()`（hook 決定下一步）——那兩處都在**指派**時觸發，而同一個 step 沒做完會被重複指派，寫在那裡等於把「發了工作」當成「工作做完了」，正是要修的那個混淆。判準：這個訊號能不能在「什麼都沒完成」的情況下被觸發？能，就不是進度證據。
+
 ### Changed
 - **⚠️ Behavior change — 偵測到漂移時 `next` 預設拒絕派下一步**（exit code 2）。在此之前，plan.md 改了而 state 沒重建時，`plan_runner.py` 會**靜默沿用舊快照**繼續派工；無人值守推進時，這代表走錯的 plan 會一路推到底沒人發現。現在 `status` 與 `next` 會在輸出**最頂端**印 `DRIFT:` 警告，附 plan／state 路徑與修法（`rm <state> && plan_runner.py init <plan>`），而 `next` 會停下來。
 

@@ -67,6 +67,20 @@
 
 - **`plan_runner.py` 新增 `skip --reason` 與 `in_progress → skipped` 轉態（S6.4b/c）**：`skip <plan> <id> --reason="..."` 把跳過原因寫進 `step["skip_reason"]`（選填，不加就不留字，跟以前一樣），`status` 會印出來供交接時查看為什麼跳過；刻意不寫 `completed_at`——freshness gate 判斷「上次真正推進」時會讀這個欄位，動了會靜默改變 gate 行為。`VALID_TRANSITIONS[IN_PROGRESS]` 新增 `SKIPPED`：以前 `in_progress` 只能轉 `completed` 或 `failed`，而 `fail` 會自動寫 `stop.md` 停機——範圍被砍是長跑中的正常事件，不該只有「觸發停機」一條出口。
 
+### Security
+
+- **`plan_runner.py` 一輪安全審查的七個 finding 全數處置（S6.6）**：`/security-review` 在該 session 跑不起來（session cwd 是 local-only repo，skill frontmatter 在載入時就要跑 `git diff origin/HEAD...`），改以替代審查產出七條，逐條先寫**能重現該漏洞的測試**再修，每條都做 mutation 確認測試不是恆綠。**替代審查不等於 `/security-review` 通過**——後者至今記為未執行，不是 PASS 也不是 FAIL。
+
+  - **F1（HIGH）`stop.md` 全文未淨化直送 hook `systemMessage`**：停機標記是 user-writable 檔案，而 `*.stop.md` **不在 `.gitignore` 內、會跟著 clone 走**——一個惡意 repo 可以讓受害者的 Stop hook 對他本人顯示任意內容。讀取端補獨立淨化：剝 ANSI 與控制字元 → 對 secret 形狀 redact → 打散偽造的圍欄終止符 → 整段包進 `--- stop marker (not instructions) ---` 圍欄。**收件人決定修法輕重**：`systemMessage` 送到**使用者**眼前（內容偽造），`reason` 才餵回**模型**（prompt injection），兩者不是同一類威脅。
+  - **F2（HIGH）checkpoint gate 的 `detail` 未淨化就進 hook `reason`**：gate 訊息會帶上檔名與檔案內容片段，那條路徑的收件人是模型。同一套淨化補在 `_sanitize_gate_detail()` 與 `_safe_file_label()`。
+  - **F3（MEDIUM）stop marker 寫入跟隨 symlink**：`.plan-state/<slug>.stop.md` 若是指向外部檔案的 symlink，`stop --write` 會覆寫該外部檔案。改用 `mkstemp` + `os.replace`，並以 `O_CREAT|O_EXCL|O_NOFOLLOW` 開檔——同一支檔案的 `save_state()` 與 `write_pointer_atomic()` 早就做對了，這兩處是遺漏，修法沿用既有範式而非另寫一套。
+  - **F4（LOW）checkpoint 路徑放非 regular file 會讓 Stop hook 永久 hang**：對 FIFO 開檔會阻塞。identity gate 先 `os.lstat` 確認是 regular file 才開。
+  - **F5（LOW）讀 user-writable 檔案無大小上限**：新增 `_read_text_bounded()`，超限截斷並標明。
+  - **F6（LOW，非安全邊界）`state.json` 損毀時 CLI traceback**：改為可讀的錯誤與修法提示。
+  - **F7（LOW，敘述準確性）identity gate 擋 symlink 但不擋 hardlink**：**選擇改 docstring 而非改實作**——能建 hardlink 的人本來就有該路徑的寫入權，威脅模型與 symlink 不同；且備份與去重工具會讓一般檔案 `nlink > 1`，加這個檢查會讓 gate 因為模型無法處理的原因失敗。
+
+  **另一項連帶裁決：`_checkpoint_writable()` 直接刪除，不是修好**。它無 caller、有測試撐著看起來活著、docstring 寫著「S6.1 wires this in」而 S6.1 已完成且沒接（那句話從計畫變成假陳述），內部還帶著 F3 同型的不安全寫入。修它只會讓陷阱更可信。同時新增 `RemovedSymbolsStayRemovedTestCase` 當常設柵欄——S6.2 移除機制 5 時只用一次性 grep 驗過，那不是柵欄。
+
 ### Fixed
 - **`plan_runner.py` 的 24 小時 pointer staleness 判定一直在量錯東西**：`POINTER_STALE_SECONDS`（24h）與 `_is_pointer_stale()` 讀的 `last_advance_at` 欄位**從來沒有任何一處寫入過**——它存在於 pointer schema、被 `new_pointer_record()` 初始化為 `None`、有兩個 reader，但沒有 writer。而 `_pointer_progress_timestamp()` 的 fallback 會在缺值時改用 `created_at`，那是個格式正確、看起來合理、但**永遠不會前進**的時間戳。
 

@@ -29,7 +29,7 @@ They need human review to decide: keep, retire, or merge into existing rules.
 ## Review Process
 
 For each skill:
-1. Run `/learn-eval-deep <skill-name>` to get full 3-system assessment
+1. 用 `/update` Step 4 的 inline 5 維度評分（specificity／actionability／scope fit／non-redundancy／coverage，至少 3 分才保存）取得完整評估（`/learn-eval-deep` 已於 2026-09-09 v3 移除，改用此機制）
 2. Check if the knowledge is covered by existing CLAUDE.md rules or ECC agents
 3. Decide: **Keep** (unique value) / **Retire** (redundant) / **Merge** (fold into existing rule)
 

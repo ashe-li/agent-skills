@@ -5,6 +5,8 @@
 > Status: PARTIALLY COMPLETE — Phase 1 全數完成、Phase 2 剩 1 步（S2.2）、Phase 3 剩 1 步（S3.1）
 > 2026-07-04 修訂：去 ECC 化重寫（原版依賴 ECC learn-eval，與解耦決策衝突）
 
+> **2026-09-09 註記（v3.0.0 前置）**：本 plan 提到的 `curation` 已於 commit c948b32 移除（依據：5 週 transcript 零用量＋依賴已消失或被取代，見 knowledge-base `_pending/session-2026-09-09-agent-skills-usage-inventory.md`）。凡以這些 skill 為對象的項目自此作廢，不再執行；其餘項目效力不變。
+
 ## Overview
 
 知識庫品質下降的根因：`/update` 的知識提取邏輯只提取 code patterns，遺漏對話中的決策脈絡；交叉比對步驟只被動報告差異，不主動寫入 MEMORY.md。本計畫透過三個獨立可交付的 Phase 修復：擴展提取範圍、強化主動寫入、建立品質管控。

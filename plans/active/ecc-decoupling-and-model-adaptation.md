@@ -6,6 +6,8 @@
 - **目標**: 移除 repo 對 everything-claude-code（ECC）plugin 的 hard-runtime 依賴（~46 處 / 5 檔），同步把 Opus 4.5 時代的冗餘指令精簡至 4.8+ 水準（4,338 → ~2,669 行）
 - **不動範圍**: historical 檔案（CHANGELOG、research/、plans/completed/）；官方 `security-guidance@claude-plugins-official` plugin（非 ECC）；`ecc-skill-defer/`（依 D4 過渡保留）
 
+> **2026-09-09 註記（v3.0.0 前置）**：本 plan 提到的 `ecc-skill-defer`、`learn-eval-deep`、`curation`、`triage`、`playwright-human-in-the-loop`、`verify-fix-loop`、`assist`、`verify-evidence-loop` 已於 commit c948b32 移除（依據：5 週 transcript 零用量＋依賴已消失或被取代，見 knowledge-base `_pending/session-2026-09-09-agent-skills-usage-inventory.md`）。凡以這些 skill 為對象的項目自此作廢，不再執行；其餘項目效力不變。
+
 ## 裁決點（實作前需確認；推薦值標 ★）
 
 | # | 問題 | 選項 |

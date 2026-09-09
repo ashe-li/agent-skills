@@ -1,7 +1,7 @@
 # 主動式安全觸發（skill 整合契約）
 
 `security-guidance` plugin 是 **hook 被動觸發**（改檔/turn/commit 後才反應）。
-本契約讓主動入口 skill（`/design`、`/update`、`/pr`、`/assist`）在流程中**主動**帶到安全這層，
+本契約讓主動入口 skill（`/design`、`/update`、`/pr`）在流程中**主動**帶到安全這層，
 與 plugin 用**同一份**威脅模型，達成 design-time / update-time / PR-time 與 in-session 一致。
 
 ## 觸發閘（security-relevance heuristic）
@@ -39,7 +39,6 @@
 | `/design` | plan 涉及上述面向 | plan 的實作後步驟須納入 `/security-review` | plan 必含「Security / Threat Model」章節，逐條對照 guidance；Step 4 品質閘**主動驗證**覆蓋（非只「已評估」打勾）|
 | `/update` | session 變更涉及上述面向 | Step 2 在 code-reviewer 之外**並行**跑 `/security-review` | review prompt 附上 guidance 當判準 |
 | `/pr` | 變更涉及上述面向 | Step 2 Quick Review **委派** `/security-review`（非只 inline）| quick review 以 guidance 為 checklist |
-| `/assist` | 路由命中上述面向 | pipeline **預設附加** `/security-review` | 路由與 reviewer prompt 引用 guidance |
 
 ## 與 plugin 的關係
 

@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Removed
+- **移除 9 支 5 週零用量的 skill**：`ecc-skill-defer`、`learn-eval-deep`、`curation`、`triage`、`playwright-human-in-the-loop`、`verify-fix-loop`、`assist`、`verify-evidence-loop`、`ship-ticket`。
+
+  **依據**：本機 1,441 份 Claude Code transcript（2026-08-04～09-09，5 週）掃描，這 9 支人打與 Claude 自叫合計 0 次。9 支 `description` 合計 2,201 字元，佔 25 支總量 7,406 的三成，是每個 session 都要載入的固定成本，用量與成本完全不成比例。
+
+  **逐支理由**：
+  - `ecc-skill-defer`：README 已標 Deprecated，v2.x ECC 解耦後其存在理由（管理 ECC skills 的 defer/restore 狀態）已隨依賴解除而消失。
+  - `learn-eval-deep`、`curation`、`triage`：三支操作對象都是 `~/.claude/skills/learned/*.md`，該路徑現為 0 檔——learned skills 已全數搬進 knowledge-base 的 `wiki/learned/`；前置的 `/learn-eval` 與 `skills-ecosystem-eval` 也已不存在，三支的輸入端已經斷源。
+  - `playwright-human-in-the-loop`、`verify-fix-loop`：兩支都建在 Playwright MCP 之上，而 `rules/common/browser-tools.md` 已把 MCP 降為「最後手段」；headed ship 前驗收改由 `/pr-evidence-comment` 承接。
+  - `assist`：作為路由入口的角色，已被 `~/.claude/CLAUDE.md` 的核心紀律與 playbooks 取代——使用者端的模型分工與委派決策現在直接在 harness 層做，不再需要一支 skill 幫忙選 pipeline。
+  - `verify-evidence-loop`：是 `/evidence-check` 的迭代收斂版本，而 `/evidence-check` 本身全生命期只用 2 次，其迭代版更是 0 次，維護一支比基礎版更貴、更少人用的衍生品沒有回報。
+  - `ship-ticket`：全生命期 0 次呼叫，其設計的硬規則（repro-first gate、fix 前必重現）已落在 `/evidence-gate` 與 knowledge-base 的 learned 記錄裡，功能不隨 skill 一起消失。
+
+  **連帶清理**：`update`、`plan-run`、`figma-verify`、`evidence-check`、`design` 五支保留 skill 的 SKILL.md 移除對被刪 skill 的引用或 `redundancy-peers` 條目；`rules/security-guidance/{README,skill-integration}.md`、`rules/refactor/remove-architect-pipeline.md` 的「目前適用範圍」清單拿掉 `/assist`；README.md 的 Usage、Skills 總覽表、決策樹、各 skill 詳細段落同步移除對應 9 支的條目。fresh-context 驗收另挖出三份**現行**文件仍把已刪 skill 當存在引用，補作廢註記而不改寫內容：`research/q4-review-checklist.md` 的可執行步驟改指向 `/update` Step 4 inline 評分；`plans/active/ecc-decoupling-and-model-adaptation.md`、`plans/active/knowledge-base-quality-optimization.md` 初版只在頂部加作廢 blockquote；CodeRabbit 指出 `/plan-run` 的狀態機不看 blockquote、混合 step（保留 skill＋已刪 skill）跑會重建已刪 skill、skip 會連保留工作一起跳，故改為結構拆分——只含已刪 skill 的整步（ecc plan 的 S1.2、S2.3；kb plan 的 S2.2）移出到 parser 不視為 step 的 `## 作廢範圍（不可執行）` 區塊，混合 step 只留保留項目，D4 標作廢，依賴邊同步。parser 實跑：ecc plan 14→12 step、kb plan 8→7，dangling deps 0，執行者會拿到的 Files／Action 欄位已刪 skill 命中 0。`rules/task-tracking-availability.md`、README 的「ECC 解耦（2026-07-04）」段落等**歷史查證/歷史敘述保留不動**，不重寫過去發生的事實。
+
+  **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準，下一個 release 為 `v3.0.0`。
+
 ### Added
 - **`/release-pr` 新增 Step 3.5「範圍相稱性擋門」＋ `release-pr/fixtures/` golden set**：對 body 的每個段落問「reviewer 為了決定要不要核准並部署這次變更，需要知道這件事嗎？」——「查證時才需要」的內容外連而非內嵌，因為它的完整版本通常已存在於 feature PR、KB 報告或 runbook，寫第二次只是製造第二個會過期的副本。
 

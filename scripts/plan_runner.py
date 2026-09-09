@@ -1436,6 +1436,10 @@ _POINTER_REQUIRED_STR_FIELDS = ("repo_root", "cwd", "created_at", "last_seen_at"
 _POINTER_OPTIONAL_STR_FIELDS = (
     "created_by_session", "driver_session_id", "driver_transcript_path",
     "last_advance_at", "warned_at", "last_assigned_step_id",
+    # (S6.3) Which in_progress step each episode counter below is counting.
+    # They are what takes those counters off the turn axis: the episode ends
+    # when the step it is about changes, not when a message arrives.
+    "nag_step_id", "bg_poll_step_id",
 )
 _POINTER_BOOL_FIELDS = ("paused", "checkpoint_pending", "completion_announced")
 _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
@@ -1446,6 +1450,7 @@ _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
 # is a far worse outcome than a missing nag counter.
 _POINTER_OPTIONAL_COUNTER_FIELDS = (
     "assign_repeat_count", "turn_start_completed", "last_seen_completed_count",
+    "advance_count",
 )
 
 
@@ -1563,6 +1568,14 @@ def new_pointer_record(
         "last_assigned_step_id": None,
         "assign_repeat_count": 0,
         "turn_start_completed": None,
+        # (S6.3) Cumulative real advances, written by _advance_fields() from
+        # both the hook and the CLI. Unlike everything above it, this one
+        # never goes down and is never reset by a turn, a message or a
+        # branch -- it is the plan's odometer, not a per-episode gauge.
+        "advance_count": 0,
+        # (S6.3) See _POINTER_OPTIONAL_STR_FIELDS.
+        "nag_step_id": None,
+        "bg_poll_step_id": None,
     }
 
 
@@ -2096,6 +2109,7 @@ def decide_budget(
     ready_step: str,
     *,
     now: float | None = None,
+    checkpoint_advances: int | None = None,
 ) -> BudgetDecision:
     """Decide block/allow for a ready step under the self-imposed budget.
 
@@ -2108,7 +2122,11 @@ def decide_budget(
        stop lands on a phase boundary instead of mid-phase.
     4. (S3.2) the pointer has not advanced for longer than
        _effective_checkpoint_stale_seconds() -> also checkpoint_pending.
-    5. otherwise -> plain block.
+    5. (S6.3) CHECKPOINT_ADVANCE_MAX or more real advances since the last
+       checkpoint -> also checkpoint_pending. Rule 4 catches a run that has
+       stalled; this one catches a run that is going FAST inside one long
+       phase, where none of 2, 3 or 4 ever fires.
+    6. otherwise -> plain block.
     An `allow` here does NOT reset consecutive_blocks; only a fresh prompt
     (stop_hook_active=false, handled by S1.2) does that -- and "fresh prompt"
     is not "fresh *user* turn": a teammate or cross-session message resets it
@@ -2124,7 +2142,13 @@ def decide_budget(
     clock supplied, skip rule 4", which is what keeps callers that predate
     S3.2 byte-identical.
 
-    Rule 4 only ever ORs into `checkpoint_pending`. It must never touch
+    `checkpoint_advances` is the count recorded in the plan's checkpoint
+    file, injected for exactly the same reason as `now` -- reading the file
+    in here would put filesystem I/O inside the decision core. `None` (the
+    default) means "no baseline supplied, skip rule 5", which is what keeps
+    every caller that predates S6.3 byte-identical.
+
+    Rules 4 and 5 only ever OR into `checkpoint_pending`. They must never touch
     `decision` or `steps_remaining` (plan R1): those two carry the 8-step
     turn-counting contract that the Stop hook and its tests are built on,
     and wall-clock time is a different axis that has no business voting on
@@ -2180,6 +2204,7 @@ def decide_budget(
         consecutive_blocks == block_budget - 1
         or phase_boundary
         or _wall_clock_checkpoint_due(pointer, now)
+        or _advance_checkpoint_due(pointer, checkpoint_advances)
     )
     steps_remaining = max(block_budget - consecutive_blocks, 0)
 
@@ -2673,6 +2698,23 @@ def render_hook_reason(
 # was that a shape living only in prose drifts away from its parser).
 CHECKPOINT_IDENTITY_LABEL = "Plan:"
 CHECKPOINT_STAMP_LABEL = "Checkpoint at:"
+# (S6.3) The advance odometer's reading at the moment the checkpoint was
+# dispensed. It is the baseline for the fourth checkpoint trigger: advances
+# since the last checkpoint = the pointer's `advance_count` now, minus this.
+#
+# Why the baseline lives in the artifact and not on the pointer: the same
+# reason the rest of S6.1 does. State kept in the product is re-derived from
+# the product every time and resets itself when a new one is written -- there
+# is no field for anybody to forget to clear, and no way for the baseline to
+# survive a checkpoint that no longer exists. A pointer field would have been
+# a sticky counter of exactly the kind S6.1's Addendum-3 argued against for
+# checkpoint bookkeeping.
+#
+# Trust boundary (see the section note above): this is read for the same
+# reason `Checkpoint at:` is -- to judge how stale the file's own claim is,
+# in steps rather than in seconds. Nothing in the file's prose is read back
+# into what the runner does next.
+CHECKPOINT_ADVANCE_LABEL = "Advances at checkpoint:"
 
 # The placeholder `checkpoint --template` leaves in each of the four
 # contract elements. The shape gate rejects it, so `--template > file`
@@ -2691,6 +2733,28 @@ CHECKPOINT_PLACEHOLDER = "<...>"
 # them, so mtime is available here and is a fact the model cannot set
 # without an extra syscall it has no reason to make.
 CHECKPOINT_STAMP_MTIME_TOLERANCE_SECONDS = 900
+
+# (S6.3) How many real advances may accumulate since the last checkpoint
+# before one is owed. The gap this fills is a long, FAST phase: 12 steps
+# inside one phase in 25 minutes trips none of the other three triggers
+# (turn budget, 45-minute wall clock, phase boundary) and is the worst case
+# for handing over to a human.
+#
+# 7 is a JUDGMENT value, chosen off two measurements -- unlike BLOCK_BUDGET,
+# which is itself calibrated (S1.1). The measurements:
+#   * phase sizes across 226 real phases in this machine's plans: median 3,
+#     p90 6, max 24. A threshold at 7 therefore sits just above p90, so on
+#     the ~92% of phases that are 6 steps or shorter the phase-boundary
+#     trigger reaches the handover first -- which is the better place to
+#     stop -- and this rule only speaks up inside the long tail.
+#   * step duration (.verification/2026-09-07/plan-run-boundary-measurement.md):
+#     median 3.9 min. 7 advances is therefore ~27 min at the median, safely
+#     under the 45-minute wall-clock rule, so on a fast run this fires
+#     first, which is the whole point.
+# The two measurements are real; picking "just above p90" out of them is a
+# judgment. Same status as HOOK_NAG_MAX, and not the same status as
+# BLOCK_BUDGET or CHECKPOINT_STALE_SECONDS.
+CHECKPOINT_ADVANCE_MAX = 7
 
 CHECKPOINT_GATE_EXISTENCE = "existence"
 CHECKPOINT_GATE_UNIQUENESS = "uniqueness"
@@ -2734,7 +2798,9 @@ class CheckpointVerdict(NamedTuple):
         return tuple(gate for gate in self.gates if not gate.ok)
 
 
-def checkpoint_template(plan_path: Path, *, now: datetime | None = None) -> str:
+def checkpoint_template(
+    plan_path: Path, *, now: datetime | None = None, advances: int = 0,
+) -> str:
     """The canonical checkpoint shape, dispensed by `checkpoint --template`.
 
     Emitted by the program rather than kept as a static string in the
@@ -2756,10 +2822,76 @@ def checkpoint_template(plan_path: Path, *, now: datetime | None = None) -> str:
         "",
         f"{CHECKPOINT_IDENTITY_LABEL} {plan_path.stem}",
         f"{CHECKPOINT_STAMP_LABEL} {stamp}",
+        f"{CHECKPOINT_ADVANCE_LABEL} {max(int(advances), 0)}",
         "",
     ]
     lines.extend(f"{label} {CHECKPOINT_PLACEHOLDER}" for label in _CHECKPOINT_ELEMENT_LABELS)
     return "\n".join(lines) + "\n"
+
+
+def _checkpoint_recorded_advances(plan_path: Path) -> int | None:
+    """The advance count this plan's checkpoint was written at.
+
+    Three answers, and the difference between the last two matters:
+
+    * **an int** -- the file is here, claims this plan, and carries exactly
+      one parseable `Advances at checkpoint:` line.
+    * **0** -- there is no checkpoint file at all. Never checkpointed is not
+      "no baseline"; it is a baseline of zero, which is what lets the
+      fourth trigger fire on a run that has advanced a long way without
+      ever writing one.
+    * **None** -- the file exists but cannot supply a baseline: written by
+      a build from before this line existed, carrying an unparseable or
+      duplicated line, or claiming a different plan. The trigger is then
+      INACTIVE rather than failing. Legacy compatibility is the rule here
+      (_POINTER_OPTIONAL_COUNTER_FIELDS' convention): a missing field must
+      never turn into a stop, and guessing a baseline would either nag on
+      every step or suppress the rule silently.
+
+    Reads only, and never raises: this is consulted from a decision path.
+    """
+    path = checkpoint_path_for(plan_path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    if not _checkpoint_claims_plan(text, plan_path.stem):
+        return None
+    values = _checkpoint_element_values(text, CHECKPOINT_ADVANCE_LABEL)
+    if len(values) != 1:
+        return None
+    try:
+        recorded = int(values[0].strip())
+    except (TypeError, ValueError):
+        return None
+    return recorded if recorded >= 0 else None
+
+
+def _advance_checkpoint_due(
+    pointer: dict[str, Any], checkpoint_advances: int | None
+) -> bool:
+    """Trigger 4: has the run advanced far enough since its last checkpoint?
+
+    Pure -- no clock, no filesystem. `checkpoint_advances` is read off disk
+    by the caller (_checkpoint_obligation_active() on the CLI side, the
+    hook's I/O layer on the other) for the same reason `now` is injected
+    into decide_budget(): the decision has to stay a function of its
+    arguments.
+
+    The recorded count is clamped to the live one. A checkpoint claiming
+    more advances than have actually happened is not describing this run,
+    and letting it through would make the delta negative. What the clamp
+    does NOT do is stop a model from suppressing the trigger by writing an
+    inflated number -- and it does not need to: the cheapest way to silence
+    this trigger is to write a real checkpoint, which is the outcome we
+    wanted. Forging also buys nothing elsewhere, because the ready-step
+    surface still renders verify_checkpoint()'s five-gate verdict.
+    """
+    if checkpoint_advances is None:
+        return False
+    current = _hook_counter(pointer, "advance_count")
+    baseline = min(checkpoint_advances, current)
+    return current - baseline >= CHECKPOINT_ADVANCE_MAX
 
 
 def _sha256_of_path(path: Path) -> str:
@@ -3291,6 +3423,14 @@ def _advance_fields(
     The rule is state.json's completed+skipped count moving -- see
     _record_advance_if_progressed()'s docstring for why nothing weaker
     (assignment, a turn boundary) can stand in for it.
+
+    (S6.3) `advance_count` rides on the same rule so there is still exactly
+    one definition of "did this advance". It increments only on an OBSERVED
+    increase: a pointer with no `last_seen_completed_count` has never looked
+    at this plan, and counting that first look would fabricate an advance
+    every time somebody re-attached. `_attach_pointer_for_cwd()` seeds the
+    baseline from the plan's state precisely so that first look is not also
+    the first real advance.
     """
     current = _hook_completed_count(state)
     if current is None:
@@ -3300,8 +3440,14 @@ def _advance_fields(
         previous = None
     if previous is not None and current == previous:
         return {}
-    if previous is None or current > previous:
+    if previous is None:
         return {"last_advance_at": now or now_iso(), "last_seen_completed_count": current}
+    if current > previous:
+        return {
+            "last_advance_at": now or now_iso(),
+            "last_seen_completed_count": current,
+            "advance_count": _hook_counter(pointer, "advance_count") + 1,
+        }
     return {"last_seen_completed_count": current}
 
 
@@ -3392,21 +3538,30 @@ def _checkpoint_obligation_active(
 ) -> bool:
     """Is a checkpoint owed for `plan_path` right now?
 
-    Three triggers:
+    Four triggers:
 
     1. `checkpoint_pending` on the pointer, which the Stop hook persists
        when the turn budget or its own phase test calls for a check-in;
     2. the wall-clock rule -- longer than the stale threshold since the
-       last real advance, derived live from `last_advance_at`; and
+       last real advance, derived live from `last_advance_at`;
     3. a phase boundary just crossed (`_phase_boundary_just_crossed()`),
-       derived from plan state alone.
+       derived from plan state alone; and
+    4. (S6.3) CHECKPOINT_ADVANCE_MAX real advances since the last
+       checkpoint, the count read back out of the checkpoint file itself.
 
-    (1) needs the hook to be installed and running. (2) and (3) do not,
-    which matters because the default mode is the CLI: leaving the phase
-    boundary to (1) would have left the mechanism's most natural trigger
-    dead in its main mode, which is the same shape as the bug S6.1 fixed.
-    (2) fires on "stuck", an anomaly; (3) fires on "this is a good place
-    to hand over", which is what N2 is actually about.
+    (1) needs the hook to be installed and running. (2), (3) and (4) do
+    not, which matters because the default mode is the CLI: leaving the
+    phase boundary to (1) would have left the mechanism's most natural
+    trigger dead in its main mode, which is the same shape as the bug S6.1
+    fixed. (2) fires on "stuck", an anomaly; (3) fires on "this is a good
+    place to hand over", which is what N2 is actually about; (4) fires on
+    "a lot has happened since anyone wrote anything down", which is the
+    case (3) structurally cannot see -- a phase that runs long.
+
+    (4) discharges itself: the checkpoint records the count it was written
+    at, so writing one takes the delta back to zero with nothing reset by
+    hand. That is the same self-clearing property (3) has, and the reason
+    neither needs a sticky flag.
 
     A pointer attached to a *different* plan suppresses all three: this
     cwd is driving something else, and a note about plan A while the
@@ -3421,6 +3576,8 @@ def _checkpoint_obligation_active(
         if pointer.get("checkpoint_pending") is True:
             return True
         if _wall_clock_checkpoint_due(pointer, now):
+            return True
+        if _advance_checkpoint_due(pointer, _checkpoint_recorded_advances(plan_path)):
             return True
     return _phase_boundary_just_crossed(state) if isinstance(state, dict) else False
 
@@ -3506,8 +3663,21 @@ DRIVER_TRANSCRIPT_FRESH_SECONDS = 120
 DRIVER_LAST_SEEN_SECONDS = 900
 # A state file untouched for longer than this is treated as abandoned.
 STATE_ABANDONED_SECONDS = 7 * 24 * 60 * 60
-# How many turns we may block waiting for background work to settle.
+# How many Stop hooks we may block waiting for one step's background work to
+# settle before the check drops to the warning tier for the rest of that
+# episode. Counted per background-wait episode, NOT per turn -- see
+# _HOOK_TURN_COUNTERS.
 HOOK_BG_POLL_MAX = 2
+# How many times we may block demanding a report on the SAME in_progress step
+# before that demand drops to the warning tier for the rest of the step's
+# episode. Counted per step, not per turn. Three because the escalation note
+# below starts at the second: one plain demand, two carrying the `fail`
+# escape hatch, and then repeating a note that has already been ignored twice
+# is not pressure, it is the noise that teaches a reader to skip the block.
+# That derivation is a JUDGMENT, not a measurement: BLOCK_BUDGET is the
+# calibrated number here (S1.1, .verification/2026-09-07/), and this one is
+# not on the same footing -- do not cite it as if it were.
+HOOK_NAG_MAX = 3
 # From this nag onward the reason spells out the `fail` escape hatch.
 HOOK_NAG_ESCALATE_AT = 2
 # From this consecutive assignment of the SAME ready step onward, the reason
@@ -3516,6 +3686,46 @@ HOOK_ASSIGN_REPEAT_ESCALATE_AT = 2
 
 HOOK_ALLOW = "allow"
 HOOK_BLOCK = "block"
+
+# ---------------------------------------------------------------------------
+# Two-tier strictness (S6.3), ported from AgentFlow's stop-hook.js:99-107 via
+# .verification/2026-09-08/agentflow-portability-study.md 追加 2.
+#
+# THE SELECTION PRINCIPLE -- quoted verbatim, and the only thing that decides
+# which tier a check belongs in:
+#
+#   一個檢查該不該在進行中就擋，取決於現在不修會不會讓後面的判定失效或不可逆，而不是取決於它有多重要。
+#
+#   (Whether a check should block while work is still in progress depends on
+#   whether leaving it unfixed now would invalidate or fix in place what comes
+#   after -- not on how important the check is.)
+#
+# The two tiers here are _hook_block() and _hook_allow(ctx, system_message=).
+# One local difference from AgentFlow matters and is NOT a detail: its warning
+# tier writes to stderr, which the host feeds back to the model, whereas our
+# `systemMessage` is shown to the *user*. Demoting a check therefore changes
+# its audience, not just its force. So the warning tier is for things a human
+# should know and the model can no longer usefully act on -- which is exactly
+# what a check that has already blocked its full allowance has become.
+#
+# The per-branch verdicts (full table in
+# .verification/2026-09-09/s6.3-counters-live-run.md):
+#   (6)  completion        -- block. Outside the principle's scope: it fires
+#                             only when no work is in progress, exactly once,
+#                             and then the pointer self-uninstalls.
+#   (8)  settle_background -- block for HOOK_BG_POLL_MAX polls of one episode,
+#                             warn afterwards. Nothing is invalidated by
+#                             letting a turn end while an agent runs.
+#   (9)  report_result     -- block for HOOK_NAG_MAX nags on one step, warn
+#                             afterwards. Blocks first because an unreported
+#                             in_progress step DOES invalidate what follows:
+#                             the completed count cannot move, so dependents
+#                             never unlock and every consumer of
+#                             `last_advance_at` reads a frozen picture.
+#   (10) next_step         -- block. Not a check; it is the advance mechanism
+#                             the pointer exists to drive, already bounded by
+#                             decide_budget().
+# ---------------------------------------------------------------------------
 
 # Reset to 0 whenever `stop_hook_active` is false. MEASURED 2026-09-08 (S5.1,
 # .verification/2026-09-08/stop-hook-active-semantics-probe.md): that flag means
@@ -3527,12 +3737,30 @@ HOOK_BLOCK = "block"
 # harness's own block cap is per *turn*, so a new prompt really does get a
 # fresh cap); WRONG for anything meant as a "check in with the human" valve --
 # in a multi-agent session, agent reports keep the counters near zero and such
-# a valve never fires. See S5.1's finding on bg_poll_count / nag_counts.
-# Note what is deliberately absent: `assign_repeat_count`. A fresh turn does
-# not retroactively execute the `start` we already asked for, so that counter
-# is reset by the assignment changing, not by the turn changing -- which is
-# also why it is the only one of these that still escalates in practice.
-_HOOK_TURN_COUNTERS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
+# a valve never fires.
+#
+# (S6.3) So `bg_poll_count` and `nag_counts` were taken OFF this axis. What
+# each one is really counting, and what ends it:
+#
+#   bg_poll_count -- polls within ONE background-wait episode: "this
+#     in_progress step's own background task is still running". The episode
+#     ends when that stops being true (the task finishes, the step changes,
+#     nothing is in progress), not when a message arrives. Kept per-episode
+#     by `bg_poll_step_id`; cleared by _branch_background_tasks().
+#
+#   nag_counts -- demands for a report about ONE step. The episode is the
+#     step: it ends when a different step is in progress or none is. Kept by
+#     `nag_step_id`; cleared by _branch_in_progress(). This is the same shape
+#     `assign_repeat_count` has always had, and that is not a coincidence --
+#     it is the one counter here that still escalated in practice, precisely
+#     because it was reset by the assignment changing rather than by the turn
+#     changing. Note what is still deliberately absent from the tuple below
+#     for the same reason: a fresh turn does not retroactively execute the
+#     `start` we already asked for.
+#
+# `advance_count` is on a third axis again -- cumulative, never reset by
+# anything (see new_pointer_record()).
+_HOOK_TURN_COUNTERS = ("consecutive_blocks",)
 
 _INVALID_POINTER_MESSAGE = (
     "[plan-run] pointer 或 state 驗證失敗，本 cwd 的自動推進已停用。"
@@ -3562,6 +3790,21 @@ _NAG_ESCALATION_NOTE = (
 _NAG_BUDGET_EXHAUSTED_MESSAGE = (
     "[plan-run] auto-advance 額度用盡（{used}/{budget}）：`{step}` 仍停在 in_progress，"
     "complete/fail 一次都沒有被回報。請人工確認該 step 的實際結果後再繼續。"
+)
+
+# (S6.3) The two warning-tier messages. Both exist because the demotion must
+# not be silence: before this, branch (8) escaped its poll cap with a bare
+# allow and the user was never told why the hook had gone quiet about a step
+# it had just been blocking on. A check that stops speaking is
+# indistinguishable from a check that was never there.
+_BG_SETTLE_EXHAUSTED_MESSAGE = (
+    "[plan-run] `{step}` 的背景工作已等待 {polls} 輪仍未收斂，本輪起降為提示、不再阻擋。"
+    "背景工作結束後請用 complete 或 fail 收斂該 step。"
+)
+
+_NAG_EXHAUSTED_MESSAGE = (
+    "[plan-run] `{step}` 停在 in_progress 已提醒 {nags} 次仍未回報，本輪起降為提示、不再阻擋。"
+    "請人工確認該 step 的實際結果，再用 complete 或 fail 收斂。"
 )
 
 # (10)'s counterpart to _NAG_ESCALATION_NOTE. A ready step is only still
@@ -3720,11 +3963,16 @@ class _HookContext:
         pointer: dict[str, Any],
         state: Any,
         mtime_lookup: Callable[[str], float | None],
+        checkpoint_advances: int | None = None,
     ) -> None:
         self.hook_input = hook_input
         self.pointer = dict(pointer)
         self.state = state
         self.mtime_lookup = mtime_lookup
+        # (S6.3) The advance count read out of the checkpoint file by the
+        # I/O layer, or None when it could not supply one. Carried rather
+        # than fetched so the branch chain stays free of filesystem access.
+        self.checkpoint_advances = checkpoint_advances
         self.dirty = False
 
     def update(self, **fields: Any) -> None:
@@ -3829,8 +4077,11 @@ def _reset_turn_counters(ctx: _HookContext) -> None:
         ctx.update(**fields)
 
 
-def _record_advance_if_progressed(ctx: _HookContext) -> None:
+def _record_advance_if_progressed(ctx: _HookContext) -> bool:
     """`last_advance_at`'s writer on the Stop hook path (S3.4).
+
+    Returns whether this invocation observed a real advance, which is what
+    _clear_episode_counters_on_advance() below acts on.
 
     NOT its only writer any more: S6.1 added _record_cli_advance() for the
     `complete` / `skip` commands, because "only writer" plus "hook-only
@@ -3882,6 +4133,32 @@ def _record_advance_if_progressed(ctx: _HookContext) -> None:
     than a stale high-water mark.
     """
     fields = _advance_fields(ctx.state, ctx.pointer)
+    if fields:
+        ctx.update(**fields)
+    return "advance_count" in fields
+
+
+def _clear_episode_counters_on_advance(ctx: _HookContext, advanced: bool) -> None:
+    """(S6.3) A real advance ends every episode the branches below track.
+
+    Redundant with the per-branch `*_step_id` bookkeeping in the ordinary
+    case -- an advance means some step left in_progress, so the step those
+    counters name has changed anyway. It is here for the cases where that
+    bookkeeping is absent rather than stale: a pointer written by a build
+    from before those fields existed, or one edited by hand. Without it such
+    a pointer would carry a counter that no branch can attribute to a step
+    and therefore no branch can ever clear.
+    """
+    if not advanced:
+        return
+    fields = {
+        key: value
+        for key, value in (
+            ("bg_poll_count", 0), ("bg_poll_step_id", None),
+            ("nag_counts", 0), ("nag_step_id", None),
+        )
+        if ctx.pointer.get(key) != value
+    }
     if fields:
         ctx.update(**fields)
 
@@ -4016,40 +4293,134 @@ def _branch_failed_step(ctx: _HookContext) -> HookDecision | None:
     return _hook_allow(ctx)
 
 
-def _branch_background_tasks(ctx: _HookContext) -> HookDecision | None:
-    """(8) Background work outstanding: give it up to HOOK_BG_POLL_MAX turns
-    to settle before falling through to the ordinary in_progress nag.
+def _hook_background_task_ids(hook_input: dict[str, Any]) -> set[str]:
+    """The task identifiers in a Stop payload's `background_tasks`.
+
+    The payload's element shape is not contractually documented anywhere we
+    could verify, and the live capture we have
+    (.verification/2026-09-08/stop-hook-active-probe-raw.jsonl) caught the
+    field only while it was null. So this reads defensively -- a bare string
+    id, or a mapping under any of the identifier keys a task record
+    plausibly uses -- and returns an empty set for anything it does not
+    recognise. Empty means "we cannot show this work belongs to this step",
+    which _branch_background_tasks() below treats as not ours: the whole
+    point of the narrowing is that unattributable background work must not
+    speak for a plan.
     """
-    if not ctx.hook_input.get("background_tasks"):
-        return None
+    tasks = hook_input.get("background_tasks")
+    if not isinstance(tasks, (list, tuple)):
+        return set()
+    ids: set[str] = set()
+    for entry in tasks:
+        if isinstance(entry, str) and entry:
+            ids.add(entry)
+        elif isinstance(entry, dict):
+            for key in ("id", "task_id", "taskId"):
+                value = entry.get(key)
+                if isinstance(value, str) and value:
+                    ids.add(value)
+    return ids
+
+
+def _clear_bg_episode(ctx: _HookContext) -> None:
+    """End the background-wait episode: the count belongs to a situation
+    that no longer holds, so it must not be carried into the next one."""
+    if ctx.counter("bg_poll_count") or ctx.pointer.get("bg_poll_step_id") is not None:
+        ctx.update(bg_poll_count=0, bg_poll_step_id=None)
+
+
+def _branch_background_tasks(ctx: _HookContext) -> HookDecision | None:
+    """(8) THIS step's own background work is outstanding: give it up to
+    HOOK_BG_POLL_MAX polls to settle, then drop to the warning tier.
+
+    (S6.3 d) "This step's own" is the whole change. The branch used to fire
+    on `background_tasks` being non-empty at all, which is a property of the
+    *session*, not of the plan: measured live
+    (.verification/2026-09-08/k-pointer-cwd-collision-live-evidence.md), a
+    session running 19 agents for an entirely different plan had every turn
+    blocked with "S0.1 有背景工作尚未收斂". Under a working style where the
+    commander is *supposed* to have agents running, an always-true condition
+    is not a check. The only link the hook can actually verify is the one
+    the plan records itself: the in_progress step's `task_id`.
+
+    Consequence worth stating plainly: `task_id` is only set when `start
+    --task-id` was given, and the Task tools are unregistered by default on
+    current models (plan-run/SKILL.md), so in most runs this branch now
+    stays silent and an unreported step falls through to branch (9). That is
+    the intended reading -- without the link there is no evidence the
+    background work is this plan's, and branch (9) is the correct thing to
+    say about a step nobody has reported.
+    """
     in_progress = _hook_steps_with_status(ctx.state, IN_PROGRESS)
-    polls = ctx.counter("bg_poll_count")
-    if not in_progress or polls >= HOOK_BG_POLL_MAX:
-        return _hook_allow(ctx)
+    if not in_progress:
+        _clear_bg_episode(ctx)
+        return None
+    step_id = in_progress[0]
+    task_id = ctx.state["steps"][step_id].get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        _clear_bg_episode(ctx)
+        return None
+    if task_id not in _hook_background_task_ids(ctx.hook_input):
+        _clear_bg_episode(ctx)
+        return None
+    polls = ctx.counter("bg_poll_count") if ctx.pointer.get("bg_poll_step_id") == step_id else 0
+    if polls >= HOOK_BG_POLL_MAX:
+        # Warning tier, and no write: a non-zero `polls` can only have come
+        # from a count already filed under this same step, so there is
+        # nothing to update. Latching rather than incrementing is deliberate
+        # -- the episode has not changed, and a counter that grows without
+        # bound is one nobody can read a threshold off.
+        return _hook_allow(ctx, system_message=_BG_SETTLE_EXHAUSTED_MESSAGE.format(
+            step=_sanitize_step_id(step_id), polls=polls,
+        ))
     budget = _hook_plain_budget(ctx)
-    ctx.update(bg_poll_count=polls + 1)
-    return _hook_block(ctx, "settle_background", in_progress[0], budget)
+    ctx.update(bg_poll_count=polls + 1, bg_poll_step_id=step_id)
+    return _hook_block(ctx, "settle_background", step_id, budget)
 
 
 def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
     """(9) A step was started but never reported — demand complete/fail.
 
-    Bounded by the same budget the ready-step branch uses: without it this
-    branch blocks on every turn for as long as the step stays unreported,
-    which is the harness-forced cutoff we design around, not a check-in.
+    Blocking tier, bounded twice: by the ready-step branch's own budget
+    (without it this blocks every turn until the harness's 8-block override
+    cuts the turn off, which is the cutoff we design around, not a check-in)
+    and, since S6.3, by HOOK_NAG_MAX nags about the same step, after which
+    it drops to the warning tier.
+
+    It blocks at all -- unlike (8) -- because of the selection principle
+    above: an unreported in_progress step really does invalidate what comes
+    after. The completed+skipped count cannot move while it sits there, so
+    dependents never unlock, `last_advance_at` never advances, and every
+    consumer of it (the wall-clock checkpoint rule, the end-of-budget
+    check-in) reads a frozen picture and reports it as fact.
     """
     in_progress = _hook_steps_with_status(ctx.state, IN_PROGRESS)
     if not in_progress:
+        if ctx.counter("nag_counts") or ctx.pointer.get("nag_step_id") is not None:
+            ctx.update(nag_counts=0, nag_step_id=None)
         return None
+    step_id = in_progress[0]
     budget = _hook_plain_budget(ctx)
     if budget.consecutive_blocks >= budget.block_budget:
         return _hook_allow(ctx, system_message=_NAG_BUDGET_EXHAUSTED_MESSAGE.format(
             used=budget.consecutive_blocks,
             budget=budget.block_budget,
-            step=_sanitize_step_id(in_progress[0]),
+            step=_sanitize_step_id(step_id),
         ))
-    nags = ctx.counter("nag_counts") + 1
-    ctx.update(nag_counts=nags)
+    # (S6.3) Per step, not per turn: a nag about S1 says nothing about S2,
+    # and a new message says nothing about either.
+    prior = ctx.counter("nag_counts") if ctx.pointer.get("nag_step_id") == step_id else 0
+    if prior >= HOOK_NAG_MAX:
+        # Warning tier, and no write, for the same reason as (8) above: a
+        # non-zero `prior` already belongs to this step. The demand has been
+        # made its full allowance of times; repeating it cannot make the
+        # model report a result it has not got, and it costs the block that
+        # branch (10) may still need this turn.
+        return _hook_allow(ctx, system_message=_NAG_EXHAUSTED_MESSAGE.format(
+            step=_sanitize_step_id(step_id), nags=prior,
+        ))
+    nags = prior + 1
+    ctx.update(nag_counts=nags, nag_step_id=step_id)
     # A step in progress is proof the `start` branch (10) asked for was run,
     # so its repeat counter has served its purpose and starts over.
     if ctx.pointer.get("last_assigned_step_id") is not None:
@@ -4059,9 +4430,9 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
         suffix = _NAG_ESCALATION_NOTE.format(
             runner=_runner_invocation(ctx.pointer.get("plan_path")),
             plan=_quote_plan_path(ctx.pointer.get("plan_path")),
-            step=_sanitize_step_id(in_progress[0]),
+            step=_sanitize_step_id(step_id),
         )
-    return _hook_block(ctx, "report_result", in_progress[0], budget, suffix)
+    return _hook_block(ctx, "report_result", step_id, budget, suffix)
 
 
 def _record_assignment(ctx: _HookContext, step_id: str) -> int:
@@ -4115,7 +4486,10 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
     step_id = ready[0]
     # time.time() is supplied here, not read inside decide_budget(), so the
     # budget decision stays a pure function of its arguments (S3.2 / R1).
-    budget = decide_budget(ctx.pointer, ctx.state, step_id, now=time.time())
+    budget = decide_budget(
+        ctx.pointer, ctx.state, step_id,
+        now=time.time(), checkpoint_advances=ctx.checkpoint_advances,
+    )
     if budget.decision != HOOK_BLOCK:
         return _hook_allow(ctx, system_message=_budget_exhausted_message(ctx, budget, step_id))
     repeats = _record_assignment(ctx, step_id)
@@ -4167,6 +4541,7 @@ def decide_hook_action(
     mtime_lookup: Callable[[str], float | None] = _default_mtime_lookup,
     *,
     stop_marker_text: str | None = None,
+    checkpoint_advances: int | None = None,
 ) -> HookDecision:
     """Decide block/allow for one Stop hook invocation. Pure — no I/O.
 
@@ -4180,6 +4555,11 @@ def decide_hook_action(
     the file's full text otherwise. Reading it is disk I/O, so it happens
     in `_decide_and_persist()`, not here; this function only ever asks
     "is this None or not" (T6), never a word of the content.
+
+    `checkpoint_advances` (S6.3) arrives the same way and for the same
+    reason: it is `_checkpoint_recorded_advances()`'s answer, read on disk
+    by the I/O layer, and it feeds decide_budget()'s rule 5. `None` means
+    "no baseline available", which reads as "rule 5 does not apply".
     """
     if not isinstance(hook_input, dict):
         hook_input = {}
@@ -4195,9 +4575,9 @@ def decide_hook_action(
         # halt is that nothing keeps mutating state while it stands.
         return HookDecision(decision=HOOK_ALLOW, system_message=stop_marker_text)
 
-    ctx = _HookContext(hook_input, pointer, state, mtime_lookup)
+    ctx = _HookContext(hook_input, pointer, state, mtime_lookup, checkpoint_advances)
     _reset_turn_counters(ctx)
-    _record_advance_if_progressed(ctx)
+    _clear_episode_counters_on_advance(ctx, _record_advance_if_progressed(ctx))
     for branch in _HOOK_BRANCHES:
         decision = branch(ctx)
         if decision is not None:
@@ -4263,6 +4643,24 @@ def _load_hook_state(pointer_data: dict[str, Any]) -> dict[str, Any] | None:
             return None
         return load_state(plan_path)
     except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _load_hook_checkpoint_advances(pointer_data: dict[str, Any]) -> int | None:
+    """Best-effort read of the checkpoint's advance baseline for the hook's
+    I/O layer (S6.3), mirroring _load_hook_state()'s shape: same field, same
+    allowed-root gate, and any failure means None -- which decide_budget()
+    reads as "rule 5 does not apply", never as an error.
+    """
+    plan_path_raw = pointer_data.get("plan_path")
+    if not isinstance(plan_path_raw, str) or not plan_path_raw:
+        return None
+    plan_path = Path(plan_path_raw)
+    try:
+        if not _is_within_allowed_root(plan_path):
+            return None
+        return _checkpoint_recorded_advances(plan_path)
+    except OSError:
         return None
 
 
@@ -4345,7 +4743,11 @@ def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDeci
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
     stop_marker_text = _load_hook_stop_marker(resolved.data) if resolved is not None else None
-    decision = decide_hook_action(hook_input, pointer, state, stop_marker_text=stop_marker_text)
+    advances = _load_hook_checkpoint_advances(resolved.data) if resolved is not None else None
+    decision = decide_hook_action(
+        hook_input, pointer, state,
+        stop_marker_text=stop_marker_text, checkpoint_advances=advances,
+    )
     _apply_hook_side_effects(decision, resolved)
     return decision
 
@@ -5176,12 +5578,20 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
     shell gate. It never repairs anything it finds wrong.
     """
     plan_path = Path(args.plan).resolve()
-    if args.template:
-        print(checkpoint_template(plan_path), end="")
-        return 0
-
     resolved = resolve_pointer_for_hook(Path.cwd())
     pointer = resolved.data if resolved else None
+    if args.template:
+        # The template records the odometer reading it was dispensed at, so
+        # the file itself carries the baseline for trigger 4. No pointer, or
+        # one driving another plan, means no reading to record: 0 is the
+        # honest value, and it makes the trigger count from the start of the
+        # run rather than silently switching itself off.
+        advances = 0
+        if isinstance(pointer, dict) and _pointer_matches_plan(pointer, plan_path):
+            advances = _hook_counter(pointer, "advance_count")
+        print(checkpoint_template(plan_path, advances=advances), end="")
+        return 0
+
     # Best-effort: the gates work without state (the freshness gate
     # then has one fewer source for its reference and says so), and
     # `checkpoint` must stay usable on a plan whose state is missing.
@@ -5436,6 +5846,17 @@ def _attach_pointer_for_cwd(plan_path: Path, cwd: Path) -> tuple[Path | None, st
     data = new_pointer_record(
         plan_path=plan_path, repo_root=repo_root, cwd=resolved_cwd, session_id=None,
     )
+    # (S6.3) Seed the advance baseline from whatever the plan has already
+    # finished, so `advance_count`'s first increment is a real advance rather
+    # than this pointer's first look at the file. Best-effort: attaching
+    # before `init` (no state yet) leaves it None, which _advance_fields()
+    # already reads as "never observed".
+    try:
+        seeded = _hook_completed_count(load_state(plan_path))
+    except (OSError, ValueError, json.JSONDecodeError):
+        seeded = None
+    if seeded is not None:
+        data["last_seen_completed_count"] = seeded
     pointer_path = pointer_path_for(resolved_cwd)
     write_pointer_atomic(pointer_path, data)
     return pointer_path, None
@@ -5560,10 +5981,18 @@ def cmd_pointer(args: argparse.Namespace) -> int:
     print(f"Plan: {data.get('plan_path')}")
     print(f"Driver session: {data.get('driver_session_id')}")
     print(f"Paused: {data.get('paused')}")
+    # Three different axes, printed together so the difference between them
+    # is visible: a turn counter, two episode counters, one odometer. Both
+    # live sessions that reported this mechanism as broken could only see
+    # `Auto-advance N/7` flipping between 1 and 2 and had no way to tell
+    # that nothing else was moving.
     print(
         "Counts: consecutive_blocks="
-        f"{data.get('consecutive_blocks')} bg_poll_count={data.get('bg_poll_count')} "
-        f"nag_counts={data.get('nag_counts')}"
+        f"{data.get('consecutive_blocks')} (per turn) "
+        f"bg_poll_count={data.get('bg_poll_count')}"
+        f"@{data.get('bg_poll_step_id')} "
+        f"nag_counts={data.get('nag_counts')}@{data.get('nag_step_id')} "
+        f"advance_count={data.get('advance_count')} (cumulative)"
     )
     return 0
 

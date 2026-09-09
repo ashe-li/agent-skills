@@ -17,6 +17,7 @@ Constraints (S2.2 of plans/active/... plan):
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -78,13 +79,24 @@ PLANNER_AGENT_TEXT = """# Normalize Idempotency Fixture
 """
 
 
-def run_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    """Run plan_runner.py with args, capturing text stdout/stderr."""
+def run_cli(
+    *args: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run plan_runner.py with args, capturing text stdout/stderr.
+
+    `env` exists so attach-path tests can point $HOME at a temp dir —
+    plan_runner resolves POINTER_ACTIVE_DIR from Path.home() at import
+    time, so a child process with a faked $HOME writes its pointer there
+    instead of into the real ~/.claude/plan-run/active/.
+    """
     return subprocess.run(
         [sys.executable, str(PLAN_RUNNER), *args],
         capture_output=True,
         text=True,
         cwd=str(cwd) if cwd else None,
+        env=env,
     )
 
 
@@ -363,6 +375,101 @@ class PlanRunnerRegressionTestCase(unittest.TestCase):
         status_after = run_cli("status", str(self.plan_path))
         self.assertIn("[ ] S3", status_after.stdout)
         self.assertIn("[ ] S5", status_after.stdout)  # unblocked back to pending
+
+
+class InitAttachStreamTestCase(unittest.TestCase):
+    """`init --format json` must leave stdout as a single parseable JSON
+    document even when the default attach path runs.
+
+    Regression source: CodeRabbit on PR #67 — cmd_init emitted the JSON
+    payload and then printed the attach result (or its error) to stdout,
+    so a JSON consumer got trailing non-JSON text. Docs were changed to
+    say "always pass --no-attach in JSON mode"; these tests pin the runner
+    side so the default path is safe too.
+
+    Isolation: every case runs with $HOME redirected to a fresh temp dir,
+    so the pointer file lands under <tmp>/.claude/plan-run/active/ and the
+    real user HOME (and this repo) is never written to. Both the plan and
+    the cwd live under that fake HOME because _is_within_allowed_root()
+    refuses to attach a plan outside $HOME.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        # resolve(): on macOS the temp dir is reached through the /var ->
+        # /private/var symlink, and cmd_init resolve()s plan_path before
+        # comparing it against Path.home(). Resolving here makes both
+        # sides of _is_within_allowed_root() the same real path.
+        self.home = Path(self._tmp.name).resolve()
+        # _ensure_pointer_active_dir() mkdirs ~/.claude/plan-run without
+        # parents=True — on a real HOME ~/.claude always exists already.
+        (self.home / ".claude").mkdir()
+        self.workdir = self.home / "work"
+        self.workdir.mkdir()
+        self.plan_path = self.home / "attach-stream-plan.md"
+        self.plan_path.write_text(PLAN_TEXT, encoding="utf-8")
+        self.env = {**os.environ, "HOME": str(self.home)}
+
+    def _init(self, *extra: str) -> subprocess.CompletedProcess:
+        return run_cli(
+            "init", str(self.plan_path), *extra, cwd=self.workdir, env=self.env,
+        )
+
+    def _assert_pointer_under_fake_home(self) -> None:
+        active_dir = self.home / ".claude" / "plan-run" / "active"
+        pointers = list(active_dir.glob("*.json")) if active_dir.is_dir() else []
+        self.assertTrue(
+            pointers, f"expected a pointer file under {active_dir}, found none",
+        )
+
+    def test_json_mode_with_attach_keeps_stdout_pure_json(self) -> None:
+        r = self._init("--format", "json")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+        payload = json.loads(r.stdout)  # fails loudly if attach text leaked
+        self.assertEqual(payload["status"], "initialized")
+        self.assertEqual(payload["total_steps"], 5)
+
+        # The human-facing attach lines moved to stderr, and are still emitted.
+        self.assertIn("Pointer:", r.stderr)
+        self.assertIn(f"Plan: {self.plan_path}", r.stderr)
+        self.assertNotIn("Pointer:", r.stdout)
+        self._assert_pointer_under_fake_home()
+
+    def test_json_mode_with_no_attach_writes_nothing_to_stderr(self) -> None:
+        r = self._init("--format", "json", "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        json.loads(r.stdout)
+        self.assertEqual(r.stderr, "")
+
+    def test_md_mode_attach_lines_stay_on_stdout(self) -> None:
+        """md mode is unchanged: attach output still goes to stdout, and
+        stderr stays empty."""
+        r = self._init()
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("Pointer:", r.stdout)
+        self.assertIn(f"Cwd: {self.workdir}", r.stdout)
+        self.assertEqual(r.stderr, "")
+        self._assert_pointer_under_fake_home()
+
+    def test_json_mode_attach_conflict_error_goes_to_stderr(self) -> None:
+        """The failure branch of attach (cwd already bound to a different
+        plan) printed to stdout too — it must follow the payload's stream
+        rule as well, and stdout must still parse."""
+        other_plan = self.home / "other-plan.md"
+        other_plan.write_text(PLAN_TEXT, encoding="utf-8")
+        first = self._init("--format", "json")
+        self.assertEqual(first.returncode, 0, msg=first.stderr)
+
+        conflict = run_cli(
+            "init", str(other_plan), "--format", "json",
+            cwd=self.workdir, env=self.env,
+        )
+        payload = json.loads(conflict.stdout)
+        self.assertEqual(payload["status"], "initialized")
+        self.assertNotEqual(conflict.stderr.strip(), "", "conflict must be reported")
+        self.assertNotIn("Pointer:", conflict.stdout)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,17 @@
 - **`plan-run/SKILL.md` 補「作廢 step 與 parser 契約」小節**：來源是 PR #66——CodeRabbit 指出 blockquote 註記不會讓 `/plan-run` 狀態機跳過混合 step，本 repo 修 `ecc-decoupling-and-model-adaptation.md`／`knowledge-base-quality-optimization.md` 兩份 plan 時因此把已刪 skill 的整步移出到二級標題的作廢區塊（實測 ecc plan 14→12 step、kb plan 8→7 step，dangling deps 0）。文件原本沒交代這條界線，補四點契約事實：checkbox 對 `init` 的 pending/ready 判斷沒有影響、作廢一個 step 必須把它移出 step 結構且要用二級標題（三級標題會被 phase regex 攔下）、`Why` 欄位會被解析但不會流進執行者的 Action 模板、`init --format json` 的 stdout 只回摘要欄位而非完整 step 表。**PR #67 CodeRabbit 追加修正**：保留 DAG 位置的正確做法是 `init` 後跑 `skip` 子命令，不是清空 `Files`／`Action` 文字——runner 不讀這兩欄決定是否執行；`init --format json` 一律補 `--no-attach`，因為預設會 attach 並把結果文字印到 stdout，污染 JSON 輸出。
 - **`evidence-gate/SKILL.md` 補「作者先自跑」規則**：來源同為 PR #66——20 條 claim schema 裡有 5 條字面照跑會出錯（ERE 交替寫成 `\|`、`git diff --name-only` 缺 `--diff-filter=M`、`check_skill.py` 缺 `--files`、假設 `grep -r` 輸出帶 `./` 前綴、假設驗收檔是表格但實際是粗體），全靠 fact-checker 重跑等價指令才攔下。原本第 4 節只要求 fact-checker 重跑，沒要求作者交出 schema 前先自己跑過一次；補上這條規則，並要求 fact-checker 遇到指令跑不動或假陰性時另記「schema 指令缺陷」而非放寬判準。**PR #67 CodeRabbit 追加修正**：SCHEMA-DEFECT 與 FAIL 同為阻擋結果，不再是「不算 FAIL」的軟性提醒；`/pr`、`/release-pr` 的擋門句同步補上 SCHEMA-DEFECT 條件，避免其被判定為阻擋卻沒有任何 caller 真的擋下。
 
+### Fixed
+- **`init --format json` 不帶 `--no-attach` 時 stdout 會混入非 JSON 文字**：`cmd_init` 先 `emit_formatted()` 印出 payload，接著在 `attach` 預設為 `True` 的情況下呼叫 `_attach_pointer_for_cwd()`——成功走 `_print_attach_result()`、失敗走 `print(error)`，**兩條路徑都寫 stdout**。JSON consumer 於是拿到一份合法 JSON 後面黏著四行給人看的旁白（`Plan:` / `Cwd:` / `Pointer:` 加一則中文警示），`json.loads()` 直接噴 `Extra data: line 15 column 1`（以 main 版 `plan_runner.py` 在 temp dir 實測重現）。
+
+  來源是 **CodeRabbit on PR #67**。當時的處置只到文件層——`plan-run/SKILL.md` 改成「`init --format json` 一律補 `--no-attach`」，等於**要求每個呼叫端記得繞開一個預設就會踩到的坑**；本次補上 runner 端，讓預設路徑本身就安全，文件那條建議降級為選擇而非必要條件。做法是 JSON 模式把 attach 的成功與失敗訊息改寫到 stderr：它們是旁白，不是 payload 的一部分，而 stderr 正是旁白該去的地方。payload 欄位與 exit code 語意皆未動（attach 失敗仍回 0，那是既有語意，不在本次範圍）。
+
+  **md 模式逐位元組不變**：同一份 plan 分別以 main 版與本版跑 `init`（attach 預設開），stdout 兩邊都是 602 bytes 且 `cmp` 無差異，stderr 兩邊皆為空。
+
+  回歸測試落在 `scripts/tests/test_plan_runner_regression.py` 的 `InitAttachStreamTestCase`，4 個 case：①JSON＋attach 開 → stdout 可 `json.loads` 且 stderr 含 attach 三行；②JSON＋`--no-attach` → stderr 為空；③md＋attach 開 → attach 三行仍在 stdout、stderr 為空；④**attach 的失敗分支**（cwd 已綁定另一份 plan）同樣不得污染 stdout——這條路徑是另一個獨立的 `print()`，只修成功分支時最容易漏掉。四個 case 都在子行程裡把 `$HOME` 重導到 temp dir，pointer 因此落在 `<tmp>/.claude/plan-run/active/`，**不碰真實 `~/.claude/`、不在 repo 留下任何 state 產物**（既有測試是用 `--no-attach` 迴避這個問題，但本次要測的正是 attach 開著的預設路徑，只能改用隔離 HOME）。
+
+  本機沒有 pytest（`import pytest` → `ModuleNotFoundError`），故沿用 `scripts/tests/` 既有的 stdlib `unittest` 寫法而非另引依賴；`python3 -m unittest discover scripts/tests` 實跑 **130 tests OK**（原 126 ＋ 新增 4）。
+
 ## [v2.2.0] - 2026-09-03
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：本次新增一支 skill、修一份 rules 文件，既有 skill 的唯一改動是 `plan-run/SKILL.md` 多一個 `redundancy-peers` 值——那是給 `/design` 讀的去重提示，不是對外介面，也不改 `/plan-run` 任何行為、旗標或機器可讀輸出。`/dispatch-loop` 與 `plans/backlog/` 對既有使用者都是純增量：不叫它、不建那個目錄，一切照舊。

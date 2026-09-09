@@ -79,6 +79,8 @@
   - **F6（LOW，非安全邊界）`state.json` 損毀時 CLI traceback**：改為可讀的錯誤與修法提示。
   - **F7（LOW，敘述準確性）identity gate 擋 symlink 但不擋 hardlink**：**選擇改 docstring 而非改實作**——能建 hardlink 的人本來就有該路徑的寫入權，威脅模型與 symlink 不同；且備份與去重工具會讓一般檔案 `nlink > 1`，加這個檢查會讓 gate 因為模型無法處理的原因失敗。
 
+  **redaction 測試的合成密鑰在原始碼裡拆開放**：那九個樣本刻意做得跟真的一樣——餵給 redactor 一個掃描器認不出來的字串，測不出任何東西。但 GitHub push protection 比對的是**形狀不是有效性**，它分不出這些跟真金鑰的差別，於是整條 branch 推不上去（實測 GH013）。做法是 prefix 與 body 在原始碼裡分開、由 `_shape_sample()` 在執行期串起來：redactor 收到的仍是完整字串，測試威力零損失，檔案裡不再有連續的匹配字串。**不是點 "allow secret" 那個 unblock URL**——這個 repo 以後還會再加同類測試，繞過一次就會變成慣例，而 push protection 是目前唯一的 secret 守門員。理由寫在 `_shape_sample()` 的 docstring 裡，因為下一個被擋的人會先看到那裡。同一個檔案其實早就有正確範例（`FAKE_GITHUB_TOKEN = "ghp_" + ...`），只是沒回頭套用到這九個上。mutation 複驗：把 `_redact_secret_shapes()` 換成 no-op，18 個測試轉紅。
+
   **另一項連帶裁決：`_checkpoint_writable()` 直接刪除，不是修好**。它無 caller、有測試撐著看起來活著、docstring 寫著「S6.1 wires this in」而 S6.1 已完成且沒接（那句話從計畫變成假陳述），內部還帶著 F3 同型的不安全寫入。修它只會讓陷阱更可信。同時新增 `RemovedSymbolsStayRemovedTestCase` 當常設柵欄——S6.2 移除機制 5 時只用一次性 grep 驗過，那不是柵欄。
 
 ### Fixed

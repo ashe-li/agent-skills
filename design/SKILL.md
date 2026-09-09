@@ -26,7 +26,7 @@ redundancy-peers: [plan-run]
 
 1. **Agent types**：`Plan`（規劃，見 Step 3）、`Explore`（唯讀搜尋定位）、`general-purpose`（多步驟研究/審查，見 Step 4a）
 2. **內建 skills**：`/code-review`（品質審查）、`/security-review`（安全審查）、`/simplify`（reuse/簡化/效率清理）、`/verify`（端對端行為驗證）
-3. **本 repo 自持 `agents/` 定義**（見 `agents/SKILL.md` 索引）：`complexity-triage`（Step 2a 分診）、`doc-reviewer`（Step 4a 審查）、`doc-updater`（供 `/update` 使用）、`tdd-guide`（新功能/bug 修復缺測試覆蓋時，可引用其紅－綠－重構流程）
+3. **本 repo 自持 `agents/` 定義**（見 `agents/README.md` 索引）：`complexity-triage`（Step 2a 分診）、`doc-reviewer`（Step 4a 審查）、`doc-updater`（供 `/update` 使用）、`tdd-guide`（新功能/bug 修復缺測試覆蓋時，可引用其紅－綠－重構流程）
 4. 根據使用者需求（`$ARGUMENTS`）篩選出**相關的資源**
 
 **輸出：** 一份簡潔的資源清單，標記每個資源與當前需求的關聯程度（高/中/低）。
@@ -41,7 +41,7 @@ redundancy-peers: [plan-run]
 Agent(subagent_type="general-purpose", model="haiku")
 ```
 
-haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（分診流程、判準表、紅旗皆以該檔為權威版本）；prompt 附上該檔內容或直接引用路徑。路徑解析與呼叫慣例見 `agents/SKILL.md`。
+haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（分診流程、判準表、紅旗皆以該檔為權威版本）；prompt 附上該檔內容或直接引用路徑。路徑解析與呼叫慣例見 `agents/README.md`。
 
 - **輸入**：`$ARGUMENTS` + 對話中的需求脈絡（`/notion-plan` 來源含整理後的 Markdown）+ 專案根目錄路徑
 - **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；輸出契約見 `agents/complexity-triage.md` 的「輸出格式」章節（唯一權威，不在此重複 JSON schema）
@@ -116,7 +116,7 @@ Agent(subagent_type="Plan")
 
 > **快速路徑（低複雜度）不派 subagent**：主模型以 7 項精簡清單 self-check——可執行性（每步有檔案路徑+動作）、依賴正確性、驗收可測、實作後品保步驟存在、診斷 gate 存在（票面假設未經 live 驗證時）、安全敏感面判定、測試覆蓋（新增/修改邏輯有對應測試，或明示不需要的理由，可引用 `agents/tdd-guide.md`）。任一不過直接改 plan，不進 FAIL 迴圈。以下 subagent 審查僅適用中等以上複雜度。
 
-啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。路徑解析與呼叫慣例見 `agents/SKILL.md`。
+啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。路徑解析與呼叫慣例見 `agents/README.md`。
 
 ```
 Agent(subagent_type="general-purpose", model="sonnet")

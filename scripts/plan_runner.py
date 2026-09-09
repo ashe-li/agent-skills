@@ -2825,11 +2825,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
+        # attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
+        # JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
+        # 文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
+        attach_stream = sys.stderr if args.format == "json" else sys.stdout
         pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
         if error is not None:
-            print(error)
+            print(error, file=attach_stream)
         else:
-            _print_attach_result(plan_path, Path.cwd().resolve(), pointer_path)
+            _print_attach_result(
+                plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
+            )
     return 0
 
 
@@ -3267,18 +3273,28 @@ def _attach_pointer_for_cwd(plan_path: Path, cwd: Path) -> tuple[Path | None, st
     return pointer_path, None
 
 
-def _print_attach_result(plan_path: Path, resolved_cwd: Path, pointer_path: Path) -> None:
+def _print_attach_result(
+    plan_path: Path,
+    resolved_cwd: Path,
+    pointer_path: Path,
+    stream: Any = None,
+) -> None:
     """S2.6: attach used to print only the pointer file name, which is a
     sha256 of the cwd — it showed neither which plan got bound nor where.
     Print all three, and warn (never refuse) when the plan lives outside the
     cwd: cross-directory binding is the normal way this tool is used (plan in
     knowledge-base, implementation in another repo).
+
+    `stream` defaults to stdout (resolved at call time, not import time, so
+    tests that redirect sys.stdout still see these lines). `init --format
+    json` passes sys.stderr so stdout stays parseable JSON.
     """
-    print(f"Plan: {plan_path}")
-    print(f"Cwd: {resolved_cwd}")
-    print(f"Pointer: {pointer_path}")
+    out = sys.stdout if stream is None else stream
+    print(f"Plan: {plan_path}", file=out)
+    print(f"Cwd: {resolved_cwd}", file=out)
+    print(f"Pointer: {pointer_path}", file=out)
     if not _is_within_allowed_root(plan_path, resolved_cwd):
-        print("注意：plan 不在此目錄下，本目錄的每一輪都將由該 plan 驅動。")
+        print("注意：plan 不在此目錄下，本目錄的每一輪都將由該 plan 驅動。", file=out)
 
 
 def _hook_registered_in_settings() -> bool:

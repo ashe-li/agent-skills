@@ -17,7 +17,7 @@
   - `verify-evidence-loop`：是 `/evidence-check` 的迭代收斂版本，而 `/evidence-check` 本身全生命期只用 2 次，其迭代版更是 0 次，維護一支比基礎版更貴、更少人用的衍生品沒有回報。
   - `ship-ticket`：全生命期 0 次呼叫，其設計的硬規則（repro-first gate、fix 前必重現）已落在 `/evidence-gate` 與 knowledge-base 的 learned 記錄裡，功能不隨 skill 一起消失。
 
-  **連帶清理**：`update`、`plan-run`、`figma-verify`、`evidence-check`、`design` 五支保留 skill 的 SKILL.md 移除對被刪 skill 的引用或 `redundancy-peers` 條目；`rules/security-guidance/{README,skill-integration}.md`、`rules/refactor/remove-architect-pipeline.md` 的「目前適用範圍」清單拿掉 `/assist`；README.md 的 Usage、Skills 總覽表、決策樹、各 skill 詳細段落同步移除對應 9 支的條目。`rules/task-tracking-availability.md`、README 的「ECC 解耦（2026-07-04）」段落等**歷史查證/歷史敘述保留不動**，不重寫過去發生的事實。
+  **連帶清理**：`update`、`plan-run`、`figma-verify`、`evidence-check`、`design` 五支保留 skill 的 SKILL.md 移除對被刪 skill 的引用或 `redundancy-peers` 條目；`rules/security-guidance/{README,skill-integration}.md`、`rules/refactor/remove-architect-pipeline.md` 的「目前適用範圍」清單拿掉 `/assist`；README.md 的 Usage、Skills 總覽表、決策樹、各 skill 詳細段落同步移除對應 9 支的條目。fresh-context 驗收另挖出三份**現行**文件仍把已刪 skill 當存在引用，補作廢註記而不改寫內容：`research/q4-review-checklist.md` 的可執行步驟改指向 `/update` Step 4 inline 評分；`plans/active/ecc-decoupling-and-model-adaptation.md`、`plans/active/knowledge-base-quality-optimization.md` 頂部加註「以這些 skill 為對象的項目自此作廢」。`rules/task-tracking-availability.md`、README 的「ECC 解耦（2026-07-04）」段落等**歷史查證/歷史敘述保留不動**，不重寫過去發生的事實。
 
   **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準，下一個 release 為 `v3.0.0`。
 

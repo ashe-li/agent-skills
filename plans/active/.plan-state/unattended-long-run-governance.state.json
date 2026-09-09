@@ -11,10 +11,9 @@
     "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
     "Phase 7: 最終驗收"
   ],
-  "auto_reply": "off",
   "parent_task_id": null,
-  "created_at": "2026-09-08T08:33:28.706936+00:00",
-  "updated_at": "2026-09-09T04:47:30.879986+00:00",
+  "created_at": "2026-09-09T04:48:19.826669+00:00",
+  "updated_at": "2026-09-09T06:52:52.681132+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -32,7 +31,8 @@
       "task_id": null,
       "started_at": "2026-09-06T18:03:22.362487+00:00",
       "completed_at": "2026-09-06T18:09:26.193281+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S1.2": {
       "id": "S1.2",
@@ -50,7 +50,8 @@
       "task_id": null,
       "started_at": "2026-09-06T18:03:22.429031+00:00",
       "completed_at": "2026-09-06T18:13:10.294694+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S2.1": {
       "id": "S2.1",
@@ -71,7 +72,8 @@
       "task_id": null,
       "started_at": "2026-09-06T18:21:32.304637+00:00",
       "completed_at": "2026-09-06T18:39:35.955553+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S2.2": {
       "id": "S2.2",
@@ -92,7 +94,8 @@
       "task_id": null,
       "started_at": "2026-09-07T06:19:53.377557+00:00",
       "completed_at": "2026-09-07T06:54:32.595043+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S3.1": {
       "id": "S3.1",
@@ -112,7 +115,8 @@
       "task_id": null,
       "started_at": "2026-09-06T18:09:39.387336+00:00",
       "completed_at": "2026-09-06T18:18:31.812448+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S3.2": {
       "id": "S3.2",
@@ -132,7 +136,8 @@
       "task_id": null,
       "started_at": "2026-09-07T06:54:32.656745+00:00",
       "completed_at": "2026-09-07T07:04:30.247116+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S3.4": {
       "id": "S3.4",
@@ -152,7 +157,8 @@
       "task_id": null,
       "started_at": "2026-09-07T07:04:30.311111+00:00",
       "completed_at": "2026-09-07T07:18:59.403190+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S3.3": {
       "id": "S3.3",
@@ -175,7 +181,8 @@
       "task_id": null,
       "started_at": "2026-09-07T07:19:20.834173+00:00",
       "completed_at": "2026-09-07T07:32:33.105024+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S4.1": {
       "id": "S4.1",
@@ -195,7 +202,8 @@
       "task_id": null,
       "started_at": "2026-09-07T07:32:33.174728+00:00",
       "completed_at": "2026-09-07T07:46:21.493367+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S4.2": {
       "id": "S4.2",
@@ -216,7 +224,8 @@
       "task_id": null,
       "started_at": "2026-09-07T07:46:21.561930+00:00",
       "completed_at": "2026-09-07T08:03:38.603654+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S4.3": {
       "id": "S4.3",
@@ -237,7 +246,8 @@
       "task_id": null,
       "started_at": "2026-09-07T10:06:43.133420+00:00",
       "completed_at": "2026-09-07T10:43:49.279795+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S4.4": {
       "id": "S4.4",
@@ -259,7 +269,8 @@
       "task_id": null,
       "started_at": null,
       "completed_at": null,
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S4.5": {
       "id": "S4.5",
@@ -287,7 +298,8 @@
       "task_id": null,
       "started_at": "2026-09-08T03:05:27.916700+00:00",
       "completed_at": "2026-09-08T03:28:05.375066+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S5.1": {
       "id": "S5.1",
@@ -307,7 +319,8 @@
       "task_id": null,
       "started_at": "2026-09-08T08:34:07.200701+00:00",
       "completed_at": "2026-09-08T08:34:07.270815+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S6.1": {
       "id": "S6.1",
@@ -327,7 +340,8 @@
       "task_id": null,
       "started_at": "2026-09-08T09:22:11.453148+00:00",
       "completed_at": "2026-09-08T10:54:23.850314+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S6.2": {
       "id": "S6.2",
@@ -347,7 +361,8 @@
       "task_id": null,
       "started_at": "2026-09-08T08:38:49.479767+00:00",
       "completed_at": "2026-09-08T09:02:49.217068+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S6.3": {
       "id": "S6.3",
@@ -359,7 +374,7 @@
       "agent": "general-purpose (Opus)",
       "skill": null,
       "command": null,
-      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`",
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `plan-run/SKILL.md`",
       "action": "先寫測試再實作。**(a) 拆計數器**：`consecutive_blocks` 維持現狀（對 harness 的 per-turn 8 步上限是**正確的**，不要動）；另立一個只在**真實推進**時遞增的計數，沿用 `_record_advance_if_progressed()` 已有的「completed+skipped 真的增加了」偵測。**(b) 修 `bg_poll_count` 與 `nag_counts`**：兩者目前被每則訊息歸零，導致逃生口永不開、升級訊息永不出現——它們不該掛在 turn 軸上。**(c) 兩級嚴格度**（研究 #14）：把「幾乎每輪都會觸發」的檢查降成警告層（`_hook_allow(ctx, system_message=...)`），只保留少數在阻擋層（`_hook_block`）。篩選原則**逐字寫進程式碼註解**：「一個檢查該不該在進行中就擋，取決於**現在不修會不會讓後面的判定失效或不可逆**，而不是取決於它有多重要。」**(d)** 修正 `_branch_background_tasks()`：限縮成「in_progress step 有 `task_id` 且該 task_id 在 `background_tasks` 裡」才 block——目前它讀的是整個 session 的背景工作、無 plan 識別，而本 repo 的工作模式（指揮官不下場、dispatch-loop）**要求**有背景 agent 在跑，這條 branch 因此幾乎恆真。",
       "risk": null,
       "estimated": 120,
@@ -367,7 +382,8 @@
       "task_id": null,
       "started_at": "2026-09-09T02:42:34.117366+00:00",
       "completed_at": "2026-09-09T04:02:42.301795+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S6.4": {
       "id": "S6.4",
@@ -380,14 +396,15 @@
       "skill": null,
       "command": null,
       "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`",
-      "action": "先寫測試再實作。**(a) `resync` 子指令**：比對 plan 與 state 的 step id 集合與 deps，未變則只回寫 `plan_sha256`、保留全部進度；變了則拒絕並列出差異。**drift banner 的第一順位修法改印 `resync`**，`rm state && init` 降為「step 結構真的變了」才提。**(b) `skip --reason`**，`transition_step()` 在 `SKIPPED` 時寫 `step[\"skip_reason\"]`。**(c) `VALID_TRANSITIONS[IN_PROGRESS]` 加入 `SKIPPED`。**",
+      "action": "先寫測試再實作。**(a) `resync` 子指令**：比對 plan 與 state 的 step id 集合與 deps，未變則只回寫 `plan_sha256`、保留全部進度；變了則拒絕並列出差異。**drift banner 的第一順位修法改印 `resync`**，`rm state && init` 降為「step 結構真的變了」才提。**(b) `skip --reason`**，`transition_step()` 在 `SKIPPED` 時寫 `step[\"skip_reason\"]`。**(c) `VALID_TRANSITIONS[IN_PROGRESS]` 加入 `SKIPPED`。** **(d) plan 新增 step 時的進度承接**：2026-09-08 本 plan 從 15 步長到 20 步（追加 Phase 6／7），`init --force` 會**丟掉全部進度**，只能手寫 Python 把 13 步的 `status`／`started_at`／`completed_at`／`previously_reported_ready` 併回重建後的 state。長跑的 plan 本來就會長大——**「plan 長出新 step」是正常事件，不該只有「重建並丟光」一條路**。需一個承接模式（例如 `init --merge`：以新 plan 為結構、既有 step id 的狀態原樣保留、消失的 step id 明確報出來讓人裁決），與 (a) 的 `resync`（結構未變、只回寫指紋）互補。",
       "risk": null,
       "estimated": 60,
       "status": "completed",
       "task_id": null,
       "started_at": "2026-09-09T04:03:34.748308+00:00",
       "completed_at": "2026-09-09T04:30:39.436277+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S6.5": {
       "id": "S6.5",
@@ -410,7 +427,29 @@
       "task_id": null,
       "started_at": "2026-09-09T04:31:47.349989+00:00",
       "completed_at": "2026-09-09T04:47:30.852197+00:00",
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
+    },
+    "S6.6": {
+      "id": "S6.6",
+      "title": "替代安全審查 7 個 finding 的修復",
+      "phase": "Phase 6: 讓機制真的成立（S5.1 review 後追加，2026-09-08）",
+      "deps": [
+        "S6.5"
+      ],
+      "agent": "general-purpose (Opus)",
+      "skill": null,
+      "command": null,
+      "files": "`scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`",
+      "action": "先寫**能重現該漏洞**的測試再修。依 `.verification/2026-09-09/s6.5a-security-review-substitute.md` 逐條處理 F1–F7。**F1／F3 已由 lead 獨立實跑重現**（證據在 `s6.5-acceptance-by-lead.md`），其餘五條需先自行重現再修——**重現不了的不要「順手修」**，那會改到不需要改的地方，並在紀錄裡留下一個從未存在過的漏洞。修復方向：讀取端的淨化與寫入端的 symlink 防護都已有現成範式可抄（`_redact_secret_shapes()`、`save_state()` 的 `mkstemp`+`os.replace`），**優先沿用而不是另寫一套**。F7 的處置可以是「改實作」或「改 docstring 讓敘述對齊實作」，兩者都可接受，但要說明選哪個與為什麼。",
+      "risk": null,
+      "estimated": 120,
+      "status": "completed",
+      "task_id": null,
+      "started_at": "2026-09-09T04:48:45.791104+00:00",
+      "completed_at": "2026-09-09T06:52:52.648850+00:00",
+      "failure_reason": null,
+      "skip_reason": null
     },
     "S5.2": {
       "id": "S5.2",
@@ -435,10 +474,11 @@
       "task_id": null,
       "started_at": null,
       "completed_at": null,
-      "failure_reason": null
+      "failure_reason": null,
+      "skip_reason": null
     }
   },
-  "plan_sha256": "0d253578034db557e3b687aab1e98dcfb53dd8aa7aaee5ae1477e802b825fcfa",
+  "plan_sha256": "7aeff83975e3f1bf8b931244e8333dd4da0ee4501c590df0d44e9948d80420d2",
   "previously_reported_ready": [
     "S5.2"
   ]

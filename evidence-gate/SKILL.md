@@ -26,6 +26,7 @@ allowed-tools: Bash, Read, Grep, Glob, Write, Agent
   - **FAIL**：指令輸出與宣稱矛盾（例：宣稱「不動 X」但 X 出現在 diff 檔案清單）。
   - **UNVERIFIABLE**：沒有可重跑的指令能證實（例：commit message 尾段的本機測試數字、口頭效能觀察）——**不是留白帶過**，宣稱本身要嘛改寫成可查證的版本，要嘛整條剔除，不能保留原句蒙混。
 - 這張表本身就是產出物，逐條可被 fact-checker（第 4 節）重跑。
+- **作者交出 schema 前，每條證據指令自己先跑一次**：把實際輸出貼進「關鍵輸出」欄，不得憑記憶或預期寫結果。PR #66 的教訓是 20 條 claim 裡有 5 條字面照跑會錯——ERE 交替寫成 `\|`（本機 grep 靜默回 0 筆）、`git diff --name-only` 少了 `--diff-filter=M` 讓刪除檔混進來、`check_skill.py` 少帶必要參數 `--files`、假設 `grep -r` 輸出帶 `./` 前綴、假設驗收檔是 markdown 表格但實際是粗體格式。fact-checker（第 4 節）遇到指令跑不動或跑出假陰性，在判定欄外另記一筆 `SCHEMA-DEFECT` 退回作者修 schema，不因此放寬或收緊原本的 PASS/FAIL/UNVERIFIABLE 判準。
 
 ## 2. Diff-Grounding 規則
 
@@ -56,7 +57,7 @@ git diff --diff-filter=D origin/<base>..HEAD --name-only   # 確認刪除的檔�
 草稿定稿後，**派一個 fresh-context subagent** 獨立重跑，不是自己再看一遍：
 
 - 該 subagent **沒看過**草稿產生過程，prompt 要求它假設宣稱是錯的，逐條重跑 claim schema 裡的證據指令。
-- 只有全部判定回傳 PASS（UNVERIFIABLE 的宣稱已在第 1 節剔除，不計入放行條件）才可交付；任何一條 FAIL，回報置頂列出，**不自動交付、不自動寫回**。
+- 只有全部判定回傳 PASS 且 SCHEMA-DEFECT 為 0（UNVERIFIABLE 的宣稱已在第 1 節剔除，不計入放行條件）才可交付；任何一條 FAIL 或任一 SCHEMA-DEFECT，回報置頂列出，**不自動交付、不自動寫回**。
 
 Subagent 派遣模板（照抄套用，`{...}` 處填當次資訊；draft 全文與 claim schema 表一律用 fenced code block 包裹，避免內文被當成指令解析）：
 
@@ -84,12 +85,14 @@ Claim schema（每列一條宣稱 + 我聲稱用的證據指令）：
 2. 輸出格式：CLAIM | 你重跑的指令 | 你實際拿到的輸出 | 判定(PASS/FAIL/UNVERIFIABLE)
 3. commit message 與 diff 衝突時，diff 是真相
 4. 查無直接證據一律判 UNVERIFIABLE，不要為了讓報告看起來完整而放寬
+5. 指令跑不動、或明顯假陰性（例如 ERE 交替寫成 `\|`、缺必要旗標、路徑前綴假設錯）→ 用等價指令重跑取得判定，並在表格之後另列一行 `SCHEMA-DEFECT | 原指令 | 問題 | 你實際改用的指令`；判定欄仍以實際輸出為準，不因 schema 有缺陷而放寬或收緊
 
-最後一行輸出：TOTAL: <N> PASS / <N> FAIL / <N> UNVERIFIABLE`
+最後一行輸出：TOTAL: <N> PASS / <N> FAIL / <N> UNVERIFIABLE / <N> SCHEMA-DEFECT`
 })
 ````
 
 - 呼叫方收到回覆後，逐列核對；有 FAIL 就把該列連同「重跑指令＋實際輸出」原樣貼進交付前的修正循環，不重新用散文轉述。
+- SCHEMA-DEFECT 與 FAIL 同為阻擋結果：退回作者修 schema、重跑第 4 節，不寫回。
 
 ## 5. 時間視窗規則
 
@@ -105,8 +108,8 @@ Claim schema（每列一條宣稱 + 我聲稱用的證據指令）：
 
 | Caller | 呼叫時機 | 傳入 | 拿回 |
 |---|---|---|---|
-| `/pr` | Step 5「建立或更新 PR」寫回前，PR description 草稿完成後 | draft body 全文 + `origin/<base>..HEAD` 範圍 | claim schema 表（全 PASS）或 FAIL 清單退回修正 |
-| `/release-pr` | Step 4.5「寫回前的擋門」——即本 gate 的落地實作，Step 2.5 三項查核可直接映射進第 1/2 節的 claim schema | draft title/body + compare API 的 commits/files 清單 | 同上；`/release-pr` 既有的「CLAIM \| 驗證指令 \| 實際結果 \| 通過?」格式即本 skill 第 1 節表格的既有實例 |
+| `/pr` | Step 5「建立或更新 PR」寫回前，PR description 草稿完成後 | draft body 全文 + `origin/<base>..HEAD` 範圍 | claim schema 表（全 PASS 且 SCHEMA-DEFECT=0）或 FAIL／SCHEMA-DEFECT 清單退回修正 |
+| `/release-pr` | Step 4.5「寫回前的擋門」——即本 gate 的落地實作，Step 2.5 三項查核可直接映射進第 1/2 節的 claim schema | draft title/body + compare API 的 commits/files 清單 | 同上，FAIL 或 SCHEMA-DEFECT 清單同樣退回；`/release-pr` 既有的「CLAIM \| 驗證指令 \| 實際結果 \| 通過?」格式即本 skill 第 1 節表格的既有實例 |
 | `alert-triage` | Step 5「RCA Report」定稿前，尤其 `stated_cause` 對賭與分類結論部分 | Step 3 的假設＋live 證據列 | 對每個假設補齊 PASS/FAIL/UNVERIFIABLE；`real` 判定的 claim 若 FAIL 或 UNVERIFIABLE 需回 alert-triage 既有的 G4（low-confidence）流程 |
 | security review（如 `security-review-scoped`） | VERDICT 先出、證據後補階段，證據段落定稿前 | 每條漏洞/風險宣稱 + 對應程式碼行號 | claim schema 表；FAIL 的宣稱代表誤判風險，需重新定位行號或降級為 UNVERIFIABLE |
 

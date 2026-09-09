@@ -153,7 +153,7 @@ Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Age
 
 **輸出**：每條 claim 一列 `CLAIM | 驗證指令 | 實際結果 | 通過?`。base/head/state 一律現查 `gh pr view <PR> --repo <repo> --json baseRefName,headRefName,state`，不沿用記憶或先前對話推斷的值。
 
-**擋門**：任一列「通過?=否」就停手，把未過的列回報，**不自動寫回 PR**；修正後重跑本關卡，全過才進 Step 5。
+**擋門**：任一列「通過?=否」、或 evidence-gate 回報任何 SCHEMA-DEFECT，就停手，把未過的列回報，**不自動寫回 PR**；修正後重跑本關卡，全過才進 Step 5。
 
 ## Step 5：寫回並驗證（write-then-verify）
 

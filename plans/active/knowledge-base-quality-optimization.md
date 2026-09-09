@@ -4,7 +4,7 @@
 > Plan file: plans/active/knowledge-base-quality-optimization.md
 > Status: PARTIALLY COMPLETE — Phase 1 全數完成、Phase 2 已無可執行步驟（S2.2 於 2026-09-09 作廢）、Phase 3 剩 1 步（S3.1）
 > 2026-07-04 修訂：去 ECC 化重寫（原版依賴 ECC learn-eval，與解耦決策衝突）
-
+>
 > **2026-09-09 註記（v3.0.0 前置）**：`curation` 已於 PR #66（commit c948b32）移除，S2.2 與所有 `/curation` 相關要求隨之作廢，明細見下方「作廢範圍（不可執行，2026-09-09）」區塊——該區塊不會被 `/plan-run` parser 解析成 step，其餘項目效力不變。
 
 ## Overview

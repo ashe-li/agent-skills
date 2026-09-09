@@ -21,6 +21,22 @@
 
   **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準，下一個 release 為 `v3.0.0`。
 
+- **`agents/` 退出指令清單**：`agents/SKILL.md` 改名為 [`agents/README.md`](agents/README.md)。目錄與四份定義檔（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`）**原地保留、內容一字未改**——這是換一個不會被註冊的檔名，不是刪功能。
+
+  **理由：那份文件的 frontmatter 自己就寫著「本身非直接可呼叫的 skill，不會出現在指令清單中」，而那句話沒有執行力。** 會不會被註冊成指令只看檔名是不是 `SKILL.md`，`user-invocable: false` 管不到，於是它照樣佔掉 `/agents` 一格、description 照樣每個 session 載入。本機 5 週 transcript（2026-08-04～09-09）掃描：`agents` 命中 2 次，兩次都是 `/design`、`/update` 執行過程中對定義檔的間接引用，**人打或 Claude 自叫 `/agents` 0 次**——用量與那句自述完全一致，等於它本來就不該在清單裡。
+
+  呼叫方引用的一直是 `agents/<name>.md` 那四份定義檔，從來不是 `SKILL.md`，所以呼叫路徑零變更；`design/SKILL.md`（3 處）、`update/SKILL.md`（2 處）、`README.md`（1 處）的指標同步改指 `agents/README.md`。`~/.claude/skills/agents` → repo `agents/` 的 symlink 保留不動。`ls */SKILL.md | wc -l`：**16 → 15**。
+
+  **版本位階：MAJOR，但由本次 `v3.0.0` 一併涵蓋**，不另外抬升——「更名指令」與上一條「移除 9 支 skill」是 [VERSIONING.md](VERSIONING.md) 的同一條判準，同個 release 內合併計算。
+
+  **對外部安裝者的影響（實測推翻了一個錯誤前提）**：原本的說法是「`npx skills` 快照只同步 `SKILL.md`，所以外部安裝者本來就拿不到定義檔，改名對他們沒差」——**查下去發現這是錯的**。`~/.agents/.skill-lock.json` 把 `agents` 列為受追蹤的 skill（`skillPath: agents/SKILL.md`，`updatedAt: 2026-08-05T04:36:29Z`），而 `~/.agents/skills/agents/` 底下四份定義檔全在，檔案時間戳與 lock 的 `updatedAt` 是同一刻；同一份 lock 裡 `ecc-skill-defer` 拿到 `DEFER_LOG.md` / `DEFER_REFERENCE.md` / `.conf` / `.sh`，`triage` 拿到 `skills-triage.sh`。**skills CLI 同步的是整個 skill 資料夾，不是單一檔案。** README「安裝後確認載入的版本與 repo 一致」段落講的「只同步 `SKILL.md`，同層的 `scripts/` 不會一起下來」指的是 **repo 根目錄的 `scripts/`**——那個目錄不在任何 skill 資料夾內，該句本身沒錯，但不能推廣成通則。本 repo 只有 `agents/` 這一個 skill 資料夾帶頂層附屬檔（`release-pr` 的附屬檔在 `fixtures/` 子目錄裡），所以這個差異一直沒被觸發過。
+
+  真正的影響因此是：改名後 `agents/` 不再是 skill，`npx skills update` 不會再同步它，既有安裝的快照會停在最後一次同步的版本、也可能被清掉。`agents/README.md` 的「路徑解析」段已據此改寫——拿掉會失效的 `~/.agents/skills/agents/<name>.md` 與「請使用者重跑 `npx skills update`」，改列 repo checkout 與 `ln -sfn <你的 checkout>/agents ~/.claude/skills/agents` 兩條有效路徑，並保留「從 GitHub 直接取 `agents/<name>.md`」當最後手段。
+
+  **CI 不受影響（兩條路都實測過）**：`.github/workflows/skill-quality.yml` 的 `paths` 是 `*/SKILL.md`，而 `git diff --name-only main...HEAD` 對這次改名只吐出 `agents/README.md`（rename 偵測生效），`^[^/]+/SKILL\.md$` 撈到的仍只有 `design/SKILL.md`、`update/SKILL.md`；即使 rename 偵測失效（以 `--no-renames` 模擬），`agents/SKILL.md` 被撈進 `--files` 也只是讓 `check_skill.py` 印一行 `::warning file=agents/SKILL.md::File not found, skipping` 然後繼續，exit 0。既不會漏跑也不會誤紅。`check_release_fixtures.py` 的第 6 條（新增 `## Step` 標題必須動 `fixtures/`）只看 `<dir>/SKILL.md` 的**新增行**，刪除與改名都不觸發，self-test 6/6、完整性擋門 0 問題。
+
+  **順帶量到的分數變化**：`check_skill.py` 的 `non_redundancy` 是拿該 skill 與 repo 內其他 `SKILL.md` 比 Jaccard 重疊，`agents/SKILL.md` 退出比較池後 `update/SKILL.md` 的 `non_redundancy` **2.2 → 5.0**、總分 **21.0 → 23.8**，`design/SKILL.md` 維持 **23.8**，兩者皆 PASS 且不低於 main。這也反過來說明：那份索引原本就在跟它自己的呼叫方搶同一組關鍵字。
+
 ### Added
 - **`/release-pr` 新增 Step 3.5「範圍相稱性擋門」＋ `release-pr/fixtures/` golden set**：對 body 的每個段落問「reviewer 為了決定要不要核准並部署這次變更，需要知道這件事嗎？」——「查證時才需要」的內容外連而非內嵌，因為它的完整版本通常已存在於 feature PR、KB 報告或 runbook，寫第二次只是製造第二個會過期的副本。
 
@@ -47,6 +63,17 @@
 ### Changed
 - **`plan-run/SKILL.md` 補「作廢 step 與 parser 契約」小節**：來源是 PR #66——CodeRabbit 指出 blockquote 註記不會讓 `/plan-run` 狀態機跳過混合 step，本 repo 修 `ecc-decoupling-and-model-adaptation.md`／`knowledge-base-quality-optimization.md` 兩份 plan 時因此把已刪 skill 的整步移出到二級標題的作廢區塊（實測 ecc plan 14→12 step、kb plan 8→7 step，dangling deps 0）。文件原本沒交代這條界線，補四點契約事實：checkbox 對 `init` 的 pending/ready 判斷沒有影響、作廢一個 step 必須把它移出 step 結構且要用二級標題（三級標題會被 phase regex 攔下）、`Why` 欄位會被解析但不會流進執行者的 Action 模板、`init --format json` 的 stdout 只回摘要欄位而非完整 step 表。**PR #67 CodeRabbit 追加修正**：保留 DAG 位置的正確做法是 `init` 後跑 `skip` 子命令，不是清空 `Files`／`Action` 文字——runner 不讀這兩欄決定是否執行；`init --format json` 一律補 `--no-attach`，因為預設會 attach 並把結果文字印到 stdout，污染 JSON 輸出。
 - **`evidence-gate/SKILL.md` 補「作者先自跑」規則**：來源同為 PR #66——20 條 claim schema 裡有 5 條字面照跑會出錯（ERE 交替寫成 `\|`、`git diff --name-only` 缺 `--diff-filter=M`、`check_skill.py` 缺 `--files`、假設 `grep -r` 輸出帶 `./` 前綴、假設驗收檔是表格但實際是粗體），全靠 fact-checker 重跑等價指令才攔下。原本第 4 節只要求 fact-checker 重跑，沒要求作者交出 schema 前先自己跑過一次；補上這條規則，並要求 fact-checker 遇到指令跑不動或假陰性時另記「schema 指令缺陷」而非放寬判準。**PR #67 CodeRabbit 追加修正**：SCHEMA-DEFECT 與 FAIL 同為阻擋結果，不再是「不算 FAIL」的軟性提醒；`/pr`、`/release-pr` 的擋門句同步補上 SCHEMA-DEFECT 條件，避免其被判定為阻擋卻沒有任何 caller 真的擋下。
+
+### Fixed
+- **`init --format json` 不帶 `--no-attach` 時 stdout 會混入非 JSON 文字**：`cmd_init` 先 `emit_formatted()` 印出 payload，接著在 `attach` 預設為 `True` 的情況下呼叫 `_attach_pointer_for_cwd()`——成功走 `_print_attach_result()`、失敗走 `print(error)`，**兩條路徑都寫 stdout**。JSON consumer 於是拿到一份合法 JSON 後面黏著四行給人看的旁白（`Plan:` / `Cwd:` / `Pointer:` 加一則中文警示），`json.loads()` 直接噴 `Extra data: line 15 column 1`（以 main 版 `plan_runner.py` 在 temp dir 實測重現）。
+
+  來源是 **CodeRabbit on PR #67**。當時的處置只到文件層——`plan-run/SKILL.md` 改成「`init --format json` 一律補 `--no-attach`」，等於**要求每個呼叫端記得繞開一個預設就會踩到的坑**；本次補上 runner 端，讓預設路徑本身就安全，文件那條建議降級為選擇而非必要條件。做法是 JSON 模式把 attach 的成功與失敗訊息改寫到 stderr：它們是旁白，不是 payload 的一部分，而 stderr 正是旁白該去的地方。payload 欄位與 exit code 語意皆未動（attach 失敗仍回 0，那是既有語意，不在本次範圍）。
+
+  **md 模式逐位元組不變**：同一份 plan 分別以 main 版與本版跑 `init`（attach 預設開），stdout `cmp` 無差異、stderr 兩邊皆為空；位元組數隨安裝路徑長度變動，不列固定值。
+
+  回歸測試落在 `scripts/tests/test_plan_runner_regression.py` 的 `InitAttachStreamTestCase`，4 個 case：①JSON＋attach 開 → stdout 可 `json.loads` 且 stderr 含 attach 三行；②JSON＋`--no-attach` → stderr 為空；③md＋attach 開 → attach 三行仍在 stdout、stderr 為空；④**attach 的失敗分支**（cwd 已綁定另一份 plan）同樣不得污染 stdout——這條路徑是另一個獨立的 `print()`，只修成功分支時最容易漏掉。四個 case 都在子行程裡把 `$HOME` 重導到 temp dir，pointer 因此落在 `<tmp>/.claude/plan-run/active/`，**不碰真實 `~/.claude/`、不在 repo 留下任何 state 產物**（既有測試是用 `--no-attach` 迴避這個問題，但本次要測的正是 attach 開著的預設路徑，只能改用隔離 HOME）。
+
+  本機沒有 pytest（`import pytest` → `ModuleNotFoundError`），故沿用 `scripts/tests/` 既有的 stdlib `unittest` 寫法而非另引依賴；`python3 -m unittest discover scripts/tests` 實跑 **130 tests OK**（原 126 ＋ 新增 4）。
 
 ## [v2.2.0] - 2026-09-03
 

@@ -44,6 +44,10 @@
 
   **順帶發現、本次未修**：`scripts/tests/` 的兩支既有 pytest（`test_plan_runner_regression.py`、`test_plan_run_hook.py`）**在整個 repo 的 CI 裡從未被執行過**——同一個失效類別。本次不順手掛上去，因為本機沒有 pytest、無法先驗證它們現在是綠的，盲目接線會引入不相關的失敗。留作獨立項。
 
+### Changed
+- **`plan-run/SKILL.md` 補「作廢 step 與 parser 契約」小節**：來源是 PR #66——CodeRabbit 指出 blockquote 註記不會讓 `/plan-run` 狀態機跳過混合 step，本 repo 修 `ecc-decoupling-and-model-adaptation.md`／`knowledge-base-quality-optimization.md` 兩份 plan 時因此把已刪 skill 的整步移出到二級標題的作廢區塊（實測 ecc plan 14→12 step、kb plan 8→7 step，dangling deps 0）。文件原本沒交代這條界線，補四點契約事實：checkbox 對 `init` 的 pending/ready 判斷沒有影響、作廢一個 step 必須把它移出 step 結構且要用二級標題（三級標題會被 phase regex 攔下）、`Why` 欄位會被解析但不會流進執行者的 Action 模板、`init --format json` 的 stdout 只回摘要欄位而非完整 step 表。
+- **`evidence-gate/SKILL.md` 補「作者先自跑」規則**：來源同為 PR #66——20 條 claim schema 裡有 5 條字面照跑會出錯（ERE 交替寫成 `\|`、`git diff --name-only` 缺 `--diff-filter=M`、`check_skill.py` 缺 `--files`、假設 `grep -r` 輸出帶 `./` 前綴、假設驗收檔是表格但實際是粗體），全靠 fact-checker 重跑等價指令才攔下。原本第 4 節只要求 fact-checker 重跑，沒要求作者交出 schema 前先自己跑過一次；補上這條規則，並要求 fact-checker 遇到指令跑不動或假陰性時另記「schema 指令缺陷」而非放寬判準。
+
 ## [v2.2.0] - 2026-09-03
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：本次新增一支 skill、修一份 rules 文件，既有 skill 的唯一改動是 `plan-run/SKILL.md` 多一個 `redundancy-peers` 值——那是給 `/design` 讀的去重提示，不是對外介面，也不改 `/plan-run` 任何行為、旗標或機器可讀輸出。`/dispatch-loop` 與 `plans/backlog/` 對既有使用者都是純增量：不叫它、不建那個目錄，一切照舊。

@@ -161,6 +161,16 @@ Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete` �
 
 transition 由 Python 強制驗證，不允許 `completed → pending` 等非法轉移（避免覆寫已完成工作）。
 
+## 作廢 step 與 parser 契約
+
+parser 只認 step／phase／field 的樣式，不看 checkbox 打勾、也不看旁白註記——改 plan 前先弄清楚這條界線：
+
+- **Checkbox 對 runner 沒有意義**：`init` 無條件把每個 step 設成 `pending`，`- [x]` 打勾的 step 照樣進 `ready_steps`（實測驗證）。想讓某個 step 不被執行，不能靠打勾，要讓它從一開始就不是 step
+- **作廢一個 step＝把它移出 step 結構**：搬進一個 parser 不當 step 看的區塊，例如 `## 作廢範圍（不可執行，YYYY-MM-DD）`，底下用普通條列、不套 step ID 樣式。**要用二級標題**：三級標題會被 phase regex 攔下，即使文字不含「Phase」照樣吃掉整行，且不像二級標題那樣正確結束前一個 step 的欄位收集。頂部 blockquote 或內文括號註記則相反——完全不會被 parser 認到，所以也擋不住 checkbox 判讀，別指望靠加註解讓 runner 跳過
+- 保留下來的 step ID **不重新編號**，同時把其他 step `Dependencies` 裡引用到被移出 ID 的邊一併刪掉——依賴指向不存在的 step，`init` 會直接判 DAG validation failed。一定要保留某個 step 位置（維持依賴邊）時，改法是清空 `Files`、`Action` 寫「作廢，不執行」，讓它仍是合法 step 但內容標明不用做
+- **`Why` 欄位會被解析、但不會送進執行者看到的 step 模板**：它在可辨識欄位表裡會被欄位 regex 吃掉這一行，卻沒有對應邏輯寫回任何 step 欄位，所以內容不會混進 `Action`。想寫作廢理由又不想污染執行者拿到的文字，寫在 `Why` 最安全
+- **`init --format json` 的 stdout 沒有完整 step 表**：只回 `status`／`slug`／`title`／`state_path`／`total_steps`／`phase_order`／`ready_steps`／`warnings`。要核對 step 數或依賴邊是否正確，讀 `state_path` 指到的 state 檔，別在 stdout 裡找 `steps`。要做「改版前後比對」，可以在暫存目錄跑 `init --force --no-attach`，state 產物留在暫存目錄不會弄髒 repo
+
 ## 與其他 skill 的關係
 
 `/notion-plan`（抓需求）→ `/design`（產 plan）→ **`/plan-run`（依 plan 推進，本 skill）** → `/plan-archive`（歸檔）。`/code-review`、`/simplify` 由個別 step 的欄位引用。

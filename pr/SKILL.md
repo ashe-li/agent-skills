@@ -220,7 +220,7 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 
 ### Evidence Gate（寫回前，強制）
 
-description 定稿後、執行 `gh pr create`/`gh pr edit` 前，呼叫 `evidence-gate` skill 過關卡：commit range 固定 `origin/<base-branch>..HEAD`（沿用 Step 1a 已 `git fetch origin` 的範圍），description 每條事實宣稱拆成該 skill 第 1 節的 Claim Schema，證據一律溯源 `git diff`/`git log --numstat`，commit message 僅供定位不當證據；並依其第 4 節派 fresh-context subagent 對抗性複驗。零 FAIL 才可繼續下方 `gh pr create`/`gh pr edit`；任一 FAIL 回本節修正 description，不寫回 PR。
+description 定稿後、執行 `gh pr create`/`gh pr edit` 前，呼叫 `evidence-gate` skill 過關卡：commit range 固定 `origin/<base-branch>..HEAD`（沿用 Step 1a 已 `git fetch origin` 的範圍），description 每條事實宣稱拆成該 skill 第 1 節的 Claim Schema，證據一律溯源 `git diff`/`git log --numstat`，commit message 僅供定位不當證據；並依其第 4 節派 fresh-context subagent 對抗性複驗。零 FAIL 且零 SCHEMA-DEFECT 才可繼續下方 `gh pr create`/`gh pr edit`；任一 FAIL 或 SCHEMA-DEFECT 回本節修正 description，不寫回 PR。
 
 ```
 Skill({ skill: "evidence-gate" })

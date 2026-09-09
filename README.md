@@ -61,8 +61,6 @@ done
 /update                    # 更新知識庫（docs + patterns）
 /update /pr                # 知識沉澱 + PR 一條龍
 /design <需求>              # 建立實作計畫 → plans/active/<slug>.md
-/assist                    # 自動偵測情境 → 最佳 pipeline
-/assist <任務>              # 指定任務描述
 /simplify                  # 自動修正程式碼（dead code、命名、nesting）
 /notion-plan <URL>         # Notion 需求 → 實作計畫
 /notion-report <URL>       # 把成果寫回 Notion（API 優先，指定收件對象）
@@ -71,20 +69,13 @@ done
 /worktree cleanup          # 清理已 merge 的 worktree（單 repo 互動）
 scripts/worktree-cleanup.sh                 # 跨 repo 批次盤點，dry-run（預設）
 scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目錄、不刪 branch）
-/curation                  # 清理 learned skills 格式問題
 /plan-archive              # 歸檔已完成的 plan
-/ecc-skill-defer apply     # Defer 不常用的 skills
-/playwright-human-in-the-loop  # 安全的瀏覽器自動化
-/verify-fix-loop <目標>        # Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL
 /evidence-check <技術決策>     # 四維度獨立證據查驗（single-shot）
-/verify-evidence-loop <主張>   # 迭代式證據驗證（4 維 × 3 輪 × dual reviewer 收斂）
 /handoff                   # 產出跨 context 接手 prompt（適用 compact 前/換機器/開新 session）
 /plan-run <plan.md>        # 依 plan DAG 推進實作（Stop hook 每輪注入下一步）
 /dispatch-loop             # 逐 step 派工 + 抽查驗收 + token 預算的委派迴圈
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
-/triage                    # 基於消融數據退役/復原 learned skills
-/learn-eval-deep <skill>   # 單一 learned skill 三系統深度品質驗證
 ```
 
 ## Skills 總覽
@@ -94,25 +85,17 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/pr`](#pr--pr-自動化) | commit + push + PR，自動寫 description |
 | [`/update`](#update--更新知識庫) | 文件更新 + 模式提取，可串接 `/pr` |
 | [`/design`](#design--開發設計) | 盤點資源 → Plan agent → plan |
-| [`/assist`](#assist--萬用助手) | 自動分析情境，智慧路由至最佳 pipeline |
 | [`/simplify`](#simplify--自動修正) | `/code-review` 後自動修正（並行互補模式） |
 | [`/notion-plan`](#notion-plan--notion-需求轉計畫) | Notion URL → 自動建立實作計畫 |
 | [`/notion-report`](#notion-report--把成果寫回-notion) | 把成果寫回 Notion，API 優先、無 token 自動退回瀏覽器 |
 | [`/worktree`](#worktree--git-worktree-管理) | Worktree 建立、狀態、清理 |
-| [`/curation`](#curation--learned-skills-品質管控) | 掃描 learned skills 格式、標準化、清理廢棄 |
 | [`/plan-archive`](#plan-archive--歸檔-plan) | 將完成的 plan 歸檔至 `plans/completed/` |
-| [`/ecc-skill-defer`](#ecc-skill-defer--skill-漸進式載入) | **Deprecated** — Defer/restore ECC skills 減少 init tokens，等 harness 端 ECC plugin 處置定案後移除 |
-| [`/playwright-human-in-the-loop`](#playwright-human-in-the-loop--瀏覽器操作) | 瀏覽器自動化 + 重大操作人類確認 |
-| [`/verify-fix-loop`](#verify-fix-loop--verify-fix-迴圈) | Local Playwright headed verify→fix 迴圈，Round 3 起每輪 HITL（HITL_AFTER=2） |
 | [`/plan-run`](#plan-run--plan-dag-推進器控制流在-stop-hook) | 依 plan.md DAG 推進實作，控制流在 Stop hook（harness 每輪強制查 state 並注入下一步） |
 | [`/dispatch-loop`](#dispatch-loop--委派推進迴圈) | 主模型只指揮不下場：逐 step 派工、抽查驗收、token 預算、回收前 KB gate |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
-| `/triage` | 基於消融實驗退役/復原 learned skills |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
-| [`/verify-evidence-loop`](#verify-evidence-loop--迭代式證據驗證) | 迭代式 4 維驗證 + dual reviewer 收斂 + strong dissent 強制，適合高風險決策 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
-| `/learn-eval-deep` | 對單一 learned skill 跑三系統客觀評估 |
 
 ---
 
@@ -181,36 +164,6 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 
 </details>
 
-### `/assist` — 萬用助手
-
-自動分析情境、盤點可用資源、智慧路由至最佳 agent/skill 組合。
-
-<details>
-<summary>路由規則 & Features</summary>
-
-| 偵測到的情境 | 選擇的組合 |
-|---|---|
-| 新功能需求 / bug 修復 | `/design` → 實作 → `/code-review` → `/simplify` |
-| 有未 commit 變更需 review | `/code-review` → `/simplify` |
-| Build 失敗 | `general-purpose` agent（明確要求最小 diff 修復，不做架構變更） |
-| 需要重構 | `/design`（含架構決策）→ 實作 → `/simplify` → `/code-review` |
-| 需要寫文件 | `general-purpose` agent（文件更新 prompt）或直接 `/update` |
-| 觸及安全敏感面 | 組合中預設附加 `/security-review`（依 [`rules/security-guidance/skill-integration.md`](rules/security-guidance/skill-integration.md) 觸發閘） |
-| 需要完整實作計畫 | `/design` |
-| 需要依既有 plan 推進 | `/plan-run` |
-| 需要 commit/PR | `/pr` |
-| 需要跨 session/context 交接 | `/handoff` |
-| 需要開放式技術研究 | `deep-research` 或 `general-purpose` + WebSearch |
-| 需要驗證技術決策 | `/evidence-check`（single-shot）或 `/verify-evidence-loop`（高風險、迭代收斂） |
-| 不確定 / 多種可能 | 列出建議組合，AskUserQuestion 讓使用者選 |
-
-- Step 1 自動偵測專案類型（package.json/go.mod/requirements.txt 等）與 build 設定
-- Step 4 交接內容自包含（不需固定模板），逐步驟傳遞給下一個資源
-- Step 0 條件式 HITL：評估複雜度後詢問是否啟用任務追蹤
-- 無法判斷時用 AskUserQuestion 呈現建議組合供選擇
-
-</details>
-
 ### `/simplify` — 自動修正
 
 `/code-review` 後自動修正程式碼品質問題，形成「診斷 → 治療」並行互補 pipeline。
@@ -230,7 +183,6 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | Skill | 整合方式 |
 |-------|---------|
 | `/pr` | Step 2b，Quick Review 後自動修正 |
-| `/assist` | 新功能、Bug 修復、Review、重構 pipeline 自動附加 |
 | `/design` | Plan 模板 Phase 2 品質保障步驟 |
 | `/update` | 不整合（文件審查不適用） |
 
@@ -300,22 +252,6 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 </details>
 
-### `/curation` — Learned Skills 品質管控
-
-按需執行的維護工具，掃描 `~/.claude/skills/learned/` 的格式問題並標準化。
-
-<details>
-<summary>Features</summary>
-
-- 掃描 learned skills：frontmatter 有無/完整度、評分格式、檔案大小
-- 分類問題：無 frontmatter、不完整 frontmatter、評分格式不統一、已廢棄
-- 格式問題自動修正（從內容推斷 name/description）
-- 廢棄項目需 HITL 確認後才刪除
-- 批次操作：全部修正 / 只修格式 / 逐一確認 / 只查看
-- **明確不做**：不自動合併相似 skills、不重新評分
-
-</details>
-
 ### `/plan-archive` — 歸檔 Plan
 
 將 `plans/active/` 中完成的 plan 移至 `plans/completed/`，補上驗證結果與完成時間。
@@ -329,23 +265,6 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 內建 Rule 範本：加入 CLAUDE.md 確保主動歸檔
 
 **目錄規範：** `plans/active/` → 進行中 ｜ `plans/completed/` → 已完成 ｜ `plans/archived/` → 長期封存
-
-</details>
-
-### `/ecc-skill-defer` — Skill 漸進式載入
-
-> **Deprecated：** 等 harness 端 ECC plugin 處置定案後移除。目前仍可用，但新流程不應依賴此 skill。
-
-管理 ECC skills 的 defer/restore 狀態，減少 init token 消耗。
-
-<details>
-<summary>Features</summary>
-
-- `apply` 一鍵 defer config 中列出的 skills（rename → `.deferred.md`）
-- `restore <name>` 臨時啟用 / `restore --all` 全部恢復
-- `status` / `list` 檢視目前狀態
-- 可自訂 `ecc-skill-defer.conf` 控制 defer 清單
-- 預設 defer 71 skills（依 ECC 1.10.0 模組結構組織），支援 marketplace 與 cache 雙路徑
 
 </details>
 
@@ -364,35 +283,6 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 與 `/design` 互補：/design 做 inline 驗證(驗證計畫中已有引述)，/evidence-check 做獨立深度調查
 
 **方法論依據：** EBSE 四類證據分類(Kitchenham et al., 2004)、ITIL CMDB Reconciliation、DAMA-DMBOK Completeness
-
-</details>
-
-### `/verify-evidence-loop` — 迭代式證據驗證
-
-比 `/evidence-check` 更嚴格的迭代版本：4 維證據蒐集 × 最多 3 輪 iteration × dual independent reviewer 收斂。適合高風險決策（ship-critical、合規、不可逆技術選擇）。
-
-<details>
-<summary>Features</summary>
-
-- **組合既有 primitive，不重造**：`evidence-check`（Generator）+ `santa-method`（Dual Reviewer gate）+ iterative-retrieval pattern；超過迭代上限時輸出 partial report 並要求人工裁決，不依賴不存在的 escalation skill
-- **4 維蒐集**（Haiku × 2 並行）：D1 學術 + D2 業界標準 / D3 最佳實踐 + D4 社群共識 + **Strong Dissent** sub-probe
-- **Dual Reviewer**（Sonnet × 2 並行，fresh per iteration）：R1 學術 / R2 標準 / R3 實踐 / R4 社群多元 / R5 Strong Dissent 五項獨立 rubric，B ∧ C 必須同時 PASS 才 NICE
-- **Strong dissent 為一等公民**：要求 source_url + verbatim_quote + argument ≥2 句；無 dissent 必須明確聲明 `NO-STRONG-DISSENT-FOUND`，禁用 WEAK 充數
-- **Hard cap = 3 iterations**（METR 2025 agent degradation 實證 >3 輪 drift）；耗盡後輸出 partial report 並要求人工裁決
-- **Budget guard**：soft 60k / hard 120k token，pre-flight 檢查（不在 Phase A 啟動後才發現爆預算）
-- **Prompt injection 結構性防禦**：CLAIM 用 `---CLAIM-START---` / `---CLAIM-END---` 非 XML 分隔 + 確定性剝 `<`/`>`；WebSearch 結果顯式標不可信；evidence bundle 包 `<evidence>` tag 且禁 `##` heading 污染 reviewer prompt
-- **Verdict 區分**：STRONG dissent 存在 ≠ `CONFLICTED`；只有**跨維度對主張本身互斥**才 CONFLICTED
-
-**方法論依據：** Self-Refine (arXiv:2303.17651)、Reflexion (arXiv:2303.11366)、Multi-agent debate (arXiv:2305.14325)、LLM-as-Judge (arXiv:2306.05685)、IEEE 1012-2016 V&V、NIST SP 800-160、Anthropic "Building Effective Agents" (2024)。反面：Huang et al. (arXiv:2310.01798)、Dziri et al. (arXiv:2305.18654)、METR 2025 agent degradation。
-
-**何時用**：
-
-| 情境 | Skill |
-|---|---|
-| 日常查驗、時間/成本敏感 | `/evidence-check`（single-shot，~16-30k tokens） |
-| Ship-critical / 合規 / 高保證 | `/verify-evidence-loop`（~40-80k tokens，3-6x 成本） |
-| 通用產出品質審（非證據） | `/santa-method`（plugin） |
-| 已知 tradeoff，需 go/no-go | 人工裁決 / `/evidence-check` |
 
 </details>
 
@@ -415,50 +305,6 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 「我要準備 compact 了，給我 compact 之後可以用的 prompt」
 - 「幫我整理 handoff」
 - 「我要換機器繼續，給我接手用的 prompt」
-
-</details>
-
-### `/playwright-human-in-the-loop` — 瀏覽器操作
-
-透過 Playwright MCP 操作瀏覽器，重大操作前暫停等待人類確認。
-
-<details>
-<summary>Features</summary>
-
-- 操作分級：重大操作（建立/刪除、權限、費用、安全敏感欄位）需確認
-- 安全敏感欄位即使是填寫也視為重大操作
-- 每步驟後 `browser_snapshot` 確認頁面狀態
-- 永不自動 Delete/Terminate，永不輸入 secrets，CAPTCHA/MFA 交由人類
-
-</details>
-
-### `/verify-fix-loop` — Verify-Fix 迴圈
-
-透過 local Playwright MCP（headed 模式）執行「驗證 → 診斷 → 修正 → 重新驗證」迭代迴圈。每輪以 snapshot + console + network 為證據；完成 2 輪後（Round 3 起）每輪強制 HITL 詢問是否繼續，避免盲目迭代。
-
-<details>
-<summary>Features</summary>
-
-- **Headed 模式必要**：MCP server 須以 `--headed` 啟動，使用者同步觀察、HITL 時可視覺確認
-- **PASS 條件 DSL**：`url:` / `element:` / `not-element:` / `text:` / `console: no-error` / `network: no-5xx` / `eval:` 機械對照，避免自由文字解讀不確定性
-- **每輪 4 階段**：Verify (checklist) → Diagnose (snapshot+console+network 證據) → Fix（限 allowed_paths）→ Wait reload
-- **HITL Gate**：Round 3 起每輪進入 Phase A 之前詢問（繼續 / 停止 / 改策略 / 轉 /design），HITL_AFTER=2
-- **Hard cap = 5 rounds**：依 METR 2025 agent degradation 證據；超過強制停止並輸出 cap-exceeded 報告
-- **Allowed paths 硬邊界**：Fix 階段超出範圍須回 Step 0b 重新確認
-- **Dev server 預設不自動啟動**：避免 long-running process 殘留與 token budget 持續佔用
-- **持久化 round log**：`.claude/verify-fix-loop/<timestamp>-<slug>.md` 跨 session 接手 / PR 引用 / 回溯 debug
-- **硬性禁止**：改測試 assert 放水、改 PASS 條件、catch swallow error、跨範圍改架構、hardcoded 繞過
-
-**方法論依據：** Self-Refine (arXiv:2303.17651)、Reflexion (arXiv:2303.11366)、METR 2025 agent degradation、OpenAI dev community checklist-driven、DAMA-DMBOK Completeness、arXiv:2509.18970（結構性分類優先於語意判斷）
-
-**何時用：**
-
-| 情境 | Skill |
-|---|---|
-| UI bug 修復、E2E 行為對齊 | `/verify-fix-loop` |
-| 單次操作型瀏覽器自動化 | `/playwright-human-in-the-loop` |
-| 問題超出 fix 範圍需重新規劃架構 | `/design` |
-| 技術主張的證據驗證（非程式碼修正） | `/verify-evidence-loop` |
 
 </details>
 
@@ -491,7 +337,6 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 |---|---|
 | 多 step 實作計畫需依序推進、避免漏步亂序 | `/plan-run` |
 | 單次 step 執行需人工判斷順序 | LLM 直接派 agent（不需 plan state） |
-| Step 內部 bug 修復迴圈 | `/verify-fix-loop` |
 
 </details>
 
@@ -519,7 +364,6 @@ UI / 文案 PR mark ready-for-review、merge、production deploy 之前的最後
 
 - **設計流程**：Figma MCP 抓規格 → Playwright MCP headed 抓 local → token + 文案逐項對齊表 → `/goal` Haiku visual gate
 - **涵蓋範圍**：visual token / 文案 / icon / spacing / layout 改動的 PR
-- **與 `/verify-fix-loop` 的差異**：post-ship gate（設計規格對齊）vs bug-fix loop（行為對齊）
 - **反模式警告**：不另起 `Agent(model="haiku")` subagent 做視覺比對；`/goal` 評估者已內建 Haiku，重複造輪子浪費 token
 - **流程保障**：
   - Step 1-3：Figma MCP + Playwright MCP（或 headless fallback）抓設計規格與實機截圖
@@ -614,8 +458,6 @@ Learned skills：144 → 134（-6.9%）。所有操作可逆（`skills-triage.sh
 
 **動機：** 模型能力升級後，原本為補償能力落差而設計的過細指令與 manifest 儀式已成冗餘；同時移除 ECC plugin 依賴。全 repo 18 個 SKILL.md 總行數 4,338 → 2,976（-31%；其中 4 檔去 ECC 重寫、13 檔精簡、1 檔小幅修正）。
 
-**過渡期例外：** `/ecc-skill-defer` 因仍有 harness 端 ECC plugin 處置定案未決，暫標 deprecated 保留（見上方說明）。
-
 **來源 plan：** `plans/active/ecc-decoupling-and-model-adaptation.md`
 
 ### CI 品質閘門
@@ -657,25 +499,17 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ├─ 程式碼寫完了 ──────→ /pr
 ├─ Session 要收尾 ───→ /update（或 /update /pr）
 ├─ 準備開始新工作 ───→ /design <需求>
-├─ 不確定 ──────────→ /assist
 ├─ 程式碼要簡化 ────→ /simplify
 ├─ 組合使用 ─────────→ /design → 實作 → /update /pr
 ├─ 依既有 plan 推進 ─→ /plan-run <plan.md>
 ├─ UI PR ship 前對 Figma → /figma-verify
 ├─ PR 驗收要留證據附圖 → /pr-evidence-comment
-├─ 需要操作瀏覽器 ──→ /playwright-human-in-the-loop
-├─ UI bug 要 verify→fix 迴圈 → /verify-fix-loop <目標>
-├─ Learned skills 要整理 → /curation
 ├─ Plan 要收尾 ─────→ /plan-archive
 ├─ 需要 worktree ───→ /worktree create <name>
 ├─ Worktree 要清理 ─→ /worktree cleanup
 ├─ 有 Notion ticket ─→ /notion-plan <URL>
 ├─ 成果要回報進 Notion → /notion-report <URL> --to pm|design|ops|eng
-├─ Learned skills 要分流 → /triage
-├─ 技術決策需要深度查驗 → /evidence-check <做法>
-├─ 高風險決策需迭代驗證 → /verify-evidence-loop <主張>
-├─ Skill 品質要深度驗證 → /learn-eval-deep <skill>
-└─ 優化 init tokens ─→ /ecc-skill-defer apply（deprecated）
+└─ 技術決策需要深度查驗 → /evidence-check <做法>
 ```
 
 <details>
@@ -713,18 +547,6 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 **適合：** 不確定怎麼實作、跨多檔案變更、需要架構審查
 **不適合：** 已知道怎麼做的小修改
-
-### `/assist`
-
-```
-/assist                             # 自動分析環境
-/assist 登入頁面一直報 500 錯誤
-/assist 這段程式碼需要重構
-/assist 幫我 review 目前的變更
-```
-
-**適合：** 不確定該用哪個工具
-**不適合：** 已知道要用哪個 skill
 
 ### `/notion-report`
 
@@ -809,7 +631,6 @@ Output quality evaluation using [Anthropic skill-creator](https://github.com/ant
 |---------|:-----------:|------|
 | `/pr` | Pending | 涉及 git push + GitHub API，需 mock |
 | `/update` | Pending | nested agents (`general-purpose` 文件更新 + 審查 + inline pattern 提取) |
-| `/assist` | Pending | 情境分析可測，pipeline 執行會修改專案 |
 | `/notion-plan` | Pending | 依賴外部 Notion 頁面 |
 | `/notion-report` | Pending | 寫入外部 Notion 頁面；API 路徑需 mock，browser 路徑需登入 session |
 

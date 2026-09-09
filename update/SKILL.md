@@ -123,9 +123,7 @@ origin: auto-extracted
 | non-redundancy | | 與現有 skills 的重複度 |
 | coverage | | 涵蓋場景的完整度 |
 
-廢棄 `specificity=4, actionability=5, ...` 單行格式。需要更嚴謹的交叉驗證時，可另跑 `/learn-eval-deep` 做三系統客觀評分。
-
-> 既有 learned skills 的格式修復 → `/curation`（批量 remediation）。
+廢棄 `specificity=4, actionability=5, ...` 單行格式。
 
 Step 4 完成後，把提取到的 pattern 回寫進「知識寫入 Manifest」（新增條目、更新狀態）。
 

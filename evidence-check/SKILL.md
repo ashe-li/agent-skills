@@ -1,9 +1,9 @@
 ---
 name: evidence-check
-description: "獨立證據查驗 — 對技術決策或做法進行四維度並行調查（學術研究、業界標準、最佳實踐、社群共識+反面意見），偵測跨來源衝突，輸出可復用的結構化報告。不同於 /design 和 /assist 的 inline 驗證，本 skill 是事後獨立深度調查。"
+description: "獨立證據查驗 — 對技術決策或做法進行四維度並行調查（學術研究、業界標準、最佳實踐、社群共識+反面意見），偵測跨來源衝突，輸出可復用的結構化報告。不同於 /design 的 inline 驗證，本 skill 是事後獨立深度調查。"
 allowed-tools: Read, Glob, Grep, Write, Agent, AskUserQuestion
 argument-hint: "<技術決策或做法的描述>"
-redundancy-peers: [design, assist]
+redundancy-peers: [design]
 ---
 
 # /evidence-check — 獨立證據查驗（不同於 /design 的 inline 驗證，本 skill 是獨立深度調查）
@@ -19,7 +19,7 @@ redundancy-peers: [design, assist]
 本 skill 啟動 2 個並行 subagent 做深度調查，token 消耗較高，用 AskUserQuestion 確認：
 
 > 即將啟動 4 維度並行調查(2 subagents)，預估額外 token 消耗約 16,000-30,000。
-> 調查對象：[摘要自 $ARGUMENTS]（獨立深度調查，不同於 /design、/assist 的 inline 驗證）
+> 調查對象：[摘要自 $ARGUMENTS]（獨立深度調查，不同於 /design 的 inline 驗證）
 >
 > 1. 繼續 — 啟動調查
 > 2. 取消 — 結束流程

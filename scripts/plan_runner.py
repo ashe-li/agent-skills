@@ -38,7 +38,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, NamedTuple
+from typing import Any, Callable, Iterable, Iterator, NamedTuple
 
 try:
     import fcntl
@@ -588,23 +588,137 @@ def stop_marker_path_for(plan_path: Path) -> Path:
     return state_dir_for(plan_path) / f"{plan_path.stem}.stop.md"
 
 
-def _read_stop_marker(plan_path: Path) -> str | None:
-    """Best-effort read of the plan's stop marker, or None if absent or
-    unreadable. Every caller (cmd_next, the Stop hook's I/O layer) only
-    ever asks "is this None" -- the content is never parsed to decide
-    behavior (T6). It exists to be printed verbatim for a human to read.
+# Size ceilings for the two user-writable files this program reads back.
+# The Stop hook's stdin already had one (_HOOK_STDIN_MAX_BYTES); S6.6 F5 was
+# that the same discipline had never been applied to files. Both are far
+# above anything this program itself writes -- render_stop_marker() produces
+# ~400 bytes and checkpoint_template() ~200 -- and far below the megabytes a
+# hostile or runaway writer can put there.
+STOP_MARKER_MAX_BYTES = 16_384
+CHECKPOINT_MAX_BYTES = 65_536
+
+
+def _file_kind(mode: int) -> str:
+    """Name a non-regular file's type for an error message."""
+    for predicate, name in (
+        (stat.S_ISDIR, "a directory"),
+        (stat.S_ISFIFO, "a FIFO"),
+        (stat.S_ISSOCK, "a socket"),
+        (stat.S_ISBLK, "a block device"),
+        (stat.S_ISCHR, "a character device"),
+    ):
+        if predicate(mode):
+            return name
+    return "not a regular file"
+
+
+def _read_text_bounded(path: Path, limit: int) -> tuple[str, bool] | None:
+    """Read at most `limit` bytes of a regular file. `(text, truncated)`, or
+    None when the path is absent, unreadable, or not a regular file.
+
+    SECURITY (S6.6 F4/F5). Path.read_text() on a FIFO blocks until someone
+    writes to the other end -- forever, in practice. Every read below runs
+    on the Stop hook path, where a block is not an error that gets caught
+    but a session that stops responding; cmd_hook_stop()'s `except
+    BaseException` cannot save a process that never returns. So the open
+    carries O_NONBLOCK (a FIFO opened read-only returns immediately) and the
+    file type is checked from the *open descriptor* before a single byte is
+    read, rather than after the whole file is already in memory.
+
+    Symlinks are deliberately still followed: the identity gate wants to see
+    a symlink and reject it by name, and a symlink pointing at a FIFO is
+    caught by the S_ISREG check here anyway.
+
+    `truncated` is returned rather than logged so the caller can tell the
+    reader that what they are looking at is not the whole file -- a silent
+    cut would be worse than the unbounded read it replaces.
     """
     try:
-        return stop_marker_path_for(plan_path).read_text(encoding="utf-8")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    raw = b"".join(chunks)
+    return raw[:limit].decode("utf-8", errors="replace"), len(raw) > limit
+
+
+def _read_stop_marker(plan_path: Path) -> str | None:
+    """The plan's stop marker, sanitized and fenced, or None if absent or
+    unreadable. Every caller (cmd_next, cmd_recap, the Stop hook's I/O
+    layer) only ever asks "is this None" -- the content is never parsed to
+    decide behavior (T6). It exists to be printed for a human to read.
+
+    SECURITY (S6.6 F1): sanitizing on the *write* side is not the same
+    defence as sanitizing on the read side. render_stop_marker() strips and
+    redacts what this program writes, but `.plan-state/*.stop.md` is
+    deliberately NOT in .gitignore -- unlike *.checkpoint.md and
+    *.state.lock, a halt is a rare reviewable event worth keeping -- so an
+    untrusted repo can ship one and it lands on clone, having never passed
+    through render_stop_marker() at all. It is also plainly writable by
+    anything else running on the machine.
+
+    The recipient sets the weight of the fix, and the difference from the
+    checkpoint gate details (S6.6 F2) is the point. This text becomes the
+    hook's `systemMessage`, which the harness shows to the *user*; it is
+    not fed back to the model as its next instruction the way a `reason`
+    is. So the threat is forgery aimed at a person -- a fake "[system]"
+    banner, an ANSI escape that repaints the terminal, a credential shape
+    parked in a tracked file -- not prompt injection. The treatment matches
+    that: the prose stays whole and multi-line so it remains readable, what
+    can lie about its own rendering is stripped, secret shapes go through
+    the same patterns the write side uses, and the whole thing is fenced so
+    the reader can see exactly where someone else's words begin and end.
+    """
+    result = _read_text_bounded(stop_marker_path_for(plan_path), STOP_MARKER_MAX_BYTES)
+    if result is None:
+        return None
+    body, truncated = result
+    body = _strip_unsafe_bytes(body)
+    body, _ = _redact_secret_shapes(body)
+    body = _neutralize_fence_lookalikes(body).rstrip("\n")
+    if truncated:
+        body += f"\n[...truncated at {STOP_MARKER_MAX_BYTES} bytes]"
+    return f"{STOP_MARKER_FENCE_START}\n{body}\n{STOP_MARKER_FENCE_END}\n"
 
 
 def load_state(plan_path: Path) -> dict[str, Any] | None:
+    """Parse the plan's state file, or None when there is none.
+
+    Deliberately still raises on a corrupt file rather than returning None:
+    "no state" and "unreadable state" are different situations and only the
+    caller knows which response is right. `init` must not silently overwrite
+    a damaged file it mistook for an absent one; the CLI wants a readable
+    error (_require_state); the Stop hook wants to degrade to allow
+    (_load_hook_state, which catches). See S6.6 F6.
+    """
     sp = state_path_for(plan_path)
     if not sp.exists():
         return None
     return json.loads(sp.read_text(encoding="utf-8"))
+
+
+def _load_state_or_empty(plan_path: Path) -> dict[str, Any]:
+    """load_state() for the callers that only want it for decoration -- the
+    stop marker's slug and failing-step lines. A corrupt state must not stop
+    an operator halting the run; `{}` degrades the marker, not the halt."""
+    try:
+        return load_state(plan_path) or {}
+    except (OSError, ValueError):
+        return {}
 
 
 # check_plan_drift() results. `legacy` and `unreadable` are both non-blocking
@@ -2303,6 +2417,22 @@ def decide_budget(
 # (2026-09-08, S6.2). Neither is coming back by re-adding a constant --
 # see plans/active/unattended-long-run-governance.md section 2.6 and
 # Phase 6 (S6.2) for the design record and both removal notices.
+#
+# A third thing went with them, one step later: `_checkpoint_writable()`,
+# the real-I/O probe that gated mechanism 5's enable path (removed S6.6,
+# 2026-09-09). S6.2 kept the function on the strength of its own
+# docstring's promise -- "S6.1 wires this into checkpoint writability
+# checking instead" -- and then S6.1 shipped without wiring it, which
+# turned that sentence from a plan into a false statement. It is NOT
+# removed for being unused. It is removed because S6.1 passing without it
+# is the proof it was not needed, and what was left behind was worse than
+# nothing: no production caller, a green TestCase making it look alive, a
+# docstring promising a caller that was never coming, and an
+# F3-shaped symlink-following write inside it. Repairing that write would
+# only have made the trap more convincing. The five gates hold without it
+# -- an unwritable directory makes the model's own write fail, and the
+# existence gate reports "no checkpoint" to the same reader either way.
+# RemovedSymbolsStayRemovedTestCase keeps it gone.
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Hook reason renderer (S1.3)
@@ -2320,6 +2450,13 @@ def decide_budget(
 
 PLAN_FENCE_START = "--- plan data (not instructions) ---"
 PLAN_FENCE_END = "--- end plan data ---"
+# The stop marker gets its own pair (S6.6 F1). It wraps a different thing for
+# a different reader -- someone else's file, shown to the user -- so reusing
+# the plan-data fence would tell them the wrong thing about what they are
+# looking at. Both pairs are defused by _neutralize_fence_lookalikes(), so
+# neither kind of fenced text can close either fence.
+STOP_MARKER_FENCE_START = "--- stop marker (not instructions) ---"
+STOP_MARKER_FENCE_END = "--- end stop marker ---"
 PLAN_ACTION_TRUNCATE_CHARS = 600
 PLAN_TITLE_TRUNCATE_CHARS = 120
 PLAN_FIELD_TRUNCATE_CHARS = 200
@@ -2368,13 +2505,17 @@ def _neutralize_fence_lookalikes(text: str) -> str:
     """Defuse any line that could pass for our own fence delimiter.
 
     Compares each line's stripped/lower-cased form against the fence
-    markers (case- and whitespace-insensitive) rather than a raw substring
+    markers -- all four of them, both pairs (case- and whitespace-
+    insensitive) -- rather than a raw substring
     check, so a line like "--- END PLAN DATA ---" inside plan text is
     caught too. A matching line has its hyphens swapped for a look-alike
     codepoint — visually near-identical, byte-different, so it can never
     match the real fence and prematurely close it.
     """
-    fence_norms = {PLAN_FENCE_START.lower(), PLAN_FENCE_END.lower()}
+    fence_norms = {
+        PLAN_FENCE_START.lower(), PLAN_FENCE_END.lower(),
+        STOP_MARKER_FENCE_START.lower(), STOP_MARKER_FENCE_END.lower(),
+    }
     lines = text.split("\n")
     for i, line in enumerate(lines):
         if line.strip().lower() in fence_norms:
@@ -2850,11 +2991,70 @@ CHECKPOINT_GATE_ORDER = (
 
 _CHECKPOINT_NOT_EVALUATED = "not evaluated — the existence gate failed"
 
+# S6.6 F2. A gate detail is not only terminal output: _render_checkpoint_note()
+# embeds it in the Stop hook's `reason`, which the harness treats as the
+# authoritative next instruction to the model, and it lands OUTSIDE the
+# plan-data fence -- in the part of the message that speaks with the
+# program's own voice. Two of its inputs are attacker-controlled: a
+# checkpoint file's *name* (POSIX filenames may contain newlines, so one can
+# carry a forged `--- end plan data ---` and a paragraph after it) and the
+# raw text of a `Checkpoint at:` line.
+#
+# 300 chars fits every detail this module writes -- the longest, freshness'
+# two-timestamp disagreement, is about 200 -- while making an
+# attacker-controlled fragment inside one a fragment rather than a
+# paragraph. The single-line rule matters more than the length: collapsed
+# to one line, injected text can never become a standalone directive.
+CHECKPOINT_DETAIL_TRUNCATE_CHARS = 300
+#: Filenames and timestamp values are echoed so an operator can find the
+#: thing; neither needs room for prose.
+CHECKPOINT_NAME_LABEL_CHARS = 48
+CHECKPOINT_STAMP_ECHO_CHARS = 64
+
+
+def _sanitize_gate_detail(raw: Any) -> str:
+    """Make a gate detail safe to embed in a hook reason (S6.6 F2)."""
+    return _sanitize_plan_text(
+        raw, CHECKPOINT_DETAIL_TRUNCATE_CHARS, "(no detail)", collapse_newlines=True,
+    )
+
+
+def _safe_file_label(name: str) -> str:
+    """A filename reduced to something safe to print back at the reader.
+
+    A name is echoed only so a person can find the file, so it is cut down
+    to the identifier charset _sanitize_step_id() uses and everything else
+    is folded to '?'. A name that carries prose is not a name -- and on
+    POSIX it can carry newlines, ANSI escapes, and anything else a byte can
+    be. The count in the same message, not the names, is what actually
+    tells the reader how bad the situation is.
+    """
+    reduced = _NON_STEP_ID_CHAR_RE.sub("?", _strip_unsafe_bytes(str(name)).replace("\n", "?"))
+    if len(reduced) > CHECKPOINT_NAME_LABEL_CHARS:
+        return reduced[:CHECKPOINT_NAME_LABEL_CHARS] + "..."
+    return reduced
+
+
+def _safe_stamp_echo(raw: Any) -> str:
+    """A `Checkpoint at:` value echoed back in a failure message. An
+    ISO-8601 timestamp is at most ~32 characters; anything longer is not a
+    timestamp and does not need to be quoted in full to say so."""
+    return _sanitize_plan_text(
+        raw, CHECKPOINT_STAMP_ECHO_CHARS, "(empty)", collapse_newlines=True,
+    )
+
 
 class CheckpointGate(NamedTuple):
     """One gate's verdict. `detail` is written to be read by a human in a
     terminal: it must say what was checked and, on failure, which side of
-    the comparison did not hold."""
+    the comparison did not hold.
+
+    `detail` is NOT sanitized here -- typing.NamedTuple forbids overriding
+    __new__, so there is no by-construction hook. _verdict() is the single
+    place a verdict is built and it sanitizes every detail it is handed;
+    CheckpointVerdictConstructionTestCase enforces at the source level that
+    nothing else constructs one.
+    """
 
     name: str
     ok: bool
@@ -2927,10 +3127,14 @@ def _checkpoint_recorded_advances(plan_path: Path) -> int | None:
     Reads only, and never raises: this is consulted from a decision path.
     """
     path = checkpoint_path_for(plan_path)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
+    # Bounded and non-blocking (S6.6 F4/F5): this runs on the Stop hook's
+    # I/O path. `None` covers absent, unreadable and not-a-regular-file
+    # alike, and all three read as 0 -- "no checkpoint to speak of", which
+    # makes the trigger fire rather than silently switch itself off.
+    read = _read_text_bounded(path, CHECKPOINT_MAX_BYTES)
+    if read is None:
         return 0
+    text = read[0]
     if not _checkpoint_claims_plan(text, plan_path.stem):
         return None
     values = _checkpoint_element_values(text, CHECKPOINT_ADVANCE_LABEL)
@@ -2992,16 +3196,41 @@ def _checkpoint_element_values(text: str, label: str) -> list[str]:
 
 
 def _gate_existence(path: Path) -> CheckpointGate:
-    """Gate 1: the file is actually on disk. lstat, not exists(), so a
-    dangling symlink counts as present here and is rejected by the
-    identity gate with an accurate reason instead of being reported as
-    "missing"."""
+    """Gate 1: the file is on disk, is something that can safely be read,
+    and is not absurdly large.
+
+    lstat, not exists(), so a dangling symlink counts as present here and
+    is rejected by the identity gate with an accurate reason instead of
+    being reported as "missing".
+
+    SECURITY (S6.6 F4/F5): the type and size checks belong HERE and not in
+    the identity gate, because verify_checkpoint() reads the whole file
+    *between* the two. The identity gate's S_ISREG check was correct and
+    simply ran too late: before this, a `mkfifo` at the checkpoint path
+    blocked that read forever, and since the read is on the Stop hook path
+    that wedged every turn of the session. cmd_hook_stop()'s catch-all
+    stops exceptions, not blocking. Symlinks are still let through to the
+    identity gate, which names them precisely.
+    """
     try:
         info = os.lstat(path)
     except OSError as exc:
         return CheckpointGate(
             CHECKPOINT_GATE_EXISTENCE, False,
             f"no checkpoint file at {path} ({exc.strerror or exc})",
+        )
+    if not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+        return CheckpointGate(
+            CHECKPOINT_GATE_EXISTENCE, False,
+            f"{path} is not a regular file ({_file_kind(info.st_mode)}); a "
+            "checkpoint must be a real file at the canonical path",
+        )
+    if info.st_size > CHECKPOINT_MAX_BYTES:
+        return CheckpointGate(
+            CHECKPOINT_GATE_EXISTENCE, False,
+            f"{path} is {info.st_size} bytes, over the "
+            f"{CHECKPOINT_MAX_BYTES}-byte checkpoint limit — a checkpoint is a "
+            "handover note, not a log dump",
         )
     return CheckpointGate(
         CHECKPOINT_GATE_EXISTENCE, True, f"present at {path} ({info.st_size} bytes)",
@@ -3032,11 +3261,12 @@ def _gate_uniqueness(plan_path: Path, path: Path) -> CheckpointGate:
 
     claiming: list[Path] = []
     for candidate in candidates:
-        try:
-            text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        # Bounded (S6.6 F5): every *.checkpoint.md in the directory is read
+        # on this path, and none of them is written by this program.
+        read = _read_text_bounded(candidate, CHECKPOINT_MAX_BYTES)
+        if read is None:
             continue
-        if _checkpoint_claims_plan(text, slug):
+        if _checkpoint_claims_plan(read[0], slug):
             claiming.append(candidate)
 
     if not claiming:
@@ -3047,7 +3277,9 @@ def _gate_uniqueness(plan_path: Path, path: Path) -> CheckpointGate:
             "run `checkpoint <plan> --template` for the canonical shape",
         )
     if len(claiming) > 1:
-        names = ", ".join(p.name for p in claiming)
+        # _safe_file_label, not p.name (S6.6 F2): a POSIX filename can carry
+        # newlines and a forged fence terminator straight into the hook reason.
+        names = ", ".join(_safe_file_label(p.name) for p in claiming)
         return CheckpointGate(
             CHECKPOINT_GATE_UNIQUENESS, False,
             f"{len(claiming)} files in {directory} claim plan {slug}: {names} — "
@@ -3056,8 +3288,8 @@ def _gate_uniqueness(plan_path: Path, path: Path) -> CheckpointGate:
     if claiming[0] != path:
         return CheckpointGate(
             CHECKPOINT_GATE_UNIQUENESS, False,
-            f"the only checkpoint claiming plan {slug} is {claiming[0].name}, "
-            f"expected {path.name}",
+            f"the only checkpoint claiming plan {slug} is "
+            f"{_safe_file_label(claiming[0].name)}, expected {_safe_file_label(path.name)}",
         )
     return CheckpointGate(
         CHECKPOINT_GATE_UNIQUENESS, True,
@@ -3172,7 +3404,8 @@ def _gate_freshness(
     if stamp is None:
         return CheckpointGate(
             CHECKPOINT_GATE_FRESHNESS, False,
-            f"`{CHECKPOINT_STAMP_LABEL} {stamps[0]}` is not a parseable ISO-8601 timestamp",
+            f"`{CHECKPOINT_STAMP_LABEL} {_safe_stamp_echo(stamps[0])}` is not a "
+            "parseable ISO-8601 timestamp",
         )
     try:
         mtime = os.stat(path).st_mtime
@@ -3189,7 +3422,8 @@ def _gate_freshness(
             CHECKPOINT_GATE_FRESHNESS, False,
             f"content stamp and filesystem mtime disagree by {int(abs(skew))}s "
             f"(tolerance {CHECKPOINT_STAMP_MTIME_TOLERANCE_SECONDS}s): the stamp "
-            f"({stamps[0]}) is {side} the mtime the OS recorded ({mtime_iso})",
+            f"({_safe_stamp_echo(stamps[0])}) is {side} the mtime the OS "
+            f"recorded ({mtime_iso})",
         )
 
     reference, source = (
@@ -3198,7 +3432,8 @@ def _gate_freshness(
     if reference is None:
         return CheckpointGate(
             CHECKPOINT_GATE_FRESHNESS, True,
-            f"stamp {stamps[0]} agrees with mtime — stamp/mtime consistency only: "
+            f"stamp {_safe_stamp_echo(stamps[0])} agrees with mtime — "
+            "stamp/mtime consistency only: "
             "this run has no advance timestamp to compare against (no pointer with "
             "`last_advance_at`, and no completed step carries a `completed_at`)",
         )
@@ -3213,8 +3448,9 @@ def _gate_freshness(
     if stamp.timestamp() < ref_seconds:
         return CheckpointGate(
             CHECKPOINT_GATE_FRESHNESS, False,
-            f"the content stamp side is stale: `{CHECKPOINT_STAMP_LABEL} {stamps[0]}` "
-            f"predates the last advance ({ref_iso}, from {source})",
+            f"the content stamp side is stale: "
+            f"`{CHECKPOINT_STAMP_LABEL} {_safe_stamp_echo(stamps[0])}` predates the "
+            f"last advance ({ref_iso}, from {source})",
         )
     if mtime < ref_seconds:
         mtime_iso = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
@@ -3225,7 +3461,7 @@ def _gate_freshness(
         )
     return CheckpointGate(
         CHECKPOINT_GATE_FRESHNESS, True,
-        f"stamp {stamps[0]} and mtime both at or after the last advance "
+        f"stamp {_safe_stamp_echo(stamps[0])} and mtime both at or after the last advance "
         f"({ref_iso}, from {source})",
     )
 
@@ -3278,7 +3514,24 @@ def _gate_identity(path: Path) -> CheckpointGate:
     compared against the lstat that authorized it. AgentFlow reports three
     identity fields (tracker-contract.js:75-93) but fills all three from a
     single hash; taking them separately is what actually rejects a file
-    replaced between the check and the read.
+    swapped for a *different inode* between the check and the read.
+
+    What it does NOT catch, stated because the earlier wording claimed more
+    than the code does (S6.6 F7): a **hardlink**. A hardlink shares its
+    target's dev and ino and is not a symlink, so it passes every check
+    here. That is deliberate, not an oversight left for later. Creating one
+    at this path requires write access to `.plan-state/`, and anyone with
+    that can simply write the file directly -- rejecting `st_nlink > 1`
+    would buy back no capability while failing for causes the model this
+    gate disciplines cannot fix (hardlink-based backup and dedup tools
+    leave ordinary files with nlink > 1). A gate that fails for reasons its
+    reader cannot act on is the receipt-nobody-reads failure this plan
+    removed a whole mechanism over; see section 2.6.
+
+    The residual TOCTOU windows -- between lstat and os.open, and around
+    the two extra whole-file reads -- need inode reuse to exploit and an
+    attacker who is already the user. The inode comparison is what makes
+    the authoritative read trustworthy.
     """
     try:
         entry = os.lstat(path)
@@ -3331,6 +3584,24 @@ def _gate_identity(path: Path) -> CheckpointGate:
     )
 
 
+def _verdict(path: Any, gates: Iterable[CheckpointGate]) -> CheckpointVerdict:
+    """The one place a CheckpointVerdict is built, so the sanitizing cannot
+    be forgotten by a later gate (S6.6 F2).
+
+    Both fields are attacker-reachable and both are rendered outside the
+    plan-data fence: `path` is derived from the plan's filename, which can
+    itself contain a newline, and every `detail` is covered by
+    _sanitize_gate_detail()'s note above.
+    """
+    return CheckpointVerdict(
+        _sanitize_plan_text(str(path), PLAN_PATH_TRUNCATE_CHARS, collapse_newlines=True),
+        tuple(
+            CheckpointGate(gate.name, gate.ok, _sanitize_gate_detail(gate.detail))
+            for gate in gates
+        ),
+    )
+
+
 def verify_checkpoint(
     plan_path: Path,
     *,
@@ -3362,15 +3633,22 @@ def verify_checkpoint(
             for name in CHECKPOINT_GATE_ORDER
             if name != CHECKPOINT_GATE_EXISTENCE
         )
-        return CheckpointVerdict(str(path), (existence,) + skipped)
+        return _verdict(path, (existence,) + skipped)
 
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+    # Bounded and type-checked (S6.6 F4/F5). The existence gate above has
+    # already rejected a plain FIFO and an oversized file with a message
+    # that says which; None here is the residue -- a symlink pointing at
+    # something unreadable or not a regular file -- and the identity gate
+    # gives that its accurate name a few lines down.
+    read = _read_text_bounded(path, CHECKPOINT_MAX_BYTES)
+    if read is None:
         text = ""
         existence = CheckpointGate(
-            CHECKPOINT_GATE_EXISTENCE, False, f"{path} exists but cannot be read: {exc}",
+            CHECKPOINT_GATE_EXISTENCE, False,
+            f"{path} exists but cannot be read as a regular file",
         )
+    else:
+        text = read[0]
 
     gates = {
         CHECKPOINT_GATE_EXISTENCE: existence,
@@ -3379,7 +3657,7 @@ def verify_checkpoint(
         CHECKPOINT_GATE_SHAPE: _gate_shape(text),
         CHECKPOINT_GATE_IDENTITY: _gate_identity(path),
     }
-    return CheckpointVerdict(str(path), tuple(gates[name] for name in CHECKPOINT_GATE_ORDER))
+    return _verdict(path, (gates[name] for name in CHECKPOINT_GATE_ORDER))
 
 
 # ---------------------------------------------------------------------------
@@ -5080,7 +5358,29 @@ def format_init_merge_md(data: dict[str, Any]) -> str:
 
 
 def _require_state(plan_path: Path) -> dict[str, Any]:
-    state = load_state(plan_path)
+    """Load state for a CLI command, or exit with a message a human can act on.
+
+    S6.6 F6: state.json is user-writable and load_state() raises on a
+    corrupt one, which used to surface as a raw JSONDecodeError traceback
+    from every CLI entry point -- telling the reader nothing about which
+    file is broken or what to do next.
+
+    Only the CLI half changes. The Stop hook already degrades correctly
+    (_load_hook_state catches, cmd_hook_stop has the catch-all) and must
+    keep doing so: a hook's only correct failure direction is
+    degrade-to-allow, never raise and never exit non-zero. Exiting 1 is the
+    right failure *here* and would be the wrong one there, which is why this
+    fix lives in the CLI's shared entry point rather than in load_state().
+    """
+    try:
+        state = load_state(plan_path)
+    except (OSError, ValueError) as exc:
+        emit({"error": (
+            f"state.json 無法解析：{exc}。"
+            f"修好 {state_path_for(plan_path)}，或刪掉它再跑 `init`"
+            "（會清空進度；plan 只是長出新 step 時改用 `init --merge`）。"
+        )})
+        sys.exit(1)
     if not state:
         emit({"error": "No state. Run `init` first."})
         sys.exit(1)
@@ -5503,6 +5803,32 @@ def render_stop_marker(plan_path: Path, state: dict[str, Any], reason: str) -> s
     )
 
 
+def _write_marker_atomic(path: Path, text: str) -> None:
+    """Write `path` the way save_state() writes state.json: a temp file in
+    the same directory, then os.replace.
+
+    SECURITY (S6.6 F3): Path.write_text() follows a symlink, and
+    `.plan-state/*.stop.md` is a version-controlled path (see
+    _read_stop_marker()), so a hostile repo could ship a symlink there and
+    have `stop --write` write the marker straight through it to anywhere
+    the user can write. os.replace() replaces the symlink itself, which is
+    what save_state() and write_pointer_atomic() have always done -- the two
+    stop-marker writers were an omission, not a new requirement.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
 def _write_stop_marker_on_fail(plan_path: Path, state: dict[str, Any], reason: str) -> bool:
     """`fail`'s automatic safe-halt marker (S2.2 Addendum to plan section
     2.2). The original spec only wired the marker to the manual `stop
@@ -5515,18 +5841,29 @@ def _write_stop_marker_on_fail(plan_path: Path, state: dict[str, Any], reason: s
     (git HEAD, timestamp, reason) is what a human needs to review, and a
     second failure piling on top of an unreviewed halt must not erase it.
 
+    SECURITY (S6.6 F3): that rule used to be an `exists()` pre-check, which
+    both raced the write and -- because exists() reports False for a
+    *dangling* symlink -- let a shipped symlink turn this path into a
+    create-a-file-anywhere primitive on the unattended `fail` route.
+    O_CREAT|O_EXCL enforces the same rule in one atomic step and refuses a
+    symlink outright (EEXIST), with O_NOFOLLOW as belt and braces.
+
     Best-effort and silent on I/O failure -- the `fail` transition itself
     (already committed to state by the caller) must never be undone or
     reported as failed just because a marker could not be written.
     Returns whether a marker was newly written.
     """
     marker_path = stop_marker_path_for(plan_path)
-    if marker_path.exists():
-        return False
     try:
         text = render_stop_marker(plan_path, state, reason or "(no reason given)")
         marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text(text, encoding="utf-8")
+        fd = os.open(
+            marker_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o644,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
     except OSError:
         return False
     return True
@@ -5553,10 +5890,9 @@ def cmd_stop(args: argparse.Namespace) -> int:
         if not reason:
             emit({"error": "--write requires --reason"})
             return 1
-        state = load_state(plan_path) or {}
+        state = _load_state_or_empty(plan_path)
         text = render_stop_marker(plan_path, state, reason)
-        marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text(text, encoding="utf-8")
+        _write_marker_atomic(marker_path, text)
         print(f"已寫入安全停機標記：{marker_path}")
         print()
         print(text, end="")
@@ -5754,10 +6090,11 @@ def cmd_recap(args: argparse.Namespace) -> int:
     state = _require_state(plan_path)
     drift = check_plan_drift(plan_path, state)
 
-    try:
-        checkpoint_text = checkpoint_path_for(plan_path).read_text(encoding="utf-8")
-    except OSError:
-        checkpoint_text = None
+    # Bounded and non-blocking, same reason as everywhere else a
+    # user-writable file is read (S6.6 F4/F5). _bounded_checkpoint_lines()
+    # below caps the *display*; this caps what is pulled into memory at all.
+    read = _read_text_bounded(checkpoint_path_for(plan_path), CHECKPOINT_MAX_BYTES)
+    checkpoint_text = read[0] if read is not None else None
 
     # mode="full" + no save_state(): recomputes the ready set for display
     # without persisting previously_reported_ready (print-only, T6).
@@ -6029,38 +6366,6 @@ def cmd_dag(args: argparse.Namespace) -> int:
         print()
         print(f"Progress: {summary(state)['progress']}")
     return 0
-
-
-def _checkpoint_writable(path: Path) -> str | None:
-    """Best-effort real-I/O probe: can this plan's checkpoint file actually
-    be written to right now? Returns None when yes, else a short
-    human-readable reason.
-
-    No caller currently -- its one caller (mechanism 5's settle-without-
-    the-owner enable gate) was removed in S6.2; S6.1 (plans/active/
-    unattended-long-run-governance.md Phase 6) wires this into checkpoint
-    writability checking instead. Kept because the probe logic is still
-    correct and still needed, just not yet connected to anything.
-
-    A live filesystem check, not an assumption drawn from the directory
-    merely existing. Two failure shapes are distinguished: `path` itself
-    exists but lost its write bit, and the *directory* cannot accept a new
-    file (missing, read-only, wrong owner). The second check writes and
-    removes a hidden sibling probe file rather than touching `path`
-    itself -- any future caller gating on this must not have the side
-    effect of creating an empty checkpoint.md where `recap`'s reader
-    (S3.1) would otherwise correctly report "no checkpoint yet".
-    """
-    if path.exists() and not os.access(path, os.W_OK):
-        return f"checkpoint file exists but is not writable: {path}"
-    probe = path.parent / f".{path.name}.writable-probe"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        probe.write_text("", encoding="utf-8")
-        probe.unlink()
-    except OSError as exc:
-        return f"{path.parent} is not writable: {exc}"
-    return None
 
 
 # ---------------------------------------------------------------------------

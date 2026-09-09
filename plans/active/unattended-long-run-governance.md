@@ -753,6 +753,14 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
   - Why: `/security-review` 是 S5.1 明列的必做項而未能執行，該缺口不隨 S5.1 完成而消失，改以獨立 step 承接——**未完成的事要有地方掛著，不是被上一個 step 的完成宣稱蓋過去。**
 
 
+- [ ] **S6.6** — 替代安全審查 7 個 finding 的修復
+  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`
+  - Agent: general-purpose (Opus)
+  - Estimated: 120m
+  - Action: 先寫**能重現該漏洞**的測試再修。依 `.verification/2026-09-09/s6.5a-security-review-substitute.md` 逐條處理 F1–F7。**F1／F3 已由 lead 獨立實跑重現**（證據在 `s6.5-acceptance-by-lead.md`），其餘五條需先自行重現再修——**重現不了的不要「順手修」**，那會改到不需要改的地方，並在紀錄裡留下一個從未存在過的漏洞。修復方向：讀取端的淨化與寫入端的 symlink 防護都已有現成範式可抄（`_redact_secret_shapes()`、`save_state()` 的 `mkstemp`+`os.replace`），**優先沿用而不是另寫一套**。F7 的處置可以是「改實作」或「改 docstring 讓敘述對齊實作」，兩者都可接受，但要說明選哪個與為什麼。
+  - Dependencies: S6.5
+  - Why: 兩個 HIGH 都已實跑重現：F1 是 `stop.md` 全文未淨化直送 `systemMessage`，而 `*.stop.md` **不在 `.gitignore` 內、會跟著 clone 走**；F3 是 stop marker 寫入跟隨 symlink，可覆寫 `.plan-state/` 以外的任意檔案，而同一支檔案的 `save_state()`／`write_pointer_atomic()` 都已做對，這兩處是遺漏。**已知且可重現的注入路徑不該掛著等下一輪**——S6.5 的 Why 講的是「未完成的事要有地方掛著」，這一條就是那個地方。緩解因素要一併記在文件裡：`systemMessage` 的收件人是使用者、`reason` 才會到 model，所以 F1 是對人的內容偽造、F2 才是 prompt injection，兩者的修法輕重不同。
+
 ### Phase 7: 最終驗收
 
 - [ ] **S5.2** — fresh-context 驗收（一輪）
@@ -767,6 +775,15 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
     (d) **AC12／AC13（auto-reply 相關）刪除**——機制 5 已於 S6.2 移除。
     (e) 新增一條：**逐一 `find` 每個機制的產物**，零產物者需能說出是「沒有寫入者」還是「有寫入者但條件未成立」——這是 S5.1 抓到機制 3 的方法，應成為常規驗收動作。
 
+  - Addendum-2（2026-09-09，Phase 6 全部完成後改寫；**與 Addendum 衝突時以本則為準**）：
+    (f) **AC17 的數字改為 21 steps / 7 phases**（Addendum (b) 寫的 15/5 已過時）。仍以 `init` 實際輸出為準，不要照抄任何一版 plan 裡的數字。
+    (g) **新增驗收面：S6.1 的五道 gate。** 產出一份真的 `checkpoint.md`（用 `checkpoint --template` 取格式），確認五道全 PASS；然後逐一破壞（刪除／複製成兩份／回推 mtime／砍掉一個要件／換成 symlink），確認**每次只有對應那一道 fail 且訊息指名自己**。
+    (h) **新增驗收面：四條 checkpoint 觸發各自獨立可觸發。** 逐條構造只有該條成立的情境（輪數預算／45 分鐘停滯／phase 邊界／距上次 checkpoint 推進 7 步），確認每條都能單獨讓指示出現——**其他三條要能被排除掉**，否則看不出是哪一條在作用。
+    (i) **新增驗收面：S6.4 的四項。** 純散文變更 → `resync` 後進度一步不掉；結構變更 → `resync` 拒絕且 state byte-identical；`init --merge` 承接舊狀態；刪掉已完成 step → 明確拒絕，需 `--drop-removed`；`skip --reason` 從 `in_progress` 直接成功且**不產生 stop.md**。
+    (j) **新增驗收面：S6.6 的安全修復。** 至少重跑 F1（構造 stop.md → `systemMessage` 應已 redact／defuse fence／包進 not-instructions fence）與 F3（`.plan-state/*.stop.md` 指向外部檔案的 symlink → `stop --write` 後該外部檔案內容不得改變）。重現腳本在 `.verification/2026-09-09/s6.5-acceptance-by-lead.md`。
+    (k) **`/security-review` 記為未執行**（S6.5(a)），不是 FAIL 也不是 PASS。若驗收者所在的 session cwd 有 remote，可順手補跑並記錄；跑不了就照實記，**不得用替代審查的結果宣稱它通過**。
+    (l) **測試套件連跑至少 5 次並保留完整 `-v` 輸出**。只跑一次的綠不算——本 plan 期間出現過兩次僅約 1/8 機率的 flake，其中一次只留摘要而無法歸因。
+    (m) Addendum (e) 的「逐一 `find` 每個機制的產物」仍然有效，且現在**應該找得到 checkpoint 產物**——S6.1 之前是零份。找不到要說出是「沒有寫入者」還是「有寫入者但條件未成立」。
   - Why: 使用者規則「驗證不自驗」——實作者與 reviewer 都看過實作討論，只有 fresh context 能檢驗 checkpoint 的自足性這種「對不知情讀者是否可用」的性質。
 
 ---

@@ -61,6 +61,12 @@
 
   **不是 behavior change**：欄位選填，沒填的 plan 小計為 0，永遠不觸發警告，行為與改動前完全相同。
 
+- **`plan_runner.py` 新增 `resync` 子指令與 `init --merge`（S6.4a/d）**：drift 補救不再只有「整份重建、清掉全部進度」一條路。`resync <plan>` 先比對 plan 與 state 的 step id 集合與每個 id 的 deps——未變（純散文變更，例如補一段裁決或改一句 Why）就只回寫 `plan_sha256`、保留全部進度；變了就拒絕並列出新增／消失的 id 與 deps 改動，不寫入任何東西。drift banner 的第一順位修法已改印 `resync`，`rm <state> && init`（整份重建）降級為 `resync` 拒絕之後才提。`init --merge` 則處理「plan 長出新 step」這個正常事件：以新 plan 的結構重建，但既有 step id 的 `status`／`task_id`／時間戳／`skip_reason`／`failure_reason` 原樣保留，新 step 落地為 pending；plan 裡消失的 step id 會被列出來要求加 `--drop-removed` 才捨棄，不加旗標時不寫入任何東西。
+
+  動機：本 plan 自身在同一個 session 內因散文變更（補記裁決、改一句 Why）誤觸發 drift 4 次、step 結構一次都沒動；同一個 session 另外從 15 步長到 20 步時，`init --force` 曾丟光全部已完成進度，只能手改 Python 把狀態併回去。機制鼓勵的行為（補記裁決）觸發了機制自己最嚴厲的處置，是這兩個子指令要解決的落差。
+
+- **`plan_runner.py` 新增 `skip --reason` 與 `in_progress → skipped` 轉態（S6.4b/c）**：`skip <plan> <id> --reason="..."` 把跳過原因寫進 `step["skip_reason"]`（選填，不加就不留字，跟以前一樣），`status` 會印出來供交接時查看為什麼跳過；刻意不寫 `completed_at`——freshness gate 判斷「上次真正推進」時會讀這個欄位，動了會靜默改變 gate 行為。`VALID_TRANSITIONS[IN_PROGRESS]` 新增 `SKIPPED`：以前 `in_progress` 只能轉 `completed` 或 `failed`，而 `fail` 會自動寫 `stop.md` 停機——範圍被砍是長跑中的正常事件，不該只有「觸發停機」一條出口。
+
 ### Fixed
 - **`plan_runner.py` 的 24 小時 pointer staleness 判定一直在量錯東西**：`POINTER_STALE_SECONDS`（24h）與 `_is_pointer_stale()` 讀的 `last_advance_at` 欄位**從來沒有任何一處寫入過**——它存在於 pointer schema、被 `new_pointer_record()` 初始化為 `None`、有兩個 reader，但沒有 writer。而 `_pointer_progress_timestamp()` 的 fallback 會在缺值時改用 `created_at`，那是個格式正確、看起來合理、但**永遠不會前進**的時間戳。
 
@@ -83,6 +89,24 @@
   - **已存在的標記不會被覆寫**：保留最早那次失敗的現場（HEAD、時間戳、reason），後續的 fail 不會蓋掉它。
   - 寫入為 best-effort：磁碟寫入失敗不影響 `fail` 這個 transition 本身的成功記錄；`cmd_fail` 的 stdout / `--format json` payload 契約完全未變，只多一個磁碟副作用。
   - `stop --write --reason` 手動子命令行為不變，仍可用於非 step 相關的手動停機。
+
+- **開發期間試過又移除：`auto_reply` 例行問題自動決定與四類硬停止送達（S6.2，never released）**：本 unreleased 分支曾短暫加入 `auto_reply: "on"|"off"` 欄位與四類「無論如何都要停下來等人」的硬停止判定（owner-only 決定／不可逆操作／對外送出／超支），構想是讓「有既有慣例可循、完全可逆、不離開本機、不超預算」的例行問題可以不停下來問人。兩者均在同一個 unreleased 週期內移除，**從未出現在任何已發布版本**：核心的自動作答從未被實作（`auto_reply="on"` 全 repo 只改變一行提示與一個回報欄位）；四類硬停止的文字送達本身在 24 份真實 plan、203 個 step 的實測中誤報率 80.6%（本 plan 自身 15 步命中 6、6 個全錯），且參考依據 AgentFlow 專案裡同一組判定也只是文字、`scripts/` 零實作。移除後 `plan_runner.py` 淨減約 700 行，對應測試淨減約 80 個。判準（使用者定）：加一次停必須換到東西，一份 80% 錯的收據不值得佔用 hook reason 裡最貴的版面。
+
+- **⚠️ Behavior change — checkpoint 進度快照從「請模型寫」變成「程式驗證真的寫了」（S6.1）**：S3.1/S3.2 引入的 `checkpoint.md` 契約原本只印一段指示到 Stop hook 的 reason 裡，程式從未回頭檢查那份檔案是否真的存在——普查全機器 `.plan-state/` 目錄，整個機制存在期間產出零份檔案。現在新增五道純檔案系統 gate：**existence**（推導路徑上真的有檔案）、**uniqueness**（同目錄掃 `*.checkpoint.md`，用 `Plan: <slug>` 標頭認領，0 份或 >1 份皆 fail）、**freshness**（內容 `Checkpoint at:` 時間戳與 `os.stat().st_mtime` 互相吻合，且兩者都不早於「上次真正推進」——判定基準取 pointer 的 `last_advance_at` 與 plan state 最新 `completed_at` 兩者較晚者）、**shape**（`Finished:`／`Running now:`／`Still to do:`／`Next work action:` 四要件各出現一次且有內容，留著 `<...>` 佔位字串視同未寫）、**identity**（`os.lstat` 確認非 symlink、sha256 在檢查／開啟／讀取三次之間不變）。五道全過收斂成一行 `CHECKPOINT OK — 5/5 gates pass: <path>`，可用 `plan_runner.py checkpoint <plan>` 手動觸發（exit 0/1）。
+
+  **送達同時補到全部表面**：以前只送 Stop hook 一處，預設 CLI 模式的人從沒看過；現在 `next`／`complete`／`fail`／`skip` 的 Newly unlocked 區塊、`recap`、Stop hook reason 全部掛在 S4.3 抽出的共用前綴 `_ready_step_header_and_fields()` 上，任一 renderer 漏接就會被枚舉測試抓到。
+
+  **觸發新增第三條**：剛跨過 phase 邊界（下一個 ready step 在新 phase、上一個 phase 已全部 completed/skipped、新 phase 還沒有任何 step 完成），純由 plan state 推導，不需 Stop hook——原本只有 wall-clock 一條在預設 CLI 模式下會觸發，而那條抓的是「卡住不動」的異常訊號，不是「這裡是好的收尾點」。
+
+  過程中一併修掉三個真缺陷：`_checkpoint_path_display()` 遇到有效路徑仍可能退回佔位字串；`last_advance_at` 的寫入只掛在 Stop hook 路徑，預設 CLI 模式永遠是 `None`，freshness 因此拿一個凍住的 `created_at` 當基準比對，一份三小時前的過期 checkpoint 會一直顯示 `CHECKPOINT OK`；`complete`／`skip` 自己剛寫入的推進，被拿去評判它執行前就已存在的 checkpoint，跨秒就判過期。三者皆已修正。
+
+- **⚠️ Behavior change — Stop hook 計數器換軸、部分檢查降為警告層（S6.3）**：`stop_hook_active` 的真正語意是「這次 Stop 是不是上一次 hook block 造成的續推」，與人類無關——任何新 prompt（人打字、`-p`、`--resume`、teammate 訊息）都會清掉它。以前 `bg_poll_count`／`nag_counts` 兩個計數器都掛在這條 turn 軸上歸零，在 multi-agent 長跑（每則訊息都是新 turn）裡永遠等不到升級，實測卡在 1/7 ↔ 2/7 之間來回。現在只有 `consecutive_blocks` 留在 turn 軸；`bg_poll_count` 掛在「一段背景等待」上、`nag_counts` 掛在「被催的那個 step」上，兩者換 step 或等待結束才歸零。新增只增不減的 `advance_count`（累計真實推進次數），四個計數器可用 `plan_runner.py pointer` 一次看到。
+
+  **部分阻擋層降為警告層**：逐一檢視全部 `_hook_block()` 呼叫點，判準是「現在不修會不會讓後面的判定失效或不可逆，而不是它有多重要」——催回報 in_progress step 前 3 次（`HOOK_NAG_MAX`）仍擋，第 4 次起降為 `systemMessage`；等背景工作收斂前 2 次（`HOOK_BG_POLL_MAX`）仍擋，第 3 次起同樣降級。派下一個 ready step 與全部完成的公告維持阻擋層不變（前者是推進機制本身，後者只在無工作進行中時觸發）。降級一律印一行 `[plan-run] …降為提示、不再阻擋…`，不是靜音。
+
+  **`_branch_background_tasks()` 收窄**：改為只在 in_progress step 有 `task_id` 且該 task_id 出現在 Stop payload 的 `background_tasks` 裡才擋——以前讀的是整個 session 的背景工作、無 plan 識別，實測一個 session 為另一份 plan 派 19 隻 agent 時，每一輪都被「本 plan 有背景工作尚未收斂」誤擋。
+
+  **新增第四條 checkpoint 觸發**：距上一份 checkpoint 已真實推進 `CHECKPOINT_ADVANCE_MAX`（預設 7）步，基準記在 checkpoint 檔自己的 `Advances at checkpoint:` 標頭行，寫新檔自動歸零。補的洞是「又長又快的 phase」——同一 phase 連做 12 步、25 分鐘做完，既有三條觸發（hook 輪數預算、45 分鐘停滯、phase 邊界）都不會響。7 這個值取自本機約 1900 個真實 phase 的步數分佈（median 3、p90 6），是「略高於 p90」的判斷值，非量測值，與有校準依據的 `BLOCK_BUDGET` 不同級。
 
 ## [v2.2.0] - 2026-09-03
 

@@ -326,6 +326,8 @@ Next work action: 跑 plan_runner.py next 拿 S1.2 派工
 - `pause` / `resume` — 暫停／恢復注入（state 保留），想手動接管時用
 - `detach` — 移除 cwd 的 pointer（plan 完成或換 plan 時）；`pointer` — 看當前 cwd 解析到哪份 plan
 - `doctor` — hook 安裝自檢（唯讀）；`dag "$ARGUMENTS"` — DAG 視覺化（`--format=dot`），debug 用
+- `checkpoint "$ARGUMENTS"` — 手動跑 checkpoint 五道 gate（exit 0/1）；加 `--template` 只印標準格式不寫檔
+- `resync "$ARGUMENTS"` — plan 只改散文時清掉 drift 並保留全部進度；step 結構真的變了會拒絕（那時用 `init --merge`）
 
 ## 全手動模式（連 `/goal` 都不用時）
 

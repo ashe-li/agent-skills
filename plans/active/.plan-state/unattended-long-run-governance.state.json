@@ -14,7 +14,7 @@
   "auto_reply": "off",
   "parent_task_id": null,
   "created_at": "2026-09-08T08:33:28.706936+00:00",
-  "updated_at": "2026-09-09T04:02:42.332069+00:00",
+  "updated_at": "2026-09-09T04:30:39.462459+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -383,10 +383,10 @@
       "action": "先寫測試再實作。**(a) `resync` 子指令**：比對 plan 與 state 的 step id 集合與 deps，未變則只回寫 `plan_sha256`、保留全部進度；變了則拒絕並列出差異。**drift banner 的第一順位修法改印 `resync`**，`rm state && init` 降為「step 結構真的變了」才提。**(b) `skip --reason`**，`transition_step()` 在 `SKIPPED` 時寫 `step[\"skip_reason\"]`。**(c) `VALID_TRANSITIONS[IN_PROGRESS]` 加入 `SKIPPED`。**",
       "risk": null,
       "estimated": 60,
-      "status": "pending",
+      "status": "completed",
       "task_id": null,
-      "started_at": null,
-      "completed_at": null,
+      "started_at": "2026-09-09T04:03:34.748308+00:00",
+      "completed_at": "2026-09-09T04:30:39.436277+00:00",
       "failure_reason": null
     },
     "S6.5": {
@@ -440,6 +440,6 @@
   },
   "plan_sha256": "0d253578034db557e3b687aab1e98dcfb53dd8aa7aaee5ae1477e802b825fcfa",
   "previously_reported_ready": [
-    "S6.4"
+    "S6.5"
   ]
 }

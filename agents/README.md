@@ -1,10 +1,6 @@
----
-name: agents
-description: 本 repo 自持 agent 定義目錄索引（complexity-triage / doc-reviewer / doc-updater / tdd-guide），供 design、update 等 skill 的 general-purpose subagent 呼叫時引用定義與檢查清單；本身非直接可呼叫的 skill，不會出現在指令清單中。
-user-invocable: false
----
+# agents/ — 自持 Agent 定義目錄（不是 skill）
 
-# agents/ — 自持 Agent 定義目錄
+> **本目錄不是 skill。** 它沒有 `SKILL.md`、不會被註冊成 `/agents`、不會出現在指令清單裡，也不能被直接呼叫。這裡只是一份給 `design`、`update` 等 skill 引用的定義檔索引——原本的 `agents/SKILL.md` 自述「非直接可呼叫」，卻因為檔名是 `SKILL.md` 而照樣佔掉指令清單一格，本檔即為那份文件改名後的版本，內容不變。
 
 本目錄存放本 repo 自持的 agent 定義（一 agent 一檔，ECC 式架構：frontmatter `name`/`description`/`tools`/`model` + 輸入防禦基線 / 職責 / 流程 / 輸出格式 / 判準或檢查清單 / 紅旗）。不依賴 everything-claude-code (ECC) plugin，供 `design/SKILL.md`、`update/SKILL.md` 等呼叫方在啟動 `general-purpose` subagent 時引用其定義。本文件是這份索引與呼叫慣例的唯一權威版本，其他文件（README、design/SKILL.md、update/SKILL.md）一律只留一句指標過來，不重複內容。
 
@@ -45,8 +41,16 @@ subagent 回報完成後，呼叫方（主模型）對照定義檔的「輸出�
 呼叫方引用 `agents/*.md` 時，實際路徑依執行環境而異：
 
 ```
-repo checkout：           agents/<name>.md
-skills CLI 安裝環境：      ~/.agents/skills/agents/<name>.md
+repo checkout：                 agents/<name>.md
+symlink 進 ~/.claude/skills：    ~/.claude/skills/agents/<name>.md
 ```
 
-找不到對應檔案時視為「`agents/` 目錄不存在（安裝不完整）」：從 https://github.com/ashe-li/agent-skills 的 `agents/<name>.md` 取得，或請使用者重跑 `npx skills update`；`/design` Step 4a 等呼叫方文件內的 fallback 一律指回這一段，不各自重複。
+**本目錄不再經 `npx skills` 派送。** 它不是 skill 之後，skills CLI 不會再把 `agents/` 同步進 `~/.agents/skills/`；既有安裝殘留的舊快照可能還在原地，但不會再更新，不要拿它當權威版本。要在 repo checkout 之外使用，把 checkout 的 `agents/` symlink 過去即可：
+
+```bash
+ln -sfn <你的 checkout>/agents ~/.claude/skills/agents
+```
+
+（與 README「安裝後確認載入的版本與 repo 一致」段落給的 symlink 做法同一套；代價也一樣——`npx skills update` 管不到它，主 repo 切分支會連帶換掉生效中的版本。）
+
+找不到對應檔案時視為「`agents/` 目錄不存在（安裝不完整）」：從 https://github.com/ashe-li/agent-skills 的 `agents/<name>.md` 取得；`/design` Step 4a 等呼叫方文件內的 fallback 一律指回這一段，不各自重複。

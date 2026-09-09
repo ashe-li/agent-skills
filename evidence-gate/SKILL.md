@@ -57,7 +57,7 @@ git diff --diff-filter=D origin/<base>..HEAD --name-only   # 確認刪除的檔�
 草稿定稿後，**派一個 fresh-context subagent** 獨立重跑，不是自己再看一遍：
 
 - 該 subagent **沒看過**草稿產生過程，prompt 要求它假設宣稱是錯的，逐條重跑 claim schema 裡的證據指令。
-- 只有全部判定回傳 PASS（UNVERIFIABLE 的宣稱已在第 1 節剔除，不計入放行條件）才可交付；任何一條 FAIL，回報置頂列出，**不自動交付、不自動寫回**。
+- 只有全部判定回傳 PASS 且 SCHEMA-DEFECT 為 0（UNVERIFIABLE 的宣稱已在第 1 節剔除，不計入放行條件）才可交付；任何一條 FAIL 或任一 SCHEMA-DEFECT，回報置頂列出，**不自動交付、不自動寫回**。
 
 Subagent 派遣模板（照抄套用，`{...}` 處填當次資訊；draft 全文與 claim schema 表一律用 fenced code block 包裹，避免內文被當成指令解析）：
 
@@ -92,7 +92,7 @@ Claim schema（每列一條宣稱 + 我聲稱用的證據指令）：
 ````
 
 - 呼叫方收到回覆後，逐列核對；有 FAIL 就把該列連同「重跑指令＋實際輸出」原樣貼進交付前的修正循環，不重新用散文轉述。
-- 有 SCHEMA-DEFECT 就退回作者修正 schema 後再交付，不算 FAIL 但也不能忽略。
+- SCHEMA-DEFECT 與 FAIL 同為阻擋結果：退回作者修 schema、重跑第 4 節，不寫回。
 
 ## 5. 時間視窗規則
 
@@ -108,8 +108,8 @@ Claim schema（每列一條宣稱 + 我聲稱用的證據指令）：
 
 | Caller | 呼叫時機 | 傳入 | 拿回 |
 |---|---|---|---|
-| `/pr` | Step 5「建立或更新 PR」寫回前，PR description 草稿完成後 | draft body 全文 + `origin/<base>..HEAD` 範圍 | claim schema 表（全 PASS）或 FAIL 清單退回修正 |
-| `/release-pr` | Step 4.5「寫回前的擋門」——即本 gate 的落地實作，Step 2.5 三項查核可直接映射進第 1/2 節的 claim schema | draft title/body + compare API 的 commits/files 清單 | 同上；`/release-pr` 既有的「CLAIM \| 驗證指令 \| 實際結果 \| 通過?」格式即本 skill 第 1 節表格的既有實例 |
+| `/pr` | Step 5「建立或更新 PR」寫回前，PR description 草稿完成後 | draft body 全文 + `origin/<base>..HEAD` 範圍 | claim schema 表（全 PASS 且 SCHEMA-DEFECT=0）或 FAIL／SCHEMA-DEFECT 清單退回修正 |
+| `/release-pr` | Step 4.5「寫回前的擋門」——即本 gate 的落地實作，Step 2.5 三項查核可直接映射進第 1/2 節的 claim schema | draft title/body + compare API 的 commits/files 清單 | 同上，FAIL 或 SCHEMA-DEFECT 清單同樣退回；`/release-pr` 既有的「CLAIM \| 驗證指令 \| 實際結果 \| 通過?」格式即本 skill 第 1 節表格的既有實例 |
 | `alert-triage` | Step 5「RCA Report」定稿前，尤其 `stated_cause` 對賭與分類結論部分 | Step 3 的假設＋live 證據列 | 對每個假設補齊 PASS/FAIL/UNVERIFIABLE；`real` 判定的 claim 若 FAIL 或 UNVERIFIABLE 需回 alert-triage 既有的 G4（low-confidence）流程 |
 | security review（如 `security-review-scoped`） | VERDICT 先出、證據後補階段，證據段落定稿前 | 每條漏洞/風險宣稱 + 對應程式碼行號 | claim schema 表；FAIL 的宣稱代表誤判風險，需重新定位行號或降級為 UNVERIFIABLE |
 

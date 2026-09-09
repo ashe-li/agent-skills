@@ -5,7 +5,7 @@ Subset of skills-ecosystem-eval/src/learn_eval_bridge.py (structural mode).
 Bridge version: 2026-03-15. Sync manually when bridge scoring logic changes.
 
 Usage:
-    python scripts/check_skill.py --files curation/SKILL.md update/SKILL.md --repo-dir .
+    python scripts/check_skill.py --files design/SKILL.md update/SKILL.md --repo-dir .
     python scripts/check_skill.py --files pr/SKILL.md --repo-dir . --output results.json
 """
 

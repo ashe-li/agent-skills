@@ -14,7 +14,7 @@
   "auto_reply": "off",
   "parent_task_id": null,
   "created_at": "2026-09-08T08:33:28.706936+00:00",
-  "updated_at": "2026-09-08T10:54:23.875435+00:00",
+  "updated_at": "2026-09-09T04:02:42.332069+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -363,10 +363,10 @@
       "action": "先寫測試再實作。**(a) 拆計數器**：`consecutive_blocks` 維持現狀（對 harness 的 per-turn 8 步上限是**正確的**，不要動）；另立一個只在**真實推進**時遞增的計數，沿用 `_record_advance_if_progressed()` 已有的「completed+skipped 真的增加了」偵測。**(b) 修 `bg_poll_count` 與 `nag_counts`**：兩者目前被每則訊息歸零，導致逃生口永不開、升級訊息永不出現——它們不該掛在 turn 軸上。**(c) 兩級嚴格度**（研究 #14）：把「幾乎每輪都會觸發」的檢查降成警告層（`_hook_allow(ctx, system_message=...)`），只保留少數在阻擋層（`_hook_block`）。篩選原則**逐字寫進程式碼註解**：「一個檢查該不該在進行中就擋，取決於**現在不修會不會讓後面的判定失效或不可逆**，而不是取決於它有多重要。」**(d)** 修正 `_branch_background_tasks()`：限縮成「in_progress step 有 `task_id` 且該 task_id 在 `background_tasks` 裡」才 block——目前它讀的是整個 session 的背景工作、無 plan 識別，而本 repo 的工作模式（指揮官不下場、dispatch-loop）**要求**有背景 agent 在跑，這條 branch 因此幾乎恆真。",
       "risk": null,
       "estimated": 120,
-      "status": "pending",
+      "status": "completed",
       "task_id": null,
-      "started_at": null,
-      "completed_at": null,
+      "started_at": "2026-09-09T02:42:34.117366+00:00",
+      "completed_at": "2026-09-09T04:02:42.301795+00:00",
       "failure_reason": null
     },
     "S6.4": {
@@ -440,7 +440,6 @@
   },
   "plan_sha256": "0d253578034db557e3b687aab1e98dcfb53dd8aa7aaee5ae1477e802b825fcfa",
   "previously_reported_ready": [
-    "S6.3",
     "S6.4"
   ]
 }

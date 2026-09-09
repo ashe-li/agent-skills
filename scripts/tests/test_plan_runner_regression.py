@@ -17,6 +17,9 @@ Constraints (S2.2 of plans/active/... plan):
 
 import hashlib
 import importlib.util
+import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -1722,6 +1725,7 @@ class CheckpointGateFixture(unittest.TestCase):
         checkpoint_pending: bool = True,
         last_advance_at_seconds_ago: float | None = 10.0,
         plan_path: Path | None = None,
+        advance_count: int | None = None,
     ) -> None:
         with mock.patch.object(Path, "home", return_value=self.home):
             mod = load_module_from_path(PLAN_RUNNER, "plan_runner_s61_ptr")
@@ -1732,6 +1736,8 @@ class CheckpointGateFixture(unittest.TestCase):
                 session_id="s61-test-session",
             )
             pointer["checkpoint_pending"] = checkpoint_pending
+            if advance_count is not None:
+                pointer["advance_count"] = advance_count
             if last_advance_at_seconds_ago is not None:
                 ts = datetime.now(timezone.utc) - timedelta(
                     seconds=last_advance_at_seconds_ago
@@ -1740,20 +1746,29 @@ class CheckpointGateFixture(unittest.TestCase):
             mod._ensure_pointer_active_dir()
             mod.write_pointer_atomic(mod.pointer_path_for(self.tmp_path), pointer)
 
-    def verify(self) -> "Any":
-        """Run the five gates in-process against the fixture's plan.
+    def _registry_patched(self):
+        """Point the module's pointer-registry globals at the fake HOME.
 
-        The registry globals are patched on the module object itself, not
-        via Path.home(): PLAN_RUN_DIR / POINTER_ACTIVE_DIR are computed at
-        import time, so patching Path.home() afterwards would leave the
-        lookup pointed at the real ~/.claude/plan-run/active/ and hand
-        every gate a pointer of None. Same technique test_plan_run_hook.py
-        uses for its own I/O-layer cases.
+        Patched on the module object rather than via Path.home():
+        PLAN_RUN_DIR / POINTER_ACTIVE_DIR are computed at import time, so
+        patching Path.home() afterwards would leave the lookup pointed at
+        the real ~/.claude/plan-run/active/ and hand every caller a pointer
+        of None. Same technique test_plan_run_hook.py uses for its own
+        I/O-layer cases.
         """
         run_dir = self.home / ".claude" / "plan-run"
-        with mock.patch.object(self.mod, "PLAN_RUN_DIR", run_dir), \
-             mock.patch.object(self.mod, "POINTER_ACTIVE_DIR", run_dir / "active"), \
-             mock.patch.object(self.mod, "POINTER_ALLOWED_ROOT", self.tmp_path):
+        stack = contextlib.ExitStack()
+        for name, value in (
+            ("PLAN_RUN_DIR", run_dir),
+            ("POINTER_ACTIVE_DIR", run_dir / "active"),
+            ("POINTER_ALLOWED_ROOT", self.tmp_path),
+        ):
+            stack.enter_context(mock.patch.object(self.mod, name, value))
+        return stack
+
+    def verify(self) -> "Any":
+        """Run the five gates in-process against the fixture's plan."""
+        with self._registry_patched():
             resolved = self.mod.resolve_pointer_for_hook(self.tmp_path)
             self.assertIsNotNone(
                 resolved,
@@ -2836,3 +2851,198 @@ class StateDerivedFreshnessReferenceTestCase(CheckpointGateFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CheckpointAdvanceBaselineTestCase(CheckpointGateFixture):
+    """S6.3 addendum: the checkpoint file carries the advance count it was
+    written at, and that line is the baseline for the fourth trigger.
+
+    The baseline lives in the artifact rather than on the pointer for the
+    same reason the rest of S6.1 does: state that lives in the product is
+    re-verified every time and resets itself when a new one is written --
+    nobody has to remember to clear it.
+    """
+
+    def test_template_carries_the_advance_line(self) -> None:
+        self.assertIn(f"{self.mod.CHECKPOINT_ADVANCE_LABEL} 0", self.template_text())
+
+    def test_template_records_the_pointers_current_count(self) -> None:
+        self.write_pointer(advance_count=12)
+        text = self.template_text()
+        self.assertIn(f"{self.mod.CHECKPOINT_ADVANCE_LABEL} 12", text)
+
+    def test_the_advance_line_does_not_disturb_the_five_gates(self) -> None:
+        self.write_good_checkpoint()
+        self.write_pointer()
+        verdict = self.verify()
+        self.assertTrue(
+            verdict.ok, "; ".join(f"{g.name}={g.detail}" for g in verdict.gates),
+        )
+
+    def test_recorded_count_reads_back(self) -> None:
+        self.write_pointer(advance_count=5)
+        self.write_good_checkpoint()
+        self.assertEqual(
+            self.mod._checkpoint_recorded_advances(self.plan_path), 5,
+        )
+
+    def test_no_checkpoint_file_counts_from_zero(self) -> None:
+        """Never checkpointed is not "no baseline" -- it is a baseline of
+        zero, which is what makes the trigger fire on a run that has
+        advanced a long way without ever writing one."""
+        self.assertFalse(self.checkpoint_path().exists())
+        self.assertEqual(self.mod._checkpoint_recorded_advances(self.plan_path), 0)
+
+    def test_a_checkpoint_without_the_line_disables_the_trigger(self) -> None:
+        """Legacy compatibility: a file written before this line existed
+        must not fail and must not be guessed at."""
+        self.write_good_checkpoint()
+        path = self.checkpoint_path()
+        path.write_text(
+            "\n".join(
+                line for line in path.read_text(encoding="utf-8").split("\n")
+                if not line.startswith(self.mod.CHECKPOINT_ADVANCE_LABEL)
+            ),
+            encoding="utf-8",
+        )
+        self.assertIsNone(self.mod._checkpoint_recorded_advances(self.plan_path))
+
+    def test_an_unparseable_count_disables_the_trigger(self) -> None:
+        self.write_good_checkpoint()
+        path = self.checkpoint_path()
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                f"{self.mod.CHECKPOINT_ADVANCE_LABEL} 0",
+                f"{self.mod.CHECKPOINT_ADVANCE_LABEL} soon",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIsNone(self.mod._checkpoint_recorded_advances(self.plan_path))
+
+    def test_a_checkpoint_claiming_another_plan_is_not_our_baseline(self) -> None:
+        self.write_good_checkpoint()
+        path = self.checkpoint_path()
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                f"Plan: {self.plan_path.stem}", "Plan: somebody-elses-plan",
+            ),
+            encoding="utf-8",
+        )
+        self.assertIsNone(self.mod._checkpoint_recorded_advances(self.plan_path))
+
+    def test_obligation_fires_on_advances_alone(self) -> None:
+        """The CLI derivation: no checkpoint_pending, a fresh clock, and no
+        phase boundary -- only the advance count is left to trip it."""
+        self.write_pointer(
+            checkpoint_pending=False, last_advance_at_seconds_ago=5.0,
+            advance_count=self.mod.CHECKPOINT_ADVANCE_MAX,
+        )
+        state = self.mod.load_state(self.plan_path)
+        with self._registry_patched():
+            pointer = self.mod.resolve_pointer_for_hook(self.tmp_path).data
+            self.assertFalse(self.mod._phase_boundary_just_crossed(state))
+            self.assertTrue(self.mod._checkpoint_obligation_active(
+                self.plan_path, pointer, time.time(), state,
+            ))
+
+    def test_obligation_quiet_one_advance_short(self) -> None:
+        self.write_pointer(
+            checkpoint_pending=False, last_advance_at_seconds_ago=5.0,
+            advance_count=self.mod.CHECKPOINT_ADVANCE_MAX - 1,
+        )
+        state = self.mod.load_state(self.plan_path)
+        with self._registry_patched():
+            pointer = self.mod.resolve_pointer_for_hook(self.tmp_path).data
+            self.assertFalse(self.mod._checkpoint_obligation_active(
+                self.plan_path, pointer, time.time(), state,
+            ))
+
+    def test_writing_a_new_checkpoint_discharges_the_trigger(self) -> None:
+        """End to end: over threshold -> owed; write a checkpoint at the
+        current count -> no longer owed, with nothing reset by hand."""
+        over = self.mod.CHECKPOINT_ADVANCE_MAX * 2
+        self.write_pointer(
+            checkpoint_pending=False, last_advance_at_seconds_ago=5.0,
+            advance_count=over,
+        )
+        state = self.mod.load_state(self.plan_path)
+        with self._registry_patched():
+            pointer = self.mod.resolve_pointer_for_hook(self.tmp_path).data
+            self.assertTrue(self.mod._checkpoint_obligation_active(
+                self.plan_path, pointer, time.time(), state,
+            ))
+        self.write_good_checkpoint()
+        self.assertEqual(
+            self.mod._checkpoint_recorded_advances(self.plan_path), over,
+        )
+        with self._registry_patched():
+            pointer = self.mod.resolve_pointer_for_hook(self.tmp_path).data
+            self.assertFalse(self.mod._checkpoint_obligation_active(
+                self.plan_path, pointer, time.time(), state,
+            ))
+
+
+class CheckpointAdvanceWiringTestCase(CheckpointGateFixture):
+    """The two I/O-layer seams that carry the baseline: the hook's reader
+    and `checkpoint --template`'s writer. Exercised in-process rather than
+    only through a subprocess, so a regression here is caught by the suite
+    and not just by a live run."""
+
+    def test_hook_io_layer_reads_the_baseline(self) -> None:
+        self.write_pointer(advance_count=4)
+        self.write_good_checkpoint()
+        with self._registry_patched():
+            pointer = self.mod.resolve_pointer_for_hook(self.tmp_path).data
+            self.assertEqual(
+                self.mod._load_hook_checkpoint_advances(pointer), 4,
+            )
+
+    def test_hook_io_layer_refuses_a_plan_outside_the_allowed_root(self) -> None:
+        with self._registry_patched():
+            self.assertIsNone(self.mod._load_hook_checkpoint_advances(
+                {"plan_path": "/etc/not-your-plan.md"},
+            ))
+
+    def test_hook_io_layer_tolerates_a_pointer_without_a_plan_path(self) -> None:
+        with self._registry_patched():
+            self.assertIsNone(self.mod._load_hook_checkpoint_advances({}))
+
+    def test_hook_io_layer_never_raises_out_of_a_decision_path(self) -> None:
+        """The guard exists for the same reason _load_hook_state()'s does:
+        this runs on every Stop of every session and must not be the thing
+        that makes the hook exit non-zero."""
+        with self._registry_patched(), mock.patch.object(
+            self.mod, "_checkpoint_recorded_advances",
+            side_effect=OSError("boom"),
+        ):
+            self.assertIsNone(self.mod._load_hook_checkpoint_advances(
+                {"plan_path": str(self.plan_path)},
+            ))
+
+    def test_template_subcommand_stamps_the_live_count(self) -> None:
+        self.write_pointer(advance_count=6)
+        args = argparse.Namespace(
+            plan=str(self.plan_path), template=True, format="text",
+        )
+        buffer = io.StringIO()
+        with self._registry_patched(), mock.patch.object(
+            Path, "cwd", return_value=self.tmp_path,
+        ), contextlib.redirect_stdout(buffer):
+            self.assertEqual(self.mod.cmd_checkpoint(args), 0)
+        self.assertIn(f"{self.mod.CHECKPOINT_ADVANCE_LABEL} 6", buffer.getvalue())
+
+    def test_template_stamps_zero_when_the_pointer_drives_another_plan(self) -> None:
+        """No reading to record is not the same as no trigger: 0 makes the
+        rule count from the start of the run rather than switching off."""
+        other = self.tmp_path / "other-plan.md"
+        other.write_text(S61_PLAN_TEXT, encoding="utf-8")
+        self.write_pointer(advance_count=6, plan_path=other)
+        args = argparse.Namespace(
+            plan=str(self.plan_path), template=True, format="text",
+        )
+        buffer = io.StringIO()
+        with self._registry_patched(), mock.patch.object(
+            Path, "cwd", return_value=self.tmp_path,
+        ), contextlib.redirect_stdout(buffer):
+            self.assertEqual(self.mod.cmd_checkpoint(args), 0)
+        self.assertIn(f"{self.mod.CHECKPOINT_ADVANCE_LABEL} 0", buffer.getvalue())

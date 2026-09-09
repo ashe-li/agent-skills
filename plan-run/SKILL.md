@@ -129,7 +129,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 - 清除：`plan_runner.py stop <plan> --clear --reason-reviewed`（旗標防手滑，缺旗標拒絕）
 - **內容安全規則，且理由比 checkpoint 更硬**：`Reason` 欄位禁止貼 log 原文、禁止任何 token / key / password / JWT。`stop.md` **不在 `.gitignore` 裡、會被 commit 進 git history**（少見、值得留存的事件，是刻意決定，見 `.gitignore` 裡的說明）——這一點與下面第 3 點的 `checkpoint.md`（刻意排除在版控外）恰好相反，兩者的安全規則看起來一樣，但 `stop.md` 多一層「這份檔案真的會進 repo」的理由。
 
-### 3. `checkpoint.md` + wall-clock 觸發
+### 3. `checkpoint.md` + 四條觸發
 
 `.plan-state/<slug>.checkpoint.md`：需要 check-in 時，**每一個會印出 ready step 的輸出**（`next`、`complete`／`fail`／`skip` 的 Newly unlocked 區塊、`recap`、Stop hook reason）都會多印一段指示，把進度**寫進檔案**而不是只在回合裡輸出摘要——摘要留在 transcript 裡，compaction 或新 session 一來就沒了。指示裡附這份檔案的完整絕對路徑（`checkpoint_path_for()` 沿用 `state_path_for()` 同一套路徑推導，只是同目錄換副檔名）。
 
@@ -157,11 +157,12 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 **取得標準格式**：`plan_runner.py checkpoint <plan> --template`。它**只印不寫**——程式代寫的 checkpoint 是替沒做的事開收據，這正是這個機制要終結的失敗。範本由程式產生（不是文件裡的靜態字串），所以「發下去的形狀」與「驗的形狀」不會各自漂移（AgentFlow I-063 的教訓）。
 
-**四要件缺一不可**（借自 AgentFlow 的 10 分鐘 WIP checkpoint，`agentflow/skills/agentflow/SKILL.md:62`），另加兩行由 gate 使用的標頭：
+**四要件缺一不可**（借自 AgentFlow 的 10 分鐘 WIP checkpoint，`agentflow/skills/agentflow/SKILL.md:62`），另加三行由 gate 與觸發規則使用的標頭：
 
 ```markdown
 Plan: <slug>                       # uniqueness gate 用來認領檔案
 Checkpoint at: <ISO-8601>          # freshness gate 用來與 mtime 交叉比對
+Advances at checkpoint: <N>        # 觸發規則 4 的基準：寫檔當下的累計推進數
 
 Finished: 已完成什麼
 Running now: 現在正在跑什麼
@@ -169,23 +170,26 @@ Still to do: 還剩什麼
 Next work action: 下一個具體動作
 ```
 
-**信任邊界**：程式只驗這份檔案「有沒有、唯不唯一、新不新、形狀對不對、是不是同一個檔案」，**絕不把裡面寫的東西讀回來當後續決策的輸入**——不會照著 `Next work action:` 派工，也不會把 `Still to do:` 解析成 step 狀態。`Plan:` 與 `Checkpoint at:` 兩個欄位是唯一被讀取的內容，且只用來判斷這份檔案自身是否有效。與 §2 對 `stop.md` 的原則同一條線。
+**信任邊界**：程式只驗這份檔案「有沒有、唯不唯一、新不新、形狀對不對、是不是同一個檔案」，**絕不把裡面寫的東西讀回來當後續決策的輸入**——不會照著 `Next work action:` 派工，也不會把 `Still to do:` 解析成 step 狀態。`Plan:`、`Checkpoint at:` 與 `Advances at checkpoint:` 三個欄位是唯一被讀取的內容，且只用來判斷這份檔案自身有多舊（第三個是「舊了幾步」，跟第二個的「舊了幾秒」同一性質）。與 §2 對 `stop.md` 的原則同一條線。
 
 **自足性規則（契約核心）**：checkpoint **不得要求讀者回頭讀 plan.md、state.json 或前一則 checkpoint 才看得懂**。判準是——一個完全沒有本次 context 的人，只讀這一份檔案，就要能回答「下一步該做什麼」。這條後續由 fresh-context agent 驗收。
 
-**觸發時機是三條規則之一，不是只看 turn 數**：
+**觸發時機是四條規則之一，不是只看 turn 數**：
 
 | # | 條件 | 需要 Stop hook？ | 抓的是 |
 |---|---|---|---|
 | 1 | 續推輪數逼近本輪預算上限（hook 判定後寫進 pointer 的 `checkpoint_pending`） | 是 | 一輪塞太多 |
 | 2 | 距上次真正推進（`pointer['last_advance_at']`）超過 `CHECKPOINT_STALE_SECONDS`（預設 2700 秒 = 45 分鐘，`PLAN_RUN_CHECKPOINT_STALE_SECONDS` 可調） | 否 | **卡住不動**（異常訊號） |
 | 3 | **剛跨過 phase 邊界**：下一個 ready step 在 phase N，phase N-1 已全部 completed/skipped，且 phase N 還沒有任何 step 完成 | 否 | **這裡是好的交接點**（N2 主要靠這條） |
+| 4 | 距上一份 checkpoint 已**真實推進** `CHECKPOINT_ADVANCE_MAX`（預設 7）步。基準是 checkpoint 檔裡 `Advances at checkpoint:` 那行，減出來的差值 | 否 | **又長又快的 phase**——一個 phase 連做 12 步、25 分鐘內做完，規則 1/2/3 一條都不觸發 |
 
-規則 2 抓的是異常，規則 3 抓的才是「該收尾了」。**兩條在預設 CLI 模式（沒裝 Stop hook）下都會觸發**——規則 3 純由 plan state 推導，不讀時鐘、不讀 pointer、不需要 attach。cwd 的 pointer 若指向另一份 plan，三條都不觸發。
+規則 2 抓的是異常，規則 3 抓的才是「該收尾了」，規則 4 補的是規則 3 結構上看不到的洞：phase 本身很長時，下一個交接點還很遠。**三條（2、3、4）在預設 CLI 模式（沒裝 Stop hook）下都會觸發**——規則 3 純由 plan state 推導，規則 4 只讀 pointer 的累計推進數與 checkpoint 檔自己那行，都不需要 hook。cwd 的 pointer 若指向另一份 plan，四條都不觸發。
+
+> **7 是判斷值，不是量測值。** 依據是兩項實測——本機 226 個真實 phase 的步數分佈（中位 3、p90 6、最大 24）與單步耗時中位數 3.9 分鐘——取「略高於 p90」：於是 92% 的 phase 走規則 3 先到交接點（那是更好的停點），規則 4 只在長尾說話；而 7 步在中位耗時下約 27 分鐘，穩穩早於 45 分鐘的規則 2，所以「跑很快」的情境由它先接住。**取「略高於 p90」這個選擇是判斷**，跟 `BLOCK_BUDGET` 那種有校準的數字不同級。舊 checkpoint 檔沒有 `Advances at checkpoint:` 那行時，規則 4 **不成立也不報錯**（缺欄位一律降級放行）；完全沒有 checkpoint 檔則以 0 為基準——「從沒寫過」不是「沒有基準」。
 
 **整份 plan 完成時不索取 checkpoint**：沒有 ready step 就沒有下一步要交接，該講的話在完成區塊（對 Acceptance Criteria 逐項確認、然後 `/plan-archive`）。要查驗仍可隨時跑 `plan_runner.py checkpoint <plan>`。
 
-**沒有 sticky 旗標，也不需要**：沒寫就每次都印，寫了就塌成一行 `CHECKPOINT OK`——重複印本身就是壓力，而且會自己解除。新 phase 一有 step 完成，規則 3 也自行失效。
+**沒有 sticky 旗標，也不需要**：沒寫就每次都印，寫了就塌成一行 `CHECKPOINT OK`——重複印本身就是壓力，而且會自己解除。新 phase 一有 step 完成，規則 3 也自行失效；規則 4 的基準寫在 checkpoint 檔自己身上，**寫一份新的就自動歸零**，沒有任何欄位需要誰記得去清。
 
 **內容安全規則**：明文禁止貼 log 原文、禁止任何 token / key / password / JWT。`.plan-state/*.checkpoint.md` **在 `.gitignore` 裡，不進版控**（高頻改寫的 WIP 快照，每次 `checkpoint_pending` 觸發都可能整份重寫）——但這是最後一道防線，不是可以鬆懈的理由，寫的當下就當作可能外流處理。
 
@@ -200,6 +204,57 @@ LARGE-WORK: Phase 1: 大工程 估計 210 分鐘，建議拆分
 **只警告，不 block**——`next` 照常把 ready step 派出去。理由是這裡沒有外層 looper 可以承接一個失敗的 block：AgentFlow 對應的 `round-linter.js` 敢直接 fail，是因為它跑在 headless 迴圈裡，硬 block 只是換下一輪重跑；我們是人在看終端，硬 block 只會卡住使用者。
 
 `recap`（跨機制的單一恢復入口）獨立成下一節「recap — 單一恢復入口」。
+
+## Stop hook 會擋什麼、不會擋什麼（模式 B）
+
+只有模式 B 會遇到這一節；模式 A 沒有 hook，不受影響。
+
+Stop hook 有**兩級**送達，差別不只是力道，還有**收件人**：
+
+| 層級 | 輸出 | 誰看得到 | 後果 |
+|---|---|---|---|
+| **阻擋層** | `decision: block` + `reason` | model（會被餵回去，要求繼續） | 這一輪不准結束 |
+| **警告層** | `systemMessage` | **使用者**（終端訊息） | 不擋，只是講一聲 |
+
+分級的原則只有一條，程式註解裡逐字寫著同一句：
+
+> 一個檢查該不該在進行中就擋，取決於現在不修會不會讓後面的判定失效或不可逆，而不是取決於它有多重要。
+
+四個會擋的分支，各自的層級與上限：
+
+| 分支 | 什麼時候擋 | 什麼時候降為警告 |
+|---|---|---|
+| 派下一個 ready step | 一直擋（這是推進機制本身，不是檢查） | 本輪續推額度用完（`BLOCK_BUDGET`，預設 7） |
+| 催回報 in_progress step | 同一個 step 前 3 次（`HOOK_NAG_MAX`） | 第 4 次起，該 step 剩下的時間都只警告 |
+| 等背景工作收斂 | 同一段等待前 2 次（`HOOK_BG_POLL_MAX`） | 第 3 次起只警告 |
+| 全部完成的公告 | 一次（之後 pointer 自刪） | — |
+
+**降級不是靜音。** 兩個降級點都會印一行 `[plan-run] …降為提示、不再阻擋…`，講清楚是哪個 step、被提醒過幾次。（以前「等背景工作」的逃生口是靜悄悄放行，使用者只會看到 hook 突然不講話了。）
+
+### 計數器各自掛在哪個軸上
+
+`stop_hook_active` 的真正語意是「**這次 Stop 是不是上一次 hook block 造成的續推**」，**與人類無關**——實測（n=4）任何新 prompt（人打字、`-p`、`--resume`、teammate 訊息）都會清掉它。所以「每則訊息歸零」只對其中一個計數器是對的：
+
+| 計數器 | 在數什麼 | 什麼時候歸零 |
+|---|---|---|
+| `consecutive_blocks` | 這一輪擋了幾次 | 新 prompt（harness 的續推上限本來就是 per turn） |
+| `bg_poll_count` | **一段背景等待**輪詢了幾次 | 那段等待結束（背景工作沒了／step 換了／沒有 in_progress） |
+| `nag_counts` | 對**同一個 step** 催了幾次 | 換成別的 step，或沒有 in_progress step |
+| `advance_count` | 累計真實推進（completed+skipped 增加）幾次 | **永不歸零**；`complete`／`skip` 與 hook 都會寫 |
+
+`plan_runner.py pointer` 會把四個並排印出來，`@` 後面是該計數器屬於哪個 step：
+
+```
+Counts: consecutive_blocks=1 (per turn) bg_poll_count=0@None nag_counts=2@S6.3 advance_count=9 (cumulative)
+```
+
+> **這是行為變更。** 後兩個計數器以前掛在 turn 軸上，於是在 multi-agent 長跑裡每則 agent 訊息都把它們歸零——逃生口永遠開不了、升級提示永遠不出現，實測只在 1/7 ↔ 2/7 之間來回。
+
+### 「有背景工作」現在要能歸屬到這份 plan
+
+「等背景工作收斂」只在 **in_progress step 有 `task_id`，且該 task_id 出現在 Stop payload 的 `background_tasks` 裡**時才成立。以前只看「這個 session 有沒有背景工作」——那是 session 的屬性不是 plan 的，實測一個 session 為**另一份 plan** 派了 19 隻 agent，結果每一輪都被擋在「S0.1 有背景工作尚未收斂」。
+
+**後果要講白**：`task_id` 只有在 `start --task-id` 時才有，而 Task 工具在現行模型上預設不註冊（見本文件開頭那條），所以**多數實跑中這條分支會安靜**，未回報的 step 改由「催回報」那條接手。這是預期的讀法——沒有 `task_id` 就沒有證據說那些背景工作是這份 plan 的，而對一個沒人回報的 step 該講的話本來就是「請回報」。
 
 > **移除告示（2026-09-08，S6.2）**：這裡原本有第五個機制——讓「有既有慣例可循、完全可逆、不離開本機、不超預算」的例行問題可以不停下來問人就自動決定，外加一組四類「無論如何都要停下來等人」的判定（只有主人能做的決定／無法復原的事／會透過新管道離開機器的事／超過約定花費上限的事）。兩者都已整個移除：核心的自動作答從未被實作（只印一行狀態與改一個回報欄位），而那組判定的送達本身在 24 份真實 plan、203 個 step 的實測中誤報率 80.6%。判準與細節見 `plans/active/unattended-long-run-governance.md` §2.6 與 Phase 6（S6.2）。
 

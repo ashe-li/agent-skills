@@ -706,7 +706,7 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
     5. **同一輪解鎖多個 step 時指示只印一次**（掛第一個 block）。掛在共用前綴會讓 4 個 ready step 印 4 份同樣的十二行——那正是 S6.2 移除機制 5 的理由。
     6. **`checkpoint <plan>`（無旗標）跑 gate 並回 exit 0/1**，超出字面上的「`checkpoint --template` 子指令」。沒有它就無法從 shell 逐一驗破壞，驗收本身會做不到。
     7. **模板直接填真實時間戳**（AgentFlow 留佔位字串）。依據是 AgentFlow 自己的 I-056（model 猜過時間）；我們的模板是即時產生的，可以給真值，重用舊模板由 mtime 交叉比對抓。
-  - Addendum-3（設計性質，值得保留）：checkpoint 指示**不靠 sticky 旗標壓抑，靠「把檔案寫出來」滿足**——沒寫就每次都印，寫了就塌成一行 `CHECKPOINT OK — 5/5 gates pass`。所以不需要為防重複而引進計數器或新 pointer 欄位；重複印本身就是壓力來源，而且會自己解除。這是「facts 由程式收集」相對「model 自報」的直接紅利：狀態不必被記住，因為它每次都可以被重新查證。
+  - Addendum-3（設計性質，值得保留）：checkpoint 指示**不靠 sticky 旗標壓抑，靠「把檔案寫出來」滿足**——沒寫就每次都印，寫了就塌成一行 `CHECKPOINT OK — 5/5 gates pass`。所以**這個義務的壓抑**不需要引進計數器或新 pointer 欄位；重複印本身就是壓力來源，而且會自己解除。（範圍限定：這句話講的是 checkpoint 義務的壓抑，**不是**全面禁止新增 pointer 欄位——2026-09-09 S6.3 誤讀過一次，已澄清。）這是「facts 由程式收集」相對「model 自報」的直接紅利：狀態不必被記住，因為它每次都可以被重新查證。
 
 - [ ] **S6.2** — 機制 5（auto-reply 與 hard-stop 送達）整個移除
   - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `scripts/tests/test_plan_run_hook.py`, `plan-run/SKILL.md`, `CHANGELOG.md`
@@ -723,12 +723,18 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
   - Why: 四類硬停止與 same-pass provenance **在 AgentFlow 也只是文字，`scripts/` 零實作**（研究 #21／#22）——我們當初從 `AG_GUIDE.zh-tw.md:119` 抄來時它就不是機制。實際上線的只有 hard-stop 的文字送達，而它不停任何東西，只是把文字附加在本來就會發生的 block 後面，實測誤報 80.6%（24 份 plan／203 步；本 plan 自己 15 步命中 6、6 個全錯）。依「加一次停必須換到東西」的判準：**一份 80% 錯的收據，讀者三天內會學會跳過那一段，而它佔的是 hook reason 裡最貴的版面。**
 
 - [ ] **S6.3** — 計數器拆分與兩級嚴格度
-  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`
+  - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_run_hook.py`, `plan-run/SKILL.md`
   - Agent: general-purpose (Opus)
   - Estimated: 120m
   - Action: 先寫測試再實作。**(a) 拆計數器**：`consecutive_blocks` 維持現狀（對 harness 的 per-turn 8 步上限是**正確的**，不要動）；另立一個只在**真實推進**時遞增的計數，沿用 `_record_advance_if_progressed()` 已有的「completed+skipped 真的增加了」偵測。**(b) 修 `bg_poll_count` 與 `nag_counts`**：兩者目前被每則訊息歸零，導致逃生口永不開、升級訊息永不出現——它們不該掛在 turn 軸上。**(c) 兩級嚴格度**（研究 #14）：把「幾乎每輪都會觸發」的檢查降成警告層（`_hook_allow(ctx, system_message=...)`），只保留少數在阻擋層（`_hook_block`）。篩選原則**逐字寫進程式碼註解**：「一個檢查該不該在進行中就擋，取決於**現在不修會不會讓後面的判定失效或不可逆**，而不是取決於它有多重要。」**(d)** 修正 `_branch_background_tasks()`：限縮成「in_progress step 有 `task_id` 且該 task_id 在 `background_tasks` 裡」才 block——目前它讀的是整個 session 的背景工作、無 plan 識別，而本 repo 的工作模式（指揮官不下場、dispatch-loop）**要求**有背景 agent 在跑，這條 branch 因此幾乎恆真。
   - Dependencies: S5.1
   - Why: `stop_hook_active` 的真正語意經實測（n=4）是「這次 Stop 是不是上一次 hook block 造成的續推」，**與人類無關**——三處 docstring 的「a human just spoke」為假（已於 S5.1 更正註解）。後果：7 輪 check-in 安全閥**在它唯一被設計來服務的情境（multi-agent 長跑）裡永遠不觸發**，因為每則 teammate 訊息都開新 turn。兩個獨立 session 觀察到計數器只在 1/7 ↔ 2/7 之間交替。
+
+  - Addendum（2026-09-09，實作回報後裁決三項分歧）：
+    1. **`advance_count` 必須有決策消費者，不能只寫入與顯示。** 一個有 writer 有 reader、卻沒有任何判定讀它的欄位，正是本 Phase 在修的形狀（見 KB `before-building-on-an-existing-field-grep-for-its-writer-not-just-its-readers`）。加**第四條 checkpoint 觸發**：距上次 checkpoint 的真實推進數 ≥ N。補的洞是「一個又長又快的 phase」——同 phase 連做 12 步、25 分鐘內做完，現有三條（hook 輪數預算／45 分鐘停滯／phase 邊界）都不觸發，而那正是「人回來接不上」最嚴重的情境。**基準記在 checkpoint 檔的標頭裡，不放 pointer**：狀態住在產物裡、每次重新查證、寫新檔自動歸零，與 S6.1 同一條設計線。舊檔缺該行時安全降級為「這條不成立」。`consecutive_blocks` 仍不動。
+    2. **`HOOK_NAG_MAX = 3` 是判斷值**，註解須明講它與有 S1.1 校準的 `BLOCK_BUDGET` 不同級。
+    3. 檔案行數照原裁定不拆，只更新數字。
+    4. **Files 欄漏了 `plan-run/SKILL.md`**（已補入上方）。(c) 兩級嚴格度與 (b) 計數軸都是使用者看得到的行為變化（以前會擋、現在是警告），(d) 另有「Task tools 預設未註冊，多數情況此 branch 沉默、落到 branch (9)」的後果，三者都必須進文件。
 
 - [ ] **S6.4** — CLI 表達力：drift resync、skip 理由、in_progress 轉 skipped
   - Files: `scripts/plan_runner.py`, `scripts/tests/test_plan_runner_regression.py`, `plan-run/SKILL.md`

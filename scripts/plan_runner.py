@@ -1243,7 +1243,7 @@ def _ready_step_header_and_fields(
     block before it was pulled out here.
 
     S6.2 removed mechanism 5's per-step findings, which this function used
-    to append (plans/active/unattended-long-run-governance.md Phase 6) --
+    to append (plans/completed/unattended-long-run-governance.md Phase 6) --
     see the removal notice near `decide_budget()`. A future renderer that
     needs to surface per-step findings again should hang them here, for
     the same reason the block was extracted in the first place.
@@ -2415,7 +2415,7 @@ def decide_budget(
 # waking-the-owner setting plus its four-category owner/irreversible/
 # outward-channel/over-budget check -- that stood in this section
 # (2026-09-08, S6.2). Neither is coming back by re-adding a constant --
-# see plans/active/unattended-long-run-governance.md section 2.6 and
+# see plans/completed/unattended-long-run-governance.md section 2.6 and
 # Phase 6 (S6.2) for the design record and both removal notices.
 #
 # A third thing went with them, one step later: `_checkpoint_writable()`,

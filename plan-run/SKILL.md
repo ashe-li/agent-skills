@@ -117,7 +117,8 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 `init` 把 plan.md 正規化後的內容算 SHA-256，寫進 state 的 `plan_sha256`；`status`／`next` 每次讀取都重算並比對。
 
 - 不符時，`status`／`next` 的輸出**最頂端**印一段 `DRIFT:` 警告。`next` 預設**拒絕**派下一步（exit code 2，且不消耗 delta 追蹤），逃生口是 `next <plan> --ignore-drift`（照舊派工，警告仍印）。`status` 只警告，不 block。
-- 標準修法固定是 `rm <state> && plan_runner.py init <plan>`——`init` 會整份重建 state，**清掉全部已完成進度**。這帖藥沒有分輕重：純散文變更（例如把一段裁決補進 plan）跟真正改了 step 結構，觸發的是同一套修法。動手前先確認真的值得清掉進度；不想清就手動重算 `plan_fingerprint()` 回寫 `plan_sha256`，或整份保留、改跑 `--ignore-drift` 先繼續。
+- **第一順位修法是 `plan_runner.py resync <plan>`**（S6.4a）：比對 plan 與 state 的 step id 集合＋每個 id 的 deps，**未變**（純散文——例如把一段裁決補進 plan、改一句 Why）就只回寫 `plan_sha256`，**保留全部進度**；**變了**就拒絕、印出差異（新增/消失的 id、deps 改動的 id），不寫入任何東西。這條路徑存在的理由：同一輪實測 drift 觸發 4 次全是散文變更，而補一段裁決進 plan 正是這套治理機制自己在鼓勵的行為——不該讓它撞上機制最重的懲罰。
+- `rm <state> && plan_runner.py init <plan>`（整份重建、**清掉全部已完成進度**）**降級為 `resync` 拒絕之後才用**，即 step 結構真的變了的情況。而即使結構真的變了，也不必然要走這條清空路徑——plan 長出新 step 是正常事件，改用 `plan_runner.py init <plan> --merge`（S6.4d）：以新 plan 的結構重建，但既有 step id 的 `status`／`task_id`／時間戳／`skip_reason`／`failure_reason` 原樣保留，新 step 落地為 pending；plan 裡消失的 step id 不會被靜默丟掉或保留——會列出來要求加 `--drop-removed` 才會捨棄。
 - 既有 state 若缺 `plan_sha256` 欄位，視為 legacy，只印一次性提示，**永不 block**——這是為了讓升級前就存在的 state 不會被靜默改變行為。
 
 ### 2. `stop.md` 停機閘門
@@ -313,7 +314,7 @@ Next work action: 跑 plan_runner.py next 拿 S1.2 派工
 > Step `<id>` 失敗：`<reason>`；後續 blocked：`<list>`
 >
 > 1. **重試** — `plan_runner.py reset "$ARGUMENTS" --step=<id>`
-> 2. **跳過** — `plan_runner.py skip "$ARGUMENTS" <id>`（風險自負）
+> 2. **跳過** — `plan_runner.py skip "$ARGUMENTS" <id> --reason="<為什麼跳過>"`（風險自負；`--reason` 選填但建議加，`status` 會印出來，交接時看得到為什麼跳）
 > 3. **中止** — `plan_runner.py pause`（不吃 plan 參數，作用於 cwd 的 pointer）
 
 ## Step 4: 完成驗證
@@ -352,12 +353,13 @@ Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete` �
 ```text
    pending ──start──> in_progress ──complete──> completed
       │                    │
-      │                    └──fail──> failed
+      │                    ├──fail──> failed
+      │                    └──skip──> skipped
       ├──(dep 失敗自動)──> blocked
       └──skip──> skipped
 ```
 
-`pending` 等待中（deps 未滿足或未啟動）；`in_progress` 執行中（有 Task 工具時已回寫 task_id，否則 null）；`failed` 需使用者決定後續；`blocked` 因 dep 失敗而 block，dep reset 後自動回 pending；`skipped` 使用者主動跳過，後續 deps 視同 completed 解 block。
+`pending` 等待中（deps 未滿足或未啟動）；`in_progress` 執行中（有 Task 工具時已回寫 task_id，否則 null）；`failed` 需使用者決定後續；`blocked` 因 dep 失敗而 block，dep reset 後自動回 pending；`skipped` 使用者主動跳過，後續 deps 視同 completed 解 block。**`in_progress → skipped`**（S6.4c）：範圍被砍掉是長跑中的正常事件，不該只有 `fail`（會自動寫 stop.md 停機）一條出口。`skip` 可加 `--reason`（S6.4b），寫進 `step["skip_reason"]`，`status` 會印出來——沒加就不留字，跟以前一樣。
 
 transition 由 Python 強制驗證，不允許 `completed → pending` 等非法轉移（避免覆寫已完成工作）。
 

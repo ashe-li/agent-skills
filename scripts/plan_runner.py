@@ -13,8 +13,10 @@ Usage:
     plan_runner.py start plans/active/foo.md S0.1 --task-id=tsk_abc
     plan_runner.py complete plans/active/foo.md S0.1
     plan_runner.py fail plans/active/foo.md S0.1 --reason="..."
-    plan_runner.py skip plans/active/foo.md S0.2
+    plan_runner.py skip plans/active/foo.md S0.2 --reason="..."
     plan_runner.py status plans/active/foo.md
+    plan_runner.py resync plans/active/foo.md  # (S6.4a) prose-only drift: keep progress
+    plan_runner.py init plans/active/foo.md --merge  # (S6.4d) plan grew steps: keep progress
     plan_runner.py reset plans/active/foo.md --step=S0.1
     plan_runner.py set-parent plans/active/foo.md --task-id=tsk_parent
     plan_runner.py dag plans/active/foo.md [--format=dot]
@@ -55,7 +57,16 @@ SKIPPED = "skipped"
 VALID_TRANSITIONS: dict[str, set[str]] = {
     PENDING: {IN_PROGRESS, BLOCKED, SKIPPED},
     BLOCKED: {PENDING, SKIPPED},
-    IN_PROGRESS: {COMPLETED, FAILED},
+    # (S6.4c) IN_PROGRESS -> SKIPPED: scope getting cut mid-work is a normal
+    # long-run event, not a failure. Before this, the only exits from
+    # IN_PROGRESS were COMPLETED or FAILED -- and FAILED auto-writes the
+    # stop marker (_write_stop_marker_on_fail) and halts unattended
+    # advance. That made "the scope was cut" indistinguishable from "the
+    # run is broken and needs a human", which is itself the wrong kind of
+    # stop (plan Phase 6 preamble: a halt must buy something). The only
+    # workaround before this was `reset` back to PENDING and then `skip`,
+    # which silently drops started_at/task_id along the way.
+    IN_PROGRESS: {COMPLETED, FAILED, SKIPPED},
     FAILED: {PENDING, IN_PROGRESS, SKIPPED},
     COMPLETED: {COMPLETED},
     SKIPPED: {PENDING},
@@ -656,6 +667,44 @@ def check_plan_drift(plan_path: Path, state: dict[str, Any]) -> PlanDrift:
     return PlanDrift(DRIFT_DETECTED, expected, actual)
 
 
+def _diff_plan_structure(
+    parsed: dict[str, Any], state: dict[str, Any]
+) -> dict[str, Any]:
+    """Structural diff between a freshly parsed plan.md and existing state:
+    the step id set and each shared id's deps (order-insensitive). Content
+    changes to title/action/agent/etc. are NOT compared here -- those are
+    exactly the prose churn `resync` (S6.4a) exists to absorb without a
+    fight; only the shape of the DAG matters to this function.
+
+    Shared by `resync` (S6.4a, refuses the moment anything comes back
+    non-empty) and `init --merge` (S6.4d, uses `removed` to decide whether
+    it needs `--drop-removed` before it will write anything).
+
+    Returns:
+        added:        step ids in `parsed` but not in `state["steps"]`.
+        removed:      step ids in `state["steps"]` but not in `parsed`.
+        changed_deps: [{"id", "plan_deps", "state_deps"}] for ids present
+                      in both whose dependency sets differ.
+    """
+    plan_ids = set(parsed["steps"].keys())
+    state_ids = set(state["steps"].keys())
+    changed_deps = []
+    for sid in sorted(plan_ids & state_ids):
+        plan_deps = set(parsed["steps"][sid]["deps"])
+        state_deps = set(state["steps"][sid].get("deps") or [])
+        if plan_deps != state_deps:
+            changed_deps.append({
+                "id": sid,
+                "plan_deps": sorted(plan_deps),
+                "state_deps": sorted(state_deps),
+            })
+    return {
+        "added": sorted(plan_ids - state_ids),
+        "removed": sorted(state_ids - plan_ids),
+        "changed_deps": changed_deps,
+    }
+
+
 def format_drift_banner(plan_path: Path, drift: PlanDrift, *, blocked: bool) -> str:
     """Human-facing banner, printed at the very top of `status` / `next`."""
     state_path = state_path_for(plan_path)
@@ -675,7 +724,18 @@ def format_drift_banner(plan_path: Path, drift: PlanDrift, *, blocked: bool) -> 
         f"       plan:  {plan_path}",
         f"       state: {state_path}",
         f"       expected {drift.expected[:12]} / actual {(drift.actual or '')[:12]}",
-        f"       修法：rm {state_path} && plan_runner.py init {plan_path}",
+        # (S6.4a) First-priority fix is now `resync`, not the destructive
+        # rebuild: measured this session, drift fired 4 times and every
+        # one was a prose-only edit (an Addendum, a recorded decision) --
+        # step ids and deps never moved. `resync` detects exactly that
+        # case and only rewrites plan_sha256, keeping every step's
+        # status/task_id/timestamps. It refuses (and prints a diff) the
+        # moment the step graph actually changed, which is the only case
+        # that still needs the line below.
+        f"       修法：先跑 plan_runner.py resync {plan_path}",
+        "             （純散文變更會保留全部進度並清除本提示；step 結構真的變了則拒絕並列出差異，不動 state）。",
+        f"       resync 拒絕時才用：rm {state_path} && plan_runner.py init {plan_path}"
+        "（會清空全部進度——真的長出新 step 時改用 init --merge）。",
     ]
     if blocked:
         lines.append("       已拒絕派下一步。確定要照舊快照推，加 --ignore-drift。")
@@ -796,6 +856,10 @@ def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
             "started_at": None,
             "completed_at": None,
             "failure_reason": None,
+            # (S6.4b) legacy states predate this field; every reader uses
+            # .get("skip_reason") so its absence degrades to falsy, never
+            # a KeyError.
+            "skip_reason": None,
         }
 
     try:
@@ -919,6 +983,14 @@ def transition_step(
     elif new_status == FAILED:
         step["completed_at"] = now_iso()
         step["failure_reason"] = kwargs.get("reason", "")
+    elif new_status == SKIPPED:
+        # (S6.4b) Deliberately NOT setting completed_at here: that field
+        # feeds _state_last_finished_timestamp()'s freshness gate, whose
+        # docstring documents "skipped steps carry NO completed_at" as
+        # load-bearing (a plan advanced purely by skips must yield None,
+        # so the freshness gate falls back to the pointer's own timestamp
+        # instead of inventing progress the run did not make).
+        step["skip_reason"] = kwargs.get("reason", "")
     recompute_blocked_status(state)
 
 
@@ -1311,7 +1383,11 @@ def format_status_md(data: dict[str, Any]) -> str:
         deps = f"  <- {','.join(step['deps'])}" if step["deps"] else ""
         tid = f"  task:{step['task_id']}" if step.get("task_id") else ""
         fr = f"  reason:{step['failure_reason']}" if step.get("failure_reason") else ""
-        lines.append(f"{icon[step['status']]} {step['id']} {step['title']}{deps}{tid}{fr}")
+        # (S6.4b) skip_reason is absent (not just falsy) on legacy state
+        # entries created before this field existed -- .get() degrades
+        # that to the same "no reason to print" branch as an empty string.
+        sr = f"  skip_reason:{step['skip_reason']}" if step.get("skip_reason") else ""
+        lines.append(f"{icon[step['status']]} {step['id']} {step['title']}{deps}{tid}{fr}{sr}")
     return "\n".join(lines)
 
 
@@ -4843,6 +4919,10 @@ def cmd_init(args: argparse.Namespace) -> int:
         emit(payload)
         return 1
     existing = load_state(plan_path)
+
+    if getattr(args, "merge", False):
+        return _cmd_init_merge(args, plan_path, parsed, existing)
+
     if existing and not args.force:
         emit({
             "error": "State already exists. Use --force to reinit.",
@@ -4869,6 +4949,134 @@ def cmd_init(args: argparse.Namespace) -> int:
         else:
             _print_attach_result(plan_path, Path.cwd().resolve(), pointer_path)
     return 0
+
+
+# Progress fields carried over verbatim by `init --merge` (S6.4d) for every
+# step id present in both the old state and the newly parsed plan. NOT
+# copied: "deps"/"title"/"agent"/"skill"/"command"/"files"/"action"/
+# "risk"/"estimated"/"phase" -- those come from the current plan.md, which
+# is the entire point of re-parsing rather than just patching the old
+# state in place. "id" is also excluded; init_state() already sets it from
+# the dict key.
+_MERGE_CARRY_FIELDS = (
+    "status", "task_id", "started_at", "completed_at",
+    "failure_reason", "skip_reason", "session_id",
+)
+
+
+def _cmd_init_merge(
+    args: argparse.Namespace,
+    plan_path: Path,
+    parsed: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> int:
+    """`init --merge` (S6.4d): plan.md grew or shrank steps, and the run's
+    progress should survive that the way it would not survive `init
+    --force` (which calls init_state() fresh and discards every status/
+    task_id/timestamp).
+
+    Long-running plans growing new steps is a normal event, not a
+    reason to throw away what already happened -- documented on this
+    plan itself: 2026-09-08 it grew from 15 to 20 steps (Phase 6/7 added)
+    and the only path available at the time was hand-writing a Python
+    snippet to splice 13 steps' progress back into a rebuilt state.
+
+    Complements `resync` (S6.4a): resync handles "the step graph did NOT
+    change, only prose did" by touching nothing but plan_sha256. This
+    handles "the step graph DID change" by rebuilding from the new plan
+    (so ids/deps/titles/etc. all come from the current plan.md) while
+    carrying `_MERGE_CARRY_FIELDS` forward for every step id that exists
+    in both.
+
+    Step ids that vanished from the plan are never silently dropped NOR
+    silently kept (kept where? the new plan has no slot for them) --
+    they are reported and merge refuses until the caller passes
+    `--drop-removed`, an explicit acknowledgment that their progress is
+    being discarded. This is the one piece of the plan's "let the
+    reader decide" instruction that a non-interactive CLI can enforce:
+    a decision the caller must spell out, not a prompt it can dodge by
+    hitting enter.
+    """
+    if existing is None:
+        emit({
+            "error": "No existing state to merge — use plain `init` instead.",
+            "state_path": str(state_path_for(plan_path)),
+        })
+        return 1
+
+    diff = _diff_plan_structure(parsed, existing)
+    if diff["removed"] and not getattr(args, "drop_removed", False):
+        emit({
+            "error": "plan 移除了既有 step，需要人裁決是否捨棄其進度",
+            "removed_steps": [
+                {
+                    "id": sid,
+                    "status": existing["steps"][sid]["status"],
+                    "task_id": existing["steps"][sid].get("task_id"),
+                }
+                for sid in diff["removed"]
+            ],
+            "hint": "確認要捨棄以上 step 的進度後，加 --drop-removed 重跑 `init --merge`。"
+                    "merge 目前尚未寫入任何東西。",
+        })
+        return 1
+
+    new_state = init_state(plan_path, parsed)
+    carried_over: list[str] = []
+    for sid, step in new_state["steps"].items():
+        old_step = existing["steps"].get(sid)
+        if old_step is None:
+            continue  # genuinely new step -- stays PENDING from init_state()
+        for field in _MERGE_CARRY_FIELDS:
+            if field in old_step:
+                step[field] = old_step[field]
+        carried_over.append(sid)
+    new_state["parent_task_id"] = existing.get("parent_task_id")
+    recompute_blocked_status(new_state)
+    save_state(plan_path, new_state)
+
+    payload = {
+        "status": "merged",
+        "slug": new_state["slug"],
+        "title": new_state["title"],
+        "state_path": str(state_path_for(plan_path)),
+        "total_steps": len(new_state["steps"]),
+        "carried_over": sorted(carried_over),
+        "added": diff["added"],
+        "removed_dropped": diff["removed"],
+        "changed_deps": diff["changed_deps"],
+        "ready_steps": compute_ready_steps(new_state),
+        "summary": summary(new_state),
+    }
+    emit_formatted(payload, args.format, format_init_merge_md)
+    if getattr(args, "attach", True):
+        pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
+        if error is not None:
+            print(error)
+        else:
+            _print_attach_result(plan_path, Path.cwd().resolve(), pointer_path)
+    return 0
+
+
+def format_init_merge_md(data: dict[str, Any]) -> str:
+    s = data["summary"]
+    lines = [
+        f"# Merged: {data['title']}",
+        f"State: {data['state_path']}",
+        f"Progress kept: {s['progress']}" + (" — ALL DONE" if s["all_done"] else ""),
+        f"Carried over ({len(data['carried_over'])}): "
+        + (", ".join(data["carried_over"]) or "(none)"),
+        f"Added ({len(data['added'])}): " + (", ".join(data["added"]) or "(none)"),
+    ]
+    if data["removed_dropped"]:
+        lines.append(
+            f"Dropped ({len(data['removed_dropped'])}), per --drop-removed: "
+            + ", ".join(data["removed_dropped"])
+        )
+    if data["changed_deps"]:
+        lines.append(f"Deps changed on: {', '.join(d['id'] for d in data['changed_deps'])}")
+    lines.append(f"Ready now: {', '.join(data['ready_steps']) or '(none)'}")
+    return "\n".join(lines)
 
 
 def _require_state(plan_path: Path) -> dict[str, Any]:
@@ -5376,7 +5584,7 @@ def cmd_skip(args: argparse.Namespace) -> int:
         return 1
     advance_before = _advance_reference_before_command(plan_path, state)
     try:
-        transition_step(state, sid, SKIPPED)
+        transition_step(state, sid, SKIPPED, reason=args.reason or "")
     except ValueError as e:
         emit({"error": str(e)})
         return 1
@@ -5386,9 +5594,87 @@ def cmd_skip(args: argparse.Namespace) -> int:
         state, plan_path=plan_path, advance_reference=advance_before
     )
     save_state(plan_path, state)
-    payload = {"status": "skipped", "step": sid, "task_id": task_id, **view}
+    payload = {
+        "status": "skipped", "step": sid, "task_id": task_id,
+        "reason": args.reason, **view,
+    }
     emit_formatted(payload, args.format, lambda d: format_transition_md("skipped", d))
     return 0
+
+
+def cmd_resync(args: argparse.Namespace) -> int:
+    """Reconcile a drifted plan_sha256 without touching any step's progress
+    (S6.4a).
+
+    check_plan_drift() already told the caller the fingerprints differ;
+    what it cannot tell them is whether that difference is safe to absorb.
+    This command answers that by re-deriving the question drift detection
+    was actually trying to protect: has the *step graph* (id set + each
+    id's deps) changed, or was it prose (an Addendum, a recorded decision,
+    a reworded Why)? Measured this session: drift fired 4 times, all 4
+    were prose-only -- plan.md's Addendum paragraphs are exactly the kind
+    of edit the DAG never sees.
+
+    - Structure unchanged: only `plan_sha256` is rewritten. init_state()
+      is never called, so no step's status/task_id/started_at/
+      completed_at/skip_reason/failure_reason is touched.
+    - Structure changed: refuses, prints the diff (added/removed ids,
+      ids whose deps changed), and does not write state at all. The
+      reader chooses `init --merge` (S6.4d, for genuine plan growth),
+      `--ignore-drift` (proceed on the old snapshot anyway), or a manual
+      state edit -- resync itself makes none of those calls.
+    """
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    if not plan_path.exists():
+        emit({"error": f"Plan not found: {plan_path}"})
+        return 1
+    parsed = parse_plan(plan_path)
+    errors = validate_dag(parsed)
+    if errors:
+        emit({"error": "DAG validation failed", "details": errors})
+        return 1
+
+    diff = _diff_plan_structure(parsed, state)
+    if diff["added"] or diff["removed"] or diff["changed_deps"]:
+        emit({
+            "error": "step 結構已變更 — resync 拒絕",
+            "diff": diff,
+            "hint": (
+                "這不是純散文變更。真的長出新 step 用 `init --merge`（S6.4d）承接進度；"
+                "確定要照舊快照推可以加 `next --ignore-drift`；也可以人工核對後手動處理。"
+                "resync 沒有寫入任何東西。"
+            ),
+        })
+        return 1
+
+    try:
+        new_sha = plan_fingerprint(plan_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        emit({"error": f"讀不到 plan.md：{exc}"})
+        return 1
+
+    old_sha = state.get("plan_sha256")
+    state["plan_sha256"] = new_sha
+    save_state(plan_path, state)
+    payload = {
+        "status": "resynced",
+        "plan_sha256_old": old_sha,
+        "plan_sha256_new": new_sha,
+        "summary": summary(state),
+        "note": "只有散文變了 — 全部進度已保留，drift 已清除。",
+    }
+    emit_formatted(payload, args.format, format_resync_md)
+    return 0
+
+
+def format_resync_md(data: dict[str, Any]) -> str:
+    s = data["summary"]
+    return "\n".join([
+        "# resync: OK",
+        f"Progress: {s['progress']}" + (" — ALL DONE" if s["all_done"] else ""),
+        data["note"],
+    ])
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -5412,6 +5698,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "deps": s["deps"],
                 "task_id": s["task_id"],
                 "failure_reason": s.get("failure_reason"),
+                "skip_reason": s.get("skip_reason"),
             }
             for sid, s in state["steps"].items()
         ],
@@ -5630,6 +5917,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         s["started_at"] = None
         s["completed_at"] = None
         s["failure_reason"] = None
+        s["skip_reason"] = None
 
     if args.all:
         for s in state["steps"].values():
@@ -6199,6 +6487,18 @@ def main() -> None:
         "--no-attach", dest="attach", action="store_false",
         help="Skip pointer attach after init",
     )
+    p_init.add_argument(
+        "--merge", action="store_true",
+        help="(S6.4d) Plan grew/shrank steps: rebuild from the current "
+             "plan.md but carry every existing step id's status/task_id/"
+             "timestamps/skip_reason/failure_reason forward. Refuses if "
+             "any step id disappeared, unless --drop-removed is also set.",
+    )
+    p_init.add_argument(
+        "--drop-removed", action="store_true",
+        help="With --merge: acknowledge that step ids no longer in "
+             "plan.md have their progress discarded, and proceed.",
+    )
     add_format_flag(p_init)
     p_init.set_defaults(func=cmd_init)
 
@@ -6235,6 +6535,11 @@ def main() -> None:
     p_skip = sub.add_parser("skip", help="Mark step skipped")
     p_skip.add_argument("plan")
     p_skip.add_argument("step")
+    p_skip.add_argument(
+        "--reason", default="",
+        help="Why this step was skipped -- recorded as step.skip_reason "
+             "so `status` can show it later (S6.4b)",
+    )
     add_format_flag(p_skip)
     p_skip.set_defaults(func=cmd_skip)
 
@@ -6265,6 +6570,15 @@ def main() -> None:
     p_status.add_argument("plan")
     add_format_flag(p_status)
     p_status.set_defaults(func=cmd_status)
+
+    p_resync = sub.add_parser(
+        "resync",
+        help="(S6.4a) Prose-only plan.md drift: rewrite plan_sha256, keep all progress. "
+             "Refuses if the step id set or any step's deps actually changed.",
+    )
+    p_resync.add_argument("plan")
+    add_format_flag(p_resync)
+    p_resync.set_defaults(func=cmd_resync)
 
     p_index = sub.add_parser("index", help="Ultra-compact ID+status trace view")
     p_index.add_argument("plan")

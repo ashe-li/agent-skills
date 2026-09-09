@@ -3046,3 +3046,292 @@ class CheckpointAdvanceWiringTestCase(CheckpointGateFixture):
         ), contextlib.redirect_stdout(buffer):
             self.assertEqual(self.mod.cmd_checkpoint(args), 0)
         self.assertIn(f"{self.mod.CHECKPOINT_ADVANCE_LABEL} 0", buffer.getvalue())
+
+
+# ---------------------------------------------------------------------------
+# S6.4a -- `resync`: prose-only drift keeps progress, structural drift
+# refuses and diffs
+# ---------------------------------------------------------------------------
+
+# S1 -> S2 -> {S3, S4}, S3 -> S5. Same shape as PLAN_TEXT (module-level),
+# reused here under this class's own tempdir/slug so structural edits below
+# don't collide with other test classes' fixtures.
+RESYNC_PLAN_TEXT = PLAN_TEXT
+
+
+def _added_step_plan_text() -> str:
+    return RESYNC_PLAN_TEXT + (
+        "\n- [ ] S6 Sixth step\n"
+        "  - Dependencies: S5\n"
+        "  - Files: `f.py`\n"
+        "  - Action: do F\n"
+    )
+
+
+def _removed_step_plan_text() -> str:
+    lines = RESYNC_PLAN_TEXT.splitlines(keepends=True)
+    # Drop the S5 block (its own header line through the blank line after
+    # "Action: do E") -- S5 is a leaf (nothing depends on it), so the rest
+    # of the DAG stays valid.
+    start = next(i for i, l in enumerate(lines) if l.startswith("- [ ] S5"))
+    end = start + 4  # header + Dependencies + Files + Action
+    return "".join(lines[:start] + lines[end:])
+
+
+def _changed_deps_plan_text() -> str:
+    return RESYNC_PLAN_TEXT.replace(
+        "- [ ] S4 Fourth step\n  - Dependencies: S2",
+        "- [ ] S4 Fourth step\n  - Dependencies: S1",
+    )
+
+
+class ResyncCliTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "resync-plan.md"
+        self.plan_path.write_text(RESYNC_PLAN_TEXT, encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        # Give the plan some real progress before drifting it, so "progress
+        # preserved" has something concrete to check.
+        run_cli("start", str(self.plan_path), "S1", "--task-id", "tsk_s1")
+        run_cli("complete", str(self.plan_path), "S1")
+        run_cli("start", str(self.plan_path), "S2")
+
+    def read_state(self) -> dict:
+        sp = self.tmp_path / ".plan-state" / "resync-plan.state.json"
+        return json.loads(sp.read_text(encoding="utf-8"))
+
+    def test_prose_only_change_triggers_drift_first(self) -> None:
+        self.plan_path.write_text(
+            RESYNC_PLAN_TEXT + "\n> Addendum: 記錄一個裁決，純散文。\n",
+            encoding="utf-8",
+        )
+        r = run_cli("status", str(self.plan_path))
+        self.assertIn("DRIFT:", r.stdout)
+        self.assertIn("resync", r.stdout)
+
+    def test_resync_prose_only_change_preserves_progress_and_clears_drift(self) -> None:
+        before = self.read_state()
+        self.plan_path.write_text(
+            RESYNC_PLAN_TEXT + "\n> Addendum: 記錄一個裁決，純散文。\n",
+            encoding="utf-8",
+        )
+        r = run_cli("resync", str(self.plan_path), "--format", "json")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["status"], "resynced")
+
+        after = self.read_state()
+        self.assertNotEqual(after["plan_sha256"], before["plan_sha256"])
+        for sid in before["steps"]:
+            before_step = dict(before["steps"][sid])
+            after_step = dict(after["steps"][sid])
+            self.assertEqual(before_step, after_step, msg=f"step {sid} progress changed")
+
+        r2 = run_cli("status", str(self.plan_path))
+        self.assertNotIn("DRIFT:", r2.stdout)
+
+    def test_resync_refuses_when_step_added(self) -> None:
+        before = self.read_state()
+        self.plan_path.write_text(_added_step_plan_text(), encoding="utf-8")
+        r = run_cli("resync", str(self.plan_path), "--format", "json")
+        self.assertNotEqual(r.returncode, 0)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["diff"]["added"], ["S6"])
+        self.assertEqual(payload["diff"]["removed"], [])
+        self.assertEqual(self.read_state(), before, "resync must not write on refusal")
+
+    def test_resync_refuses_when_step_removed(self) -> None:
+        before = self.read_state()
+        self.plan_path.write_text(_removed_step_plan_text(), encoding="utf-8")
+        r = run_cli("resync", str(self.plan_path), "--format", "json")
+        self.assertNotEqual(r.returncode, 0)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["diff"]["removed"], ["S5"])
+        self.assertIn("init --merge", payload["hint"])
+        self.assertEqual(self.read_state(), before, "resync must not write on refusal")
+
+    def test_resync_refuses_when_deps_changed(self) -> None:
+        before = self.read_state()
+        self.plan_path.write_text(_changed_deps_plan_text(), encoding="utf-8")
+        r = run_cli("resync", str(self.plan_path), "--format", "json")
+        self.assertNotEqual(r.returncode, 0)
+        payload = json.loads(r.stdout)
+        ids_changed = [d["id"] for d in payload["diff"]["changed_deps"]]
+        self.assertEqual(ids_changed, ["S4"])
+        self.assertEqual(self.read_state(), before, "resync must not write on refusal")
+
+    def test_drift_banner_offers_resync_before_rm_and_init(self) -> None:
+        self.plan_path.write_text(
+            RESYNC_PLAN_TEXT + "\n> Addendum: 記錄一個裁決，純散文。\n",
+            encoding="utf-8",
+        )
+        r = run_cli("next", str(self.plan_path))
+        resync_pos = r.stdout.find("resync")
+        rm_pos = r.stdout.find("rm ")
+        self.assertNotEqual(resync_pos, -1)
+        self.assertNotEqual(rm_pos, -1)
+        self.assertLess(resync_pos, rm_pos, "resync must be offered before rm && init")
+
+
+# ---------------------------------------------------------------------------
+# S6.4d -- `init --merge`: plan grows/shrinks steps without discarding
+# progress
+# ---------------------------------------------------------------------------
+
+class InitMergeCliTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "merge-plan.md"
+        self.plan_path.write_text(RESYNC_PLAN_TEXT, encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+    def read_state(self) -> dict:
+        sp = self.tmp_path / ".plan-state" / "merge-plan.state.json"
+        return json.loads(sp.read_text(encoding="utf-8"))
+
+    def test_merge_carries_progress_and_adds_new_step_as_pending(self) -> None:
+        run_cli("start", str(self.plan_path), "S1", "--task-id", "tsk_s1")
+        run_cli("complete", str(self.plan_path), "S1")
+        run_cli("start", str(self.plan_path), "S2")
+        run_cli("complete", str(self.plan_path), "S2")
+        run_cli("start", str(self.plan_path), "S3", "--task-id", "tsk_s3")
+        run_cli("skip", str(self.plan_path), "S4", "--reason", "cut")
+
+        self.plan_path.write_text(_added_step_plan_text(), encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--merge", "--no-attach", "--format", "json")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["status"], "merged")
+        self.assertEqual(payload["added"], ["S6"])
+        self.assertEqual(sorted(payload["carried_over"]), ["S1", "S2", "S3", "S4", "S5"])
+
+        state = self.read_state()
+        self.assertEqual(state["steps"]["S1"]["status"], "completed")
+        self.assertEqual(state["steps"]["S2"]["status"], "completed")
+        self.assertEqual(state["steps"]["S3"]["status"], "in_progress")
+        self.assertEqual(state["steps"]["S3"]["task_id"], "tsk_s3")
+        self.assertIsNotNone(state["steps"]["S3"]["started_at"])
+        self.assertEqual(state["steps"]["S4"]["status"], "skipped")
+        self.assertEqual(state["steps"]["S4"]["skip_reason"], "cut")
+        # New step: pending, deps from the NEW plan.
+        self.assertEqual(state["steps"]["S6"]["status"], "pending")
+        self.assertEqual(state["steps"]["S6"]["deps"], ["S5"])
+
+    def test_merge_refuses_when_step_removed_without_flag(self) -> None:
+        run_cli("start", str(self.plan_path), "S1")
+        run_cli("complete", str(self.plan_path), "S1")
+        before = self.read_state()
+
+        self.plan_path.write_text(_removed_step_plan_text(), encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--merge", "--no-attach", "--format", "json")
+        self.assertNotEqual(r.returncode, 0)
+        payload = json.loads(r.stdout)
+        removed_ids = [s["id"] for s in payload["removed_steps"]]
+        self.assertEqual(removed_ids, ["S5"])
+        self.assertEqual(self.read_state(), before, "merge must not write on refusal")
+
+    def test_merge_drop_removed_discards_the_vanished_step(self) -> None:
+        run_cli("start", str(self.plan_path), "S1")
+        run_cli("complete", str(self.plan_path), "S1")
+
+        self.plan_path.write_text(_removed_step_plan_text(), encoding="utf-8")
+        r = run_cli(
+            "init", str(self.plan_path), "--merge", "--drop-removed",
+            "--no-attach", "--format", "json",
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["removed_dropped"], ["S5"])
+
+        state = self.read_state()
+        self.assertNotIn("S5", state["steps"])
+        self.assertEqual(state["steps"]["S1"]["status"], "completed")
+
+    def test_merge_without_existing_state_errors(self) -> None:
+        fresh_plan = self.tmp_path / "no-state-plan.md"
+        fresh_plan.write_text(RESYNC_PLAN_TEXT, encoding="utf-8")
+        r = run_cli("init", str(fresh_plan), "--merge", "--no-attach", "--format", "json")
+        self.assertNotEqual(r.returncode, 0)
+        payload = json.loads(r.stdout)
+        self.assertIn("merge", payload["error"])
+
+
+# ---------------------------------------------------------------------------
+# S6.4b/c -- skip --reason, and IN_PROGRESS -> SKIPPED
+# ---------------------------------------------------------------------------
+
+class SkipReasonAndInProgressTransitionTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.plan_path = self.tmp_path / "skip-plan.md"
+        self.plan_path.write_text(RESYNC_PLAN_TEXT, encoding="utf-8")
+        r = run_cli("init", str(self.plan_path), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+
+    def read_state(self) -> dict:
+        sp = self.tmp_path / ".plan-state" / "skip-plan.state.json"
+        return json.loads(sp.read_text(encoding="utf-8"))
+
+    def test_skip_reason_recorded_and_shown_in_status(self) -> None:
+        r = run_cli("skip", str(self.plan_path), "S1", "--reason", "scope cut")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("Reason: scope cut", r.stdout)
+        self.assertEqual(self.read_state()["steps"]["S1"]["skip_reason"], "scope cut")
+
+        s = run_cli("status", str(self.plan_path))
+        self.assertIn("skip_reason:scope cut", s.stdout)
+
+    def test_skip_without_reason_omits_reason_lines(self) -> None:
+        r = run_cli("skip", str(self.plan_path), "S1")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertNotIn("Reason:", r.stdout)
+        s = run_cli("status", str(self.plan_path))
+        self.assertNotIn("skip_reason:", s.stdout)
+
+    def test_reset_clears_skip_reason(self) -> None:
+        run_cli("skip", str(self.plan_path), "S1", "--reason", "scope cut")
+        r = run_cli("reset", str(self.plan_path), "--step", "S1")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        state = self.read_state()
+        self.assertIsNone(state["steps"]["S1"]["skip_reason"])
+        self.assertEqual(state["steps"]["S1"]["status"], "pending")
+
+    def test_in_progress_step_can_be_skipped_via_cli(self) -> None:
+        run_cli("start", str(self.plan_path), "S1")
+        r = run_cli("skip", str(self.plan_path), "S1", "--reason", "cut mid-work")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        state = self.read_state()
+        self.assertEqual(state["steps"]["S1"]["status"], "skipped")
+        self.assertEqual(state["steps"]["S1"]["skip_reason"], "cut mid-work")
+        # Load-bearing per _state_last_finished_timestamp()'s docstring:
+        # skipped steps carry NO completed_at, even when skipped straight
+        # out of in_progress.
+        self.assertIsNone(state["steps"]["S1"]["completed_at"])
+
+        status = run_cli("status", str(self.plan_path))
+        self.assertIn("[-] S1", status.stdout)
+
+    def test_in_progress_to_pending_still_rejected(self) -> None:
+        """S6.4c only adds IN_PROGRESS -> SKIPPED; every other rejection
+        the state machine already enforced must still hold."""
+        mod = load_module_from_path(PLAN_RUNNER, "plan_runner_transition_check")
+        state = {"steps": {"S1": {"status": mod.IN_PROGRESS, "deps": []}}}
+        with self.assertRaises(ValueError):
+            mod.transition_step(state, "S1", mod.PENDING)
+
+    def test_transition_step_in_progress_to_skipped_direct(self) -> None:
+        mod = load_module_from_path(PLAN_RUNNER, "plan_runner_transition_check2")
+        state = {"steps": {"S1": {"status": mod.IN_PROGRESS, "deps": []}}}
+        mod.transition_step(state, "S1", mod.SKIPPED, reason="direct cut")
+        self.assertEqual(state["steps"]["S1"]["status"], mod.SKIPPED)
+        self.assertEqual(state["steps"]["S1"]["skip_reason"], "direct cut")
+        self.assertNotIn("completed_at", state["steps"]["S1"])

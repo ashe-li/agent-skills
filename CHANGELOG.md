@@ -69,7 +69,7 @@
 
   來源是 **CodeRabbit on PR #67**。當時的處置只到文件層——`plan-run/SKILL.md` 改成「`init --format json` 一律補 `--no-attach`」，等於**要求每個呼叫端記得繞開一個預設就會踩到的坑**；本次補上 runner 端，讓預設路徑本身就安全，文件那條建議降級為選擇而非必要條件。做法是 JSON 模式把 attach 的成功與失敗訊息改寫到 stderr：它們是旁白，不是 payload 的一部分，而 stderr 正是旁白該去的地方。payload 欄位與 exit code 語意皆未動（attach 失敗仍回 0，那是既有語意，不在本次範圍）。
 
-  **md 模式逐位元組不變**：同一份 plan 分別以 main 版與本版跑 `init`（attach 預設開），stdout 兩邊都是 602 bytes 且 `cmp` 無差異，stderr 兩邊皆為空。
+  **md 模式逐位元組不變**：同一份 plan 分別以 main 版與本版跑 `init`（attach 預設開）md 模式 stdout 與 main 逐位元組相同。
 
   回歸測試落在 `scripts/tests/test_plan_runner_regression.py` 的 `InitAttachStreamTestCase`，4 個 case：①JSON＋attach 開 → stdout 可 `json.loads` 且 stderr 含 attach 三行；②JSON＋`--no-attach` → stderr 為空；③md＋attach 開 → attach 三行仍在 stdout、stderr 為空；④**attach 的失敗分支**（cwd 已綁定另一份 plan）同樣不得污染 stdout——這條路徑是另一個獨立的 `print()`，只修成功分支時最容易漏掉。四個 case 都在子行程裡把 `$HOME` 重導到 temp dir，pointer 因此落在 `<tmp>/.claude/plan-run/active/`，**不碰真實 `~/.claude/`、不在 repo 留下任何 state 產物**（既有測試是用 `--no-attach` 迴避這個問題，但本次要測的正是 attach 開著的預設路徑，只能改用隔離 HOME）。
 

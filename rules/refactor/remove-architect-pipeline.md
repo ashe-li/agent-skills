@@ -19,5 +19,4 @@
 ## 適用範圍
 
 - `/design` skill 的 Step 3 使用內建 `Plan` agent（非 `architect`）
-- `/assist` skill 的路由不可導向 `architect`
 - 任何 Agent tool 呼叫不可指定 `subagent_type="everything-claude-code:architect"` 或 `subagent_type="architect"`

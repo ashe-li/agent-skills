@@ -163,7 +163,7 @@ transition 由 Python 強制驗證，不允許 `completed → pending` 等非法
 
 ## 與其他 skill 的關係
 
-`/notion-plan`（抓需求）→ `/design`（產 plan）→ **`/plan-run`（依 plan 推進，本 skill）** → `/plan-archive`（歸檔）。`/verify-fix-loop`、`/code-review`、`/simplify` 由個別 step 的欄位引用。
+`/notion-plan`（抓需求）→ `/design`（產 plan）→ **`/plan-run`（依 plan 推進，本 skill）** → `/plan-archive`（歸檔）。`/code-review`、`/simplify` 由個別 step 的欄位引用。
 
 ## 約束
 

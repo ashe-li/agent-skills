@@ -784,6 +784,11 @@ S1.2 (state 欄位盤點) ─┼─> S2.2 (stop.md) ──────┤
     (k) **`/security-review` 記為未執行**（S6.5(a)），不是 FAIL 也不是 PASS。若驗收者所在的 session cwd 有 remote，可順手補跑並記錄；跑不了就照實記，**不得用替代審查的結果宣稱它通過**。
     (l) **測試套件連跑至少 5 次並保留完整 `-v` 輸出**。只跑一次的綠不算——本 plan 期間出現過兩次僅約 1/8 機率的 flake，其中一次只留摘要而無法歸因。
     (m) Addendum (e) 的「逐一 `find` 每個機制的產物」仍然有效，且現在**應該找得到 checkpoint 產物**——S6.1 之前是零份。找不到要說出是「沒有寫入者」還是「有寫入者但條件未成立」。
+    (n) **§11 的 AC1–AC22 有九條已隨機制移除而作廢，執行前先照本條收斂母體**——否則驗收者會對著不存在的機制找證據，而「找不到」在報告裡看起來會像 FAIL。逐條分三類：
+        - **仍然有效、照 §11 原文驗**：AC1、AC2、AC3（母體以 `.verification/2026-09-07/plan-state-inventory.md` 的實際盤點為準）、AC4、AC5、AC6、AC7、AC8（基線在 `.verification/2026-09-07/plan-run-boundary-measurement.md`）、AC9。
+        - **有效但條件已修正**：AC10（覆蓋率門檻不變；存證目錄改為 `.verification/2026-09-07/`、`2026-09-08/`、`2026-09-09/` **三個**，不是原文的單一目錄）；AC11（「五個機制」改為**現存機制**，機制 5 與機制 6 皆已移除，其 auto-reply 專節的要求整條作廢；仍須驗 drift 修法有記載——且現在應包含 `resync` 這條最小恢復路徑——以及「一輪仍是 8 步」的邊界有明寫）；AC16（`~/.claude/claude-security-guidance.md` 的逐條核對表仍須驗；`/security-review` 依本 Addendum (k) 記為未執行）；AC17（依 (f) 為 21 steps / 7 phases）。
+        - **作廢，不列 PASS 也不列 FAIL，只註明「機制已移除」**：AC12、AC13、AC14、AC15（機制 5，S6.2 移除）；AC18、AC19、AC20、AC21、AC22（機制 6，S4.4 移除）。判準是實作中已無對應符號，可用 `grep -c` 於 `scripts/plan_runner.py` 自行複驗（`auto_reply`／`keep-going`／`Auto-answered`／`Confirmed scope` 應皆為 0）——**驗收者應自己跑一次這個 grep，不要只採信本條的宣稱**。
+    (o) 上述收斂後的實際驗收母體是：**AC1–AC11、AC16、AC17 共 13 條，加上本 Addendum (g)–(j) 的四個新驗收面，再加 (e)／(m) 的產物 `find`。** 零 FAIL 才放行；作廢的九條不計入分母。
   - Why: 使用者規則「驗證不自驗」——實作者與 reviewer 都看過實作討論，只有 fresh context 能檢驗 checkpoint 的自足性這種「對不知情讀者是否可用」的性質。
 
 ---

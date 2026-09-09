@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v3.0.0] - 2026-09-10
+
+> **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準逐項核對：移除 9 支 skill 指令（PR #66）與 `agents/` 退出指令清單（PR #68）都是「移除或更名指令」，兩者屬同一條判準，同個 release 內合併計算，不各自抬升。其餘變更對照舊用法一律向後相容：`plan-run`／`evidence-gate` 補 parser 契約四點與作者先自跑規則（PR #67）只補文件敘述，不改任何既有指令、旗標或機器可讀輸出；`init --format json` 的 attach 訊息改走 stderr（PR #68）修的是「stdout 混入非 JSON 文字」這個 bug，payload 欄位與 exit code 語意皆未動；`/release-pr` 新增 Step 3.5 範圍相稱性擋門與機械擋門 script（PR #64）是新增檢查步驟，不影響既有呼叫路徑與既有 PR 的產出格式。
+
 ### Removed
 - **移除 9 支 5 週零用量的 skill**：`ecc-skill-defer`、`learn-eval-deep`、`curation`、`triage`、`playwright-human-in-the-loop`、`verify-fix-loop`、`assist`、`verify-evidence-loop`、`ship-ticket`。
 
@@ -19,7 +23,9 @@
 
   **連帶清理**：`update`、`plan-run`、`figma-verify`、`evidence-check`、`design` 五支保留 skill 的 SKILL.md 移除對被刪 skill 的引用或 `redundancy-peers` 條目；`rules/security-guidance/{README,skill-integration}.md`、`rules/refactor/remove-architect-pipeline.md` 的「目前適用範圍」清單拿掉 `/assist`；README.md 的 Usage、Skills 總覽表、決策樹、各 skill 詳細段落同步移除對應 9 支的條目。fresh-context 驗收另挖出三份**現行**文件仍把已刪 skill 當存在引用，補作廢註記而不改寫內容：`research/q4-review-checklist.md` 的可執行步驟改指向 `/update` Step 4 inline 評分；`plans/active/ecc-decoupling-and-model-adaptation.md`、`plans/active/knowledge-base-quality-optimization.md` 初版只在頂部加作廢 blockquote；CodeRabbit 指出 `/plan-run` 的狀態機不看 blockquote、混合 step（保留 skill＋已刪 skill）跑會重建已刪 skill、skip 會連保留工作一起跳，故改為結構拆分——只含已刪 skill 的整步（ecc plan 的 S1.2、S2.3；kb plan 的 S2.2）移出到 parser 不視為 step 的 `## 作廢範圍（不可執行）` 區塊，混合 step 只留保留項目，D4 標作廢，依賴邊同步。parser 實跑：ecc plan 14→12 step、kb plan 8→7，dangling deps 0，執行者會拿到的 Files／Action 欄位已刪 skill 命中 0。`rules/task-tracking-availability.md`、README 的「ECC 解耦（2026-07-04）」段落等**歷史查證/歷史敘述保留不動**，不重寫過去發生的事實。
 
-  **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準，下一個 release 為 `v3.0.0`。
+  **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準，本版即 `v3.0.0`。
+
+  **更正（2026-09-10）**：上面「9 支 `description` 合計 2,201 字元，佔 25 支總量 7,406 的三成，是每個 session 都要載入的固定成本」這個說法高估了。`~/.claude/settings.json` 的 `skillOverrides` 早把其中 4 支（`verify-evidence-loop`、`verify-fix-loop`、`playwright-human-in-the-loop`、`learn-eval-deep`，合計 1,185 字元）設成 `off`、本來就不載入；實際省下的是另外 5 支 1,016 字元、佔 13.7%。教訓：量 per-session 成本前先看 `skillOverrides` 之類的停用設定。
 
 - **`agents/` 退出指令清單**：`agents/SKILL.md` 改名為 [`agents/README.md`](agents/README.md)。目錄與四份定義檔（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`）**原地保留、內容一字未改**——這是換一個不會被註冊的檔名，不是刪功能。
 
@@ -616,7 +622,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...HEAD
+[v3.0.0]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...v3.0.0
 [v2.2.0]: https://github.com/ashe-li/agent-skills/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/ashe-li/agent-skills/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/ashe-li/agent-skills/compare/v1.28.0...v2.0.0

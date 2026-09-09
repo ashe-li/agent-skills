@@ -2,7 +2,7 @@
 
 My personal [Agent Skills](https://agentskills.io/) collection for Claude Code.
 
-> 版本策略見 [VERSIONING.md](VERSIONING.md)、變更記錄見 [CHANGELOG.md](CHANGELOG.md)。主線 `v2.x`（ECC 解耦版，只依賴 Claude Code 內建 primitives）；需要 everything-claude-code plugin 的舊版凍結於 `v1.28.0`。
+> 版本策略見 [VERSIONING.md](VERSIONING.md)、變更記錄見 [CHANGELOG.md](CHANGELOG.md)。主線 `v3.x`（自 `v3.0.0` 起移除 9 支零用量 skill 指令與 `agents/` 退出指令清單，仍只依賴 Claude Code 內建 primitives）；`v2.x` 最後版本為 `v2.2.0`；需要 everything-claude-code plugin 的舊版凍結於 `v1.28.0`。
 
 ## 情境型 rules 的觸發式安裝
 

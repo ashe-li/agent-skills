@@ -1,5 +1,5 @@
 {
-  "plan_path": "/Users/shiun/Documents/agent-skills-longrun/plans/active/unattended-long-run-governance.md",
+  "plan_path": "/Users/shiun/Documents/agent-skills-longrun/plans/completed/unattended-long-run-governance.md",
   "slug": "unattended-long-run-governance",
   "title": "Implementation Plan: agent-skills 長時間無人值守推進（Unattended Long-Run Governance）",
   "phase_order": [
@@ -13,7 +13,7 @@
   ],
   "parent_task_id": null,
   "created_at": "2026-09-09T04:48:19.826669+00:00",
-  "updated_at": "2026-09-09T08:04:22.883811+00:00",
+  "updated_at": "2026-09-09T09:14:05.216581+00:00",
   "steps": {
     "S1.1": {
       "id": "S1.1",
@@ -478,6 +478,6 @@
       "skip_reason": null
     }
   },
-  "plan_sha256": "0fb13bf6ec20d85d0b0eef6a50cacbbf9237a05b7fe169592925bbe10ef0ceca",
+  "plan_sha256": "dfcb452d04a1c46d76d191a2dc22bf960064bc7565971a97e1fc0e14db2c1ebc",
   "previously_reported_ready": []
 }

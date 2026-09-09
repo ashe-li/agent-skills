@@ -82,6 +82,9 @@
   **另一項連帶裁決：`_checkpoint_writable()` 直接刪除，不是修好**。它無 caller、有測試撐著看起來活著、docstring 寫著「S6.1 wires this in」而 S6.1 已完成且沒接（那句話從計畫變成假陳述），內部還帶著 F3 同型的不安全寫入。修它只會讓陷阱更可信。同時新增 `RemovedSymbolsStayRemovedTestCase` 當常設柵欄——S6.2 移除機制 5 時只用一次性 grep 驗過，那不是柵欄。
 
 ### Fixed
+
+- **已知限制 — 歸檔 plan 會讓模式 B 的 pointer 失效**：`validate_pointer()` 要求 `plan_path` 指向的檔案存在，所以把 plan 從 `plans/active/` 移到 `plans/completed/` 之後，掛在該 cwd 的 pointer 會直接判為 `INVALID`。對已完成的 plan 這是可接受的（本來就不該再續推），但**移動一份還在推進的 plan 會靜默斷掉自動續推**，且 pointer 不會告訴你原因是路徑而不是內容。另：state 裡也有一個 `plan_path` 欄位，但**全 repo 沒有任何 reader**（`grep 'state.get("plan_path")'` 零命中），`resync` 也不更新它——移動 plan 後那個字串會停在舊路徑上。目前無害（純資訊欄位），但它符合「有 schema、有 writer、沒有 reader」的半死狀態，未來有人拿它當真實來源會踩到。
+
 - **`plan_runner.py` 的 24 小時 pointer staleness 判定一直在量錯東西**：`POINTER_STALE_SECONDS`（24h）與 `_is_pointer_stale()` 讀的 `last_advance_at` 欄位**從來沒有任何一處寫入過**——它存在於 pointer schema、被 `new_pointer_record()` 初始化為 `None`、有兩個 reader，但沒有 writer。而 `_pointer_progress_timestamp()` 的 fallback 會在缺值時改用 `created_at`，那是個格式正確、看起來合理、但**永遠不會前進**的時間戳。
 
   於是這條判定實際量的是「pointer 存在多久」而不是「多久沒推進」，且因為有 fallback，沒有任何例外或警告會浮上來。此 bug 早於本 plan 存在。

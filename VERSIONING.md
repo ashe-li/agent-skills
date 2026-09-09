@@ -6,7 +6,7 @@
 
 | 位階 | 何時 bump | 例 |
 |---|---|---|
-| **MAJOR** (`x.0.0`) | Breaking change：移除或更名指令、移除 consumer 依賴的外部 plugin/agent、變更 plan 格式契約或既有 skill 的對外介面 | `v1.28.0 → v2.0.0`（移除 everything-claude-code 依賴） |
+| **MAJOR** (`x.0.0`) | Breaking change：移除或更名指令、移除 consumer 依賴的外部 plugin/agent、變更 plan 格式契約或既有 skill 的對外介面 | `v1.28.0 → v2.0.0`（移除 everything-claude-code 依賴）；`v2.2.0 → v3.0.0`（移除 9 支 skill 指令、`agents/` 退出指令清單） |
 | **MINOR** (`1.x.0`) | 新增 skill / rule / 向後相容的功能 | `v1.27.0 → v1.28.0` |
 | **PATCH** (`1.28.x`) | 修 bug、文件修正、不改對外介面的內部調整 | `v1.21.0 → v1.21.1` |
 

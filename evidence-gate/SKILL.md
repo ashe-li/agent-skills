@@ -26,6 +26,7 @@ allowed-tools: Bash, Read, Grep, Glob, Write, Agent
   - **FAIL**：指令輸出與宣稱矛盾（例：宣稱「不動 X」但 X 出現在 diff 檔案清單）。
   - **UNVERIFIABLE**：沒有可重跑的指令能證實（例：commit message 尾段的本機測試數字、口頭效能觀察）——**不是留白帶過**，宣稱本身要嘛改寫成可查證的版本，要嘛整條剔除，不能保留原句蒙混。
 - 這張表本身就是產出物，逐條可被 fact-checker（第 4 節）重跑。
+- **作者交出 schema 前，每條證據指令自己先跑一次**：把實際輸出貼進「關鍵輸出」欄，不得憑記憶或預期寫結果。PR #66 的教訓是 20 條 claim 裡有 5 條字面照跑會錯——ERE 交替寫成 `\|`（本機 grep 靜默回 0 筆）、`git diff --name-only` 少了 `--diff-filter=M` 讓刪除檔混進來、`check_skill.py` 少帶必要參數 `--files`、假設 `grep -r` 輸出帶 `./` 前綴、假設驗收檔是 markdown 表格但實際是粗體格式。fact-checker（第 4 節）遇到指令跑不動或跑出假陰性，在判定欄外另記一筆「schema 指令缺陷」退回作者修 schema，不因此放寬或收緊原本的 PASS/FAIL/UNVERIFIABLE 判準。
 
 ## 2. Diff-Grounding 規則
 

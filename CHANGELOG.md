@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`worktree` skill 的跨 repo 腳本路徑解析不到**：SKILL.md 寫相對路徑 `scripts/worktree-cleanup.sh`，從 skill 目錄 `worktree/` 解析會找不到（腳本實際在 repo 根目錄 `scripts/`），2026-09-13 實跑 `/worktree cleanup` 時因此改走 inline 迴圈。改為完整路徑 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`，已從該路徑實跑 dry-run 確認可執行。
+- **`worktree` skill 單一 repo 清理流程與腳本硬規則矛盾**：步驟 6 原本在 `git worktree remove` 後接 `git branch -d`，與 `scripts/worktree-cleanup.sh` 硬規則 1「永遠不刪 branch」衝突。改為預設只移除 worktree 目錄；使用者明確要求時才逐一列名確認、只用 `-d`，並跳過 long-lived branch。
+
 ## [v3.0.0] - 2026-09-10
 
 > **版本位階判定：MAJOR。** 依 [VERSIONING.md](VERSIONING.md)「移除或更名指令」判準逐項核對：移除 9 支 skill 指令（PR #66）與 `agents/` 退出指令清單（PR #68）都是「移除或更名指令」，兩者屬同一條判準，同個 release 內合併計算，不各自抬升。其餘變更對照舊用法一律向後相容：`plan-run`／`evidence-gate` 補 parser 契約四點與作者先自跑規則（PR #67）只補文件敘述，不改任何既有指令、旗標或機器可讀輸出；`init --format json` 的 attach 訊息改走 stderr（PR #68）修的是「stdout 混入非 JSON 文字」這個 bug，payload 欄位與 exit code 語意皆未動；`/release-pr` 新增 Step 3.5 範圍相稱性擋門與機械擋門 script（PR #64）是新增檢查步驟，不影響既有呼叫路徑與既有 PR 的產出格式。

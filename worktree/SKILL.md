@@ -120,7 +120,7 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 自動偵測並清理已 merge/closed PR 的 worktree。
 
 **單一 repo（互動式）**：依下列步驟由 skill 執行；
-**跨 repo 批次**：直接呼叫 `scripts/worktree-cleanup.sh`（dry-run 預設；`--fetch --apply` 才動作；`--du` 加算磁碟用量；`--kill-blockers` 連佔用行程一起清；`--root` 覆寫掃描根目錄）。該腳本除了 PR 狀態與工作區乾淨，還會驗「有無未推送 commit」與「有無行程以該 worktree 為 cwd」，並且**永遠不刪 branch**；用法與硬規則見腳本檔頭註解。
+**跨 repo 批次**：直接呼叫 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`（腳本在 agent-skills repo 根目錄，不在本 skill 目錄下；dry-run 預設；`--fetch --apply` 才動作；`--du` 加算磁碟用量；`--kill-blockers` 連佔用行程一起清；`--root` 覆寫掃描根目錄）。該腳本除了 PR 狀態與工作區乾淨，還會驗「有無未推送 commit」與「有無行程以該 worktree 為 cwd」，並且**永遠不刪 branch**；用法與硬規則見腳本檔頭註解。
 
 **步驟：**
 
@@ -153,8 +153,8 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 6. 依使用者選擇執行：
    ```bash
    git worktree remove <path>
-   git branch -d <branch>  # 若分支已 merged
    ```
+   **只移除 worktree 目錄，不刪 branch**（與 `scripts/worktree-cleanup.sh` 硬規則 1 一致）：誤刪 worktree 時 branch ref 是唯一的救命索，`git worktree remove` 本身不動 branch。使用者明確要求清 branch 時，才另外逐一列出 branch 名稱確認，且只用 `git branch -d`（不用 `-D`），並跳過 long-lived branch（`hotfix` / `develop*` / `dev*` / `release-*`）。
 7. **操作驗證**（expected vs. actual count）：
    - 刪除後重新執行 `git worktree list --porcelain`，確認已刪除的路徑不再出現於列表
    - 逐條對照清理清單（manifest）：

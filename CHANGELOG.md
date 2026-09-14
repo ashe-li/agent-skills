@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **README Rules 表的載入方式描述與實況不符**：原本把 `rules/worktree-prompt.md` 與 `rules/plan-management.md` 併寫成「載入為全域 CLAUDE.md 指令」，但 worktree-prompt 自 2026-09-01 起已降級為 `UserPromptSubmit` 觸發式注入（README 上方「情境型 rules 的觸發式安裝」段與 `docs/hooks-setup.md` 都這樣寫），只有 plan-management 仍 symlink 常駐；同為情境型的 `rules/debug-triage-order.md` 與 `rules/design-token-reuse-first.md` 則完全沒列。拆列各自寫清楚，補上缺列的兩檔。發現於 2026-09-14 全域 CLAUDE.md 去重審查（比對本 repo 移除 3 條逐字重複規則時，逐一核對 `~/.claude/rules/common/` symlink 實況）。
 - **`worktree` skill 的跨 repo 腳本路徑解析不到**：SKILL.md 寫相對路徑 `scripts/worktree-cleanup.sh`，從 skill 目錄 `worktree/` 解析會找不到（腳本實際在 repo 根目錄 `scripts/`），2026-09-13 實跑 `/worktree cleanup` 時因此改走 inline 迴圈。改為完整路徑 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`，已從該路徑實跑 dry-run 確認可執行。
 - **`worktree` skill 單一 repo 清理流程與腳本硬規則矛盾**：步驟 6 原本在 `git worktree remove` 後接 `git branch -d`，與 `scripts/worktree-cleanup.sh` 硬規則 1「永遠不刪 branch」衝突。改為預設只移除 worktree 目錄；使用者明確要求時才逐一列名確認、只用 `-d`，並跳過 long-lived branch。
 

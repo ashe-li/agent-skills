@@ -4,10 +4,19 @@
 
 ## [Unreleased]
 
+## [v3.1.0] - 2026-09-15
+
+> **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：`/pr` 的 PDT ticket 規則（PR #72）是向後相容的新功能，對話與 branch 裡沒有 PDT 編號的使用者行為不變，PR 標題也不在 VERSIONING 列舉的對外介面（指令名、plan 格式契約、DSL、安全紅線）裡；release workflow 的 checkout 升級與 skip 提醒不動任何 skill 指令。其餘是文件與 `worktree` 修正（PR #70、#71）。`worktree` 單一 repo 清理改成預設不刪 branch 雖然改了行為，但原行為與同 repo 腳本硬規則「永遠不刪 branch」矛盾，屬修 bug，且使用者明確要求時仍可刪，因此不抬到 MAJOR。最高位階為 MINOR。
+
 ### Added
 - **`/pr` 強制帶入 PDT ticket**：Step 1b 從對話、當前 branch 名、`origin/<base>..HEAD` commit message、既有 PR title／body 掃 `PDT-\d+`（大小寫不拘），正規化成大寫 `PDT-<number>`。只算這次工作對應的票：舉例、引用別的 PR、blocked-by 這類順帶提到的編號排除，分不出來就問使用者。這是拿本 PR 自己的對話試跑時抓到的：對話裡的 PDT-6908、PDT-11061 只是舉例，照原寫法會被誤判成這次的 ticket。命中後 PR 標題必須帶字面編號，只寫票名不算數；PDT 編號不重複算進通用 ticket 清單，免得同一個號碼同時觸發兩套標題規則（fact-checker 文件審查抓到）。一般 PR 預設 `(PDT-<number>)` 放尾巴，也接受寫進 scope（`fix(PDT-11061): ...`）；Release PR 也附在尾巴；更新既有 PR 時標題漏了就補上。新增 Step 3.5 管 branch 名，格式 `<type>/pdt-<number>-<slug>`：還在 long-lived branch 上就直接開新 branch；本機 branch 還沒推上遠端，用 AskUserQuestion 提議改名；已推上遠端或已有 PR 就不改名，因為重推新名會讓 PR 斷掉，ticket 改由標題承載。Step 6 另外回報 ticket 出處與落點。格式取自 vocus-web-ui 2026-09 實際 PR：8184 `fix(PDT-11061): ...`＋branch `fix/pdt-11061-editor-toolbar-keyboard-sticky`、8201 `...(PDT-6908)`。
+- **release workflow 跳過發版時提醒未發版條目**：tag 已存在而 skip 時，若 `[Unreleased]` 還有條目，run 會附一條 `Unreleased 未發版` warning，VERSIONING.md 疑難排解同步補述。起因是 v3.0.0 之後 #70–#72 三次 merge 都綠燈 skip、Release 沒出，看起來像機制壞掉；實際是沒人把 `[Unreleased]` 改成版號（#72 那次 run 34928144159 的 log：`Tag v3.0.0 already exists, skipping.`）。
+
+### Changed
+- **release workflow 的 `actions/checkout` 從 `@v4` 升到 v7.0.1，改 pin commit sha**（`3d3c42e5aac5ba805825da76410c181273ba90b1`）：消掉 Node.js 20 deprecation 註記。v5 改跑 Node 24（最低 runner v2.327.1）、v6 把 credentials 改存獨立檔、v7 擋 `pull_request_target`／`workflow_run` checkout fork PR；本 workflow 只由 push 觸發、發版走 `gh`＋`GH_TOKEN`，三者都不影響。
 
 ### Fixed
+- **VERSIONING.md「版本線」還寫 `v2.x`（現行）**：v3.0.0 發版時 README 主線已改成 v3.x，這段漏改。改為 `v3.x` 現行、`v2.x` 最後版本 `v2.2.0`。
 - **README Rules 表的載入方式描述與實況不符**：原本把 `rules/worktree-prompt.md` 與 `rules/plan-management.md` 併寫成「載入為全域 CLAUDE.md 指令」，但 worktree-prompt 自 2026-09-01 起已降級為 `UserPromptSubmit` 觸發式注入（README 上方「情境型 rules 的觸發式安裝」段與 `docs/hooks-setup.md` 都這樣寫），只有 plan-management 仍 symlink 常駐；同為情境型的 `rules/debug-triage-order.md` 與 `rules/design-token-reuse-first.md` 則完全沒列。拆列各自寫清楚，補上缺列的兩檔。發現於 2026-09-14 全域 CLAUDE.md 去重審查（比對本 repo 移除 3 條逐字重複規則時，逐一核對 `~/.claude/rules/common/` symlink 實況）。
 - **`worktree` skill 的跨 repo 腳本路徑解析不到**：SKILL.md 寫相對路徑 `scripts/worktree-cleanup.sh`，從 skill 目錄 `worktree/` 解析會找不到（腳本實際在 repo 根目錄 `scripts/`），2026-09-13 實跑 `/worktree cleanup` 時因此改走 inline 迴圈。改為完整路徑 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`，已從該路徑實跑 dry-run 確認可執行。
 - **`worktree` skill 單一 repo 清理流程與腳本硬規則矛盾**：步驟 6 原本在 `git worktree remove` 後接 `git branch -d`，與 `scripts/worktree-cleanup.sh` 硬規則 1「永遠不刪 branch」衝突。改為預設只移除 worktree 目錄；使用者明確要求時才逐一列名確認、只用 `-d`，並跳過 long-lived branch。
@@ -630,7 +639,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...HEAD
+[v3.1.0]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...v3.1.0
 [v3.0.0]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...v3.0.0
 [v2.2.0]: https://github.com/ashe-li/agent-skills/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/ashe-li/agent-skills/compare/v2.0.0...v2.1.0

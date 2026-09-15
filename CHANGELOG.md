@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+- **`/pr` 強制帶入 PDT ticket**：Step 1b 從對話、當前 branch 名、`origin/<base>..HEAD` commit message、既有 PR title／body 掃 `PDT-\d+`（大小寫不拘），正規化成大寫 `PDT-<number>`。只算這次工作對應的票：舉例、引用別的 PR、blocked-by 這類順帶提到的編號排除，分不出來就問使用者。這是拿本 PR 自己的對話試跑時抓到的：對話裡的 PDT-6908、PDT-11061 只是舉例，照原寫法會被誤判成這次的 ticket。命中後 PR 標題必須帶字面編號，只寫票名不算數。一般 PR 預設 `(PDT-<number>)` 放尾巴，也接受寫進 scope（`fix(PDT-11061): ...`）；Release PR 也附在尾巴；更新既有 PR 時標題漏了就補上。新增 Step 3.5 管 branch 名，格式 `<type>/pdt-<number>-<slug>`：還在 long-lived branch 上就直接開新 branch；本機 branch 還沒推上遠端，用 AskUserQuestion 提議改名；已推上遠端或已有 PR 就不改名，因為重推新名會讓 PR 斷掉，ticket 改由標題承載。Step 6 另外回報 ticket 出處與落點。格式取自 vocus-web-ui 2026-09 實際 PR：8184 `fix(PDT-11061): ...`＋branch `fix/pdt-11061-editor-toolbar-keyboard-sticky`、8201 `...(PDT-6908)`。
+
 ### Fixed
 - **README Rules 表的載入方式描述與實況不符**：原本把 `rules/worktree-prompt.md` 與 `rules/plan-management.md` 併寫成「載入為全域 CLAUDE.md 指令」，但 worktree-prompt 自 2026-09-01 起已降級為 `UserPromptSubmit` 觸發式注入（README 上方「情境型 rules 的觸發式安裝」段與 `docs/hooks-setup.md` 都這樣寫），只有 plan-management 仍 symlink 常駐；同為情境型的 `rules/debug-triage-order.md` 與 `rules/design-token-reuse-first.md` 則完全沒列。拆列各自寫清楚，補上缺列的兩檔。發現於 2026-09-14 全域 CLAUDE.md 去重審查（比對本 repo 移除 3 條逐字重複規則時，逐一核對 `~/.claude/rules/common/` symlink 實況）。
 - **`worktree` skill 的跨 repo 腳本路徑解析不到**：SKILL.md 寫相對路徑 `scripts/worktree-cleanup.sh`，從 skill 目錄 `worktree/` 解析會找不到（腳本實際在 repo 根目錄 `scripts/`），2026-09-13 實跑 `/worktree cleanup` 時因此改走 inline 迴圈。改為完整路徑 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`，已從該路徑實跑 dry-run 確認可執行。

@@ -34,6 +34,8 @@ argument-hint: [PR 號碼或留空建立新 PR]
 6. **業界/學術依據**：技術決策是否引用業界標準（RFC、OWASP 等）或學術研究？
 7. **社群共識與反面意見**：對話中是否討論過社群主流看法、已知的反面意見或陷阱？
 8. **Ticket 參照**：掃描對話中是否出現 `[A-Z]+-\d+` 編號（如 JIRA-123）、Notion URL、或「Notion Ticket」字樣，記錄找到的編號與票名（供 Step 5 PR 標題使用）
+   - **PDT ticket（Linear，強制）**：另外掃這四個來源的 `PDT-\d+`（大小寫不拘）：對話內容、當前 branch 名（`git branch --show-current`，如 `fix/pdt-11061-...`）、`origin/<base-branch>..HEAD` 的 commit message、既有 PR 的 title／body。命中後一律正規化成大寫 `PDT-<number>`，記進 Context Manifest，並往下傳給 Step 3.5（branch 命名）與 Step 5（PR 標題）。有多張就全部列出
+   - **只算這次工作對應的票**：舉例、引用別的 PR 標題、`blocked by`／相關票這類順帶提到的編號不算。對話裡出現多個編號、又分不出哪張才是這次的工作，用 AskUserQuestion 讓使用者選，不要猜
 
 > ⚠️ **常見錯誤**：只看 `git diff` 會遺漏 PR 中其他 commits 的內容；只看 diff 不看對話會遺漏「為什麼這樣做」的決策脈絡。PR description 必須同時反映 **what changed（diff）** 和 **why it changed（對話 context）**。
 
@@ -107,6 +109,17 @@ Review 完成後，使用 AskUserQuestion 詢問使用者：
 2. 使用 conventional commits 格式（feat / fix / chore / refactor / test / docs），英文撰寫
 3. 確保不要 commit 敏感檔案（.env, credentials 等）
 
+## Step 3.5: PDT ticket 與 branch 名（Step 1b 有找到 PDT 才做）
+
+branch 名要帶 ticket，格式 `<type>/pdt-<number>-<kebab-slug>`（例：`fix/pdt-11061-editor-toolbar-keyboard-sticky`），`<type>` 沿用 conventional commit 前綴。沒找到 PDT 就跳過本步驟。
+
+| 當前狀態 | 動作 |
+|---|---|
+| branch 名已含 `pdt-<number>`（大小寫不拘） | 符合，直接進 Step 4 |
+| 還在 base／long-lived branch 上（`main`、`master`、`hotfix`、`develop*`、`release-*`） | 直接用上面格式開新 branch，不要改 long-lived branch 的名字 |
+| 自己的 branch、**還沒推上遠端也沒有 PR** | 用 AskUserQuestion 提議 `git branch -m <新名>`，選項「改名（推薦）」／「維持原名」 |
+| 已推上遠端或已有 PR | **不改名**（重推新名會讓既有 PR 斷掉），ticket 改由 PR 標題承載，Step 6 回報時註明 branch 名沒帶 ticket |
+
 ## Step 4: 推送到遠端
 
 有 remote tracking branch 用 `git push`；沒有則 `git push -u origin <branch>` 建立。
@@ -163,6 +176,7 @@ gh pr create --base master ...
 - 範例：`Release v1.18.0: add skill defer + CHANGELOG updates`
 - 版本號推斷優先順序：CHANGELOG.md 最新版本 → package.json version → git tag
 - 摘要從 PR 包含的 commits 中提取主要變更，簡短描述即可
+- Step 1b 有找到 PDT ticket 時，把編號全部附在標題尾巴：`Release v1.18.0: <摘要> (PDT-10980 PDT-10779)`
 
 > 更新既有 PR 時，也必須檢查 title 是否符合此規則，不符合則一併更新。
 
@@ -170,10 +184,13 @@ gh pr create --base master ...
 
 **使用 Step 1b 提取的 ticket 參照決定 PR 標題：**
 
-- **有找到 ticket** → 標題必須包含 ticket 資訊，二擇一：
+- **有找到 PDT ticket** → 標題**必須**帶字面上的 `PDT-<number>`，只寫票名不算數。預設放在尾巴：`fix(kyc): 注意事項清單改 inline style (PDT-10908)`。若 repo 慣例是寫進 scope（`fix(PDT-11061): ...`）也可以。多張票全部列出：`(PDT-10980 PDT-10779)`
+- **有找到其他 ticket** → 標題必須包含 ticket 資訊，二擇一：
   1. 標題末尾附上 ticket 編號：`fix(seo): add noindex for empty about page (TICKET-1234)`
   2. 標題包含票名：`fix(seo): [Bug] empty about page should be no-indexed`
 - **沒找到 ticket** → 正常標題，不需額外處理
+
+> 更新既有 PR 時，也要檢查 title 有沒有漏掉 PDT 編號，漏了就用 `gh pr edit --title` 補上。
 
 ### 判斷邏輯
 
@@ -287,7 +304,8 @@ Skill({ skill: "pr-evidence-comment" })
 1. 輸出 PR URL
 2. 確認 PR description 已更新
 3. 回報 Step 5.5 的結果：已截圖驗收（附 comment 連結）／已列清單待人工驗／判定免驗（附理由）／無視覺面
-4. 如果有相關的其他 PR（如 feature → develop、develop → master），檢查是否需要同步更新
+4. 回報 PDT ticket 放在哪裡：偵測到的編號與出處、PR 標題有沒有帶、branch 名有沒有帶。沒帶的話講原因（例如 branch 已推上遠端，不改名）。沒找到 PDT 就明說「未偵測到 PDT ticket」
+5. 如果有相關的其他 PR（如 feature → develop、develop → master），檢查是否需要同步更新
 
 ### 使用方式
 

@@ -38,7 +38,7 @@ merge 之後，workflow 會自動接手：
 
 - **觸發條件**（兩個 AND 條件都要滿足）：push 到 `main` **且** 該次 push 有動到 `CHANGELOG.md`。只改別的檔案的 PR 合進 `main` 不會觸發發版。
 - **版本號來源**：`grep -m1 '^## \[v' CHANGELOG.md`，抓 CHANGELOG 裡**第一個** `## [vX.Y.Z]` 標題。這代表那個標題的位置與拼法就是發版契約——打錯字會發錯版號，或抓不到版本號時整個 workflow 直接 skip。
-- **同名 tag 已存在會 skip**：workflow 會先檢查 tag 是否已存在，存在就不重複發版，重跑安全。
+- **同名 tag 已存在會 skip**：workflow 會先檢查 tag 是否已存在，存在就不重複發版，重跑安全。這時如果 `[Unreleased]` 還有條目，run 會附一條 `Unreleased 未發版` warning：run 仍是綠燈，但代表有東西還沒發版，該定版號了。
 - **tag 由 `gh release create` 順帶建立**：workflow 裡沒有獨立的 `git tag` 步驟；`gh release create vX.Y.Z ...` 在 tag 不存在時會自動建立一個指向當下 commit 的 tag，再開 Release。
 - **release notes 自動取該版段落**：用 awk 擷取該版本標題到下一個 `## [` 之間的內容當作 `--notes-file`。也就是說 CHANGELOG 那個版本段落寫成什麼樣，GitHub Release 頁面就長什麼樣，發版前要把該段落當成正式文案看待。
 

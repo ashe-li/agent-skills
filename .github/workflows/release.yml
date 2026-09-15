@@ -14,7 +14,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -33,6 +33,11 @@ jobs:
           if git rev-parse "$VERSION" >/dev/null 2>&1; then
             echo "Tag $VERSION already exists, skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
+            # [Unreleased] 有條目卻沒定版號時提醒，免得 skip 的綠燈被讀成「已發版」
+            PENDING=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found && /^- /{c++} END{print c+0}' CHANGELOG.md)
+            if [ "$PENDING" -gt 0 ]; then
+              echo "::warning title=Unreleased 未發版::[Unreleased] 有 $PENDING 條未發版。要發版請把它改名為 ## [vX.Y.Z] - YYYY-MM-DD（見 VERSIONING.md）"
+            fi
           else
             echo "skip=false" >> $GITHUB_OUTPUT
           fi

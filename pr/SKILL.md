@@ -34,7 +34,7 @@ argument-hint: [PR 號碼或留空建立新 PR]
 6. **業界/學術依據**：技術決策是否引用業界標準（RFC、OWASP 等）或學術研究？
 7. **社群共識與反面意見**：對話中是否討論過社群主流看法、已知的反面意見或陷阱？
 8. **Ticket 參照**：掃描對話中是否出現 `[A-Z]+-\d+` 編號（如 JIRA-123）、Notion URL、或「Notion Ticket」字樣，記錄找到的編號與票名（供 Step 5 PR 標題使用）
-   - **PDT ticket（Linear，強制）**：另外掃這四個來源的 `PDT-\d+`（大小寫不拘）：對話內容、當前 branch 名（`git branch --show-current`，如 `fix/pdt-11061-...`）、`origin/<base-branch>..HEAD` 的 commit message、既有 PR 的 title／body。命中後一律正規化成大寫 `PDT-<number>`，記進 Context Manifest，並往下傳給 Step 3.5（branch 命名）與 Step 5（PR 標題）。有多張就全部列出
+   - **PDT ticket（Linear，強制）**：另外掃這四個來源的 `PDT-\d+`（大小寫不拘）：對話內容、當前 branch 名（`git branch --show-current`，如 `fix/pdt-11061-...`）、`origin/<base-branch>..HEAD` 的 commit message、既有 PR 的 title／body。命中後一律正規化成大寫 `PDT-<number>`，只記在這條、不重複列進上面的通用 ticket 清單，記進 Context Manifest，並往下傳給 Step 3.5（branch 命名）與 Step 5（PR 標題）。有多張就全部列出
    - **只算這次工作對應的票**：舉例、引用別的 PR 標題、`blocked by`／相關票這類順帶提到的編號不算。對話裡出現多個編號、又分不出哪張才是這次的工作，用 AskUserQuestion 讓使用者選，不要猜
 
 > ⚠️ **常見錯誤**：只看 `git diff` 會遺漏 PR 中其他 commits 的內容；只看 diff 不看對話會遺漏「為什麼這樣做」的決策脈絡。PR description 必須同時反映 **what changed（diff）** 和 **why it changed（對話 context）**。
@@ -185,7 +185,7 @@ gh pr create --base master ...
 **使用 Step 1b 提取的 ticket 參照決定 PR 標題：**
 
 - **有找到 PDT ticket** → 標題**必須**帶字面上的 `PDT-<number>`，只寫票名不算數。預設放在尾巴：`fix(kyc): 注意事項清單改 inline style (PDT-10908)`。若 repo 慣例是寫進 scope（`fix(PDT-11061): ...`）也可以。多張票全部列出：`(PDT-10980 PDT-10779)`
-- **有找到其他 ticket** → 標題必須包含 ticket 資訊，二擇一：
+- **有找到其他 ticket**（不含 PDT，PDT 一律走上一條）→ 標題必須包含 ticket 資訊，二擇一：
   1. 標題末尾附上 ticket 編號：`fix(seo): add noindex for empty about page (TICKET-1234)`
   2. 標題包含票名：`fix(seo): [Bug] empty about page should be no-indexed`
 - **沒找到 ticket** → 正常標題，不需額外處理

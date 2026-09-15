@@ -113,6 +113,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 2c 自動檢查已完成的 plan 並歸檔至 `plans/completed/`
 - 自動偵測是否已有 open PR，決定建立或更新
 - PR description 包含 Summary、Context、Changes、Test plan
+- **PDT ticket 強制帶入**：從對話、branch 名、commit message、既有 PR 偵測 `PDT-<number>`，PR 標題必須帶字面編號（預設 `(PDT-6908)` 放尾巴）；branch 名走 `<type>/pdt-<number>-<slug>`（Step 3.5），已推上遠端的 branch 不改名
 - **Step 5.5 截圖驗收 gate**：PR 建立/更新後依變更類型分類（UI 互動 → 截圖；純移除/重構 → 量測；API → 測試輸出），需要時用 AskUserQuestion 問使用者要不要現在跑 `/pr-evidence-comment`，跑完把逐項 PASS/FAIL 回填 Test plan。從 `/update` 串接跳過 Step 2 時，此判定不隨之跳過
 
 </details>

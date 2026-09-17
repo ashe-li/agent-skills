@@ -41,7 +41,7 @@ ls plans/active/*.md 2>/dev/null
 
 ## Step 2.5：產生執行報告
 
-檢查 `<plan-dir>/.plan-state/<slug>.state.json` 是否存在（`<slug>` 為 plan 檔名去掉 `.md`）。
+檢查 `<plan-dir>/.plan-state/<slug>.state.json` 是否存在（`<slug>` 為 plan 檔名去掉 `.md`）。plan 若在 all_done 後由 runner 自動寫過 `<plan-dir>/.plan-state/<slug>.report.md`，可以先讀那份看個大概；但實際嵌入 plan 的內容一律以下面重新跑 `report` 的輸出為準——all_done 後每次 `complete`／`skip`（例如事後補摘要）都會重寫那份檔，但其他寫 state 的操作（如 `reset`）不會，以重新產生的為準最保險。
 
 **存在**：跑
 

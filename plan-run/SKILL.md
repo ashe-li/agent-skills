@@ -59,12 +59,12 @@ Normalize 把 `**Step N: title**` 補成 `- [ ] **S<phase>.<N>** — title`、`-
 
 ```bash
 # 模式 A（預設）
-python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS" --no-attach
+python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS" --no-attach --require-summary
 # 模式 B（跨 session 長 plan，需先裝 hook）
-python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
+python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS" --require-summary
 ```
 
-`init` 預設會 attach（把 cwd 的 pointer 指向這份 plan，hook 從下一輪起接手）；模式 A 用 `--no-attach` 只建 state 不掛 pointer。輸出含 `total_steps`、`phase_order`、`ready_steps`、`warnings`。
+`init` 預設會 attach（把 cwd 的 pointer 指向這份 plan，hook 從下一輪起接手）；模式 A 用 `--no-attach` 只建 state 不掛 pointer。`--require-summary` 讓這份 plan 的 state 記下 `require_summary: true`：之後 `complete` 沒帶 `--summary`、且該 step 還沒有摘要時會被拒絕（rc=1），已有摘要（事後補寫過）可不帶 flag 冪等重跑；`fail`／`skip` 不受影響。輸出含 `total_steps`、`phase_order`、`ready_steps`、`warnings`。
 
 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。已存在 state → 先 `plan_runner.py status "$ARGUMENTS"` 看狀態再決定，要重來用 `init --force`。
 
@@ -102,7 +102,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
    err: ... fail <plan> <step_id> --reason="<msg>"
 ```
 
-摘要寫法見 `/dispatch-loop` 第 6 步「摘要撰寫指引」；上限 500 字元，正規化後超過會被拒絕（rc=1），不會被截斷。
+第 3 行印出來的 `ok:` 是佔位字串 `--summary="<1.做了什麼 2.偏離plan 3.副作用 4.延後待辦>"`，不能照抄——執行前要換成這一步實際的四項內容。摘要寫法見 `/dispatch-loop` 第 6 步「摘要撰寫指引」；上限 500 字元，正規化後超過會被拒絕（rc=1），不會被截斷。
 
 `start` 印的絕對路徑可直接複製執行。有 Task 工具時：`start` 的 `## Next hints` 列出的 next step 可批次建成 pending task（`addBlockedBy` = 當前 task_id），給使用者一個 sliding window；先前已被 pre-create 的 hint task 改標成 in_progress，不要重複建立。
 
@@ -120,14 +120,17 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 ## Step 4: 完成驗證
 
-`summary.all_done == true` 後依序：比對 plan 的 Acceptance Criteria 逐項勾選 → 有 parent task_id 就 `TaskUpdate(<id>, completed)` → `plan_runner.py report "$ARGUMENTS"` 產生執行報告 → `plan_runner.py detach` 收掉 pointer → 提示使用者跑 `/plan-archive` 歸檔至 `plans/completed/`。**`report` 一定要在 `/plan-archive` 搬移檔案之前跑**：state 路徑是從 plan 所在目錄推出來的，`/plan-archive` 把 `.md` 搬進 `plans/completed/` 之後就推不到了。
+plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補摘要），runner 會自動把執行報告寫到 `<plan-dir>/.plan-state/<slug>.report.md`（內容等於 `report` 指令的 md 輸出），輸出多一行 `Report: <path>`（json 為 `report_path`）；寫檔失敗不影響該次 rc，改印 `Report: failed (<原因>)`（json `report_error`）。
+
+`summary.all_done == true` 後依序：比對 plan 的 Acceptance Criteria 逐項勾選 → 有 parent task_id 就 `TaskUpdate(<id>, completed)` → 讀 `Report:` 印出的路徑（可 `cat` 給使用者看摘要與進度）→ `plan_runner.py detach` 收掉 pointer → 提示使用者跑 `/plan-archive` 歸檔至 `plans/completed/`。**歸檔時 `/plan-archive` 仍會重新跑一次 `report` 嵌入 plan**（state 可能在自動寫檔之後又有變動），不必也不應該自己手動再跑一次 `report` 去覆蓋它。
 
 ## 控制面
 
+- `init "$ARGUMENTS" --require-summary` — 見 Step 1，讓這份 plan 的 `complete` 強制帶摘要
 - `pause` / `resume` — 暫停／恢復注入（state 保留），想手動接管時用
 - `detach` — 移除 cwd 的 pointer（plan 完成或換 plan 時）；`pointer` — 看當前 cwd 解析到哪份 plan
 - `doctor` — hook 安裝自檢（唯讀）；`dag "$ARGUMENTS"` — DAG 視覺化（`--format=dot`），debug 用
-- `report "$ARGUMENTS" [--format md|json] [--output <path>] [--force]` — 依 phase 分組產生執行報告（狀態／耗時／evidence／摘要），純腳本、不呼叫 LLM、不寫 state；`--output` 指向 plan 或 state 檔一律拒絕，指向既有檔案需加 `--force`
+- `report "$ARGUMENTS" [--format md|json] [--output <path>] [--force]` — 依 phase 分組產生執行報告（狀態／耗時／evidence／摘要），純腳本、不呼叫 LLM、不寫 state；`--output` 指向 plan 或 state 檔一律拒絕，指向既有檔案需加 `--force`。all_done 時 runner 已自動寫過一份到 `.plan-state/<slug>.report.md`，這裡是手動重跑／自訂輸出格式用
 
 ## 全手動模式（連 `/goal` 都不用時）
 

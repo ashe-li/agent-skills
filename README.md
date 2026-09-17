@@ -322,7 +322,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 <summary>Features</summary>
 
 - **職責分離**：`plan_runner.py` + state file 決定「下一步做什麼」（依賴解析、順序、非法轉移驗證）；`/goal` 或 Stop hook 只決定「還要不要再跑一輪」。搞混這條分界就會誤以為換驅動器能換到別的東西
-- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`；全部 step 完成後跑 `report` 產生執行報告（純腳本，不呼叫 LLM）
+- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`；最後一個轉移讓 plan 變成 all_done 時，runner 自動寫出執行報告到 `.plan-state/<slug>.report.md` 並印 `Report: <path>`，不必手動再跑 `report`（純腳本，不呼叫 LLM；`/plan-archive` 歸檔時仍會重新跑一次嵌入 plan）
 - **跨 session 續推（模式 B 專屬）**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下）。模式 A 的 state file 一樣還在，只是要重下一次 `/goal`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
@@ -330,7 +330,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
-  - `report` — 完成後產執行報告（依 phase 列狀態／耗時／evidence／摘要），**不計入推進迴圈 token**：純腳本執行、不呼叫 LLM
+  - `report` — 產執行報告（依 phase 列狀態／耗時／evidence／摘要），all_done 時 runner 自動寫檔，不必手動跑；**不計入推進迴圈 token**：純腳本執行、不呼叫 LLM
 - **每 7 步一次 check-in**：實測 harness 對每個 turn 的 Stop 輪數設上限（9 次呼叫、8 次續推被採納），且該上限由所有 blocker 共用——多掛一支 blocker 不會換到更多輪。hook 主動在第 7 步（或更早的 phase 邊界）停下來留一輪餘裕，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷；`PLAN_RUN_BLOCK_BUDGET=8` 可用滿。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**

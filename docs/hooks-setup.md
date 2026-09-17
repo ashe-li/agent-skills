@@ -335,7 +335,7 @@ cp ~/.claude/settings.json ~/.claude/hooks/plan-run-stop.sh ~/.claude/backups/$(
 
 然後開一個新 session 跑一輪，確認 turn 正常結束、既有 hook 各觸發一次、`plan-run` 事件數為 0。
 
-移除之後 `plan_runner.py` 的既有子命令（`init` / `status` / `next` / `index` / `dag` / `set-parent` / `start` / `complete` / `fail` / `reset` / `skip` / `normalize`）全部仍可手動使用——退回 `/plan-run` 的手動模式，不會壞掉。
+移除之後 `plan_runner.py` 的既有子命令（`init` / `status` / `next` / `index` / `dag` / `set-parent` / `start` / `complete` / `fail` / `reset` / `skip` / `normalize` / `report`）全部仍可手動使用——退回 `/plan-run` 的手動模式，不會壞掉。
 
 **還原時把備份裡的 hook 物件直接取回，不要重新編造**——否則「還原」可能寫進一個長得像但其實不同的物件。還原後補跑一次 `doctor`。
 

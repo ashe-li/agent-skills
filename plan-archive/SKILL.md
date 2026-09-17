@@ -39,6 +39,26 @@ ls plans/active/*.md 2>/dev/null
 
 ---
 
+## Step 2.5：產生執行報告
+
+檢查 `<plan-dir>/.plan-state/<slug>.state.json` 是否存在（`<slug>` 為 plan 檔名去掉 `.md`）。
+
+**存在**：跑
+
+```bash
+python3 ~/Documents/agent-skills/scripts/plan_runner.py report <plan>
+```
+
+把 stdout **原樣**放進 plan 的 `## 執行摘要` 段（該段已存在就整段取代，不重複附加），位置在 `## 驗證結果` 之前。**不要**加 `--output` 寫成旁檔——旁檔要記得跟著 Step 4 的 `mv` 一起搬，漏搬就變孤兒；KB ingest 也不會把旁檔和 plan 關聯起來；兩份檔案之後會各自漂移。
+
+**不存在**：在 `## 執行摘要` 段寫一行「（本 plan 未經 /plan-run 推進，無執行紀錄）」，繼續下一步。
+
+為什麼要在移動前做：state 放在 `.plan-state/` 隱藏目錄，Step 4 的 `mv` 只搬 `.md`，歸檔後 plan 和 state 就分開了，執行紀錄必須先嵌進 plan 本身才會被保存。報告格式對 `parse_plan` 無效（開頭固定 `### 執行摘要` 不含 Phase 字樣、各 phase 標題用 `####`、不用 `- [ ]` 列表、摘要每行以 `>` 引用開頭、其餘行也都不以空白、`-` 或 `#` 開頭，整段包在 `## 執行摘要` 底下），歸檔後的 plan 就算被重新 `init` 也不會多出 step 或 phase。
+
+Step 3 的驗證表可以直接引用報告裡「未完成與例外」的 failed／skipped 清單，不必重新逐條核對。
+
+---
+
 ## Step 3：補充驗證結果
 
 在 plan 檔案頂部（緊接 `---` frontmatter 後）加上：

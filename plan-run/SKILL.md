@@ -26,7 +26,7 @@ redundancy-peers: [design, dispatch-loop]
 - **State 持久化**：step 狀態存 `<plan-dir>/.plan-state/<slug>.state.json`，在檔案系統上，**新 session／compaction 之後照樣接得上**。Stop hook 模式另有 pointer（`~/.claude/plan-run/active/<hash(cwd)>.json`）記住「這個 cwd 在推哪份 plan」，那是它相對 `/goal` 模式唯一多出來的能力
 - **Stop hook 模式每 7 步一次 check-in**：主動在第 7 步（或更早的 phase 邊界）停，留一輪餘裕，讓停的那刻落在有意義的地方而不是撞上限被截斷。每次注入結尾印 `Auto-advance N/7`；要用滿 8 步設 `PLAN_RUN_BLOCK_BUDGET=8`
 - **Task 追蹤工具 best-effort，且預設不存在**：frontmatter 列的那三個 Task 工具在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上預設不註冊（Claude Code v2.1.233 起，見 [`rules/task-tracking-availability.md`](../rules/task-tracking-availability.md)）。**推進順序、依賴檢查、續推能力全在 state file**，`task_id` 只用於 audit 與 UI 面板；工具不存在或呼叫失敗即 continue，不中止 DAG（下文不再重述）
-- **Output 分層**：`next` 是 full bootstrap（~2.8KB，列出全部 ready 的完整模板）；`complete / fail / skip` 是 delta（只列本次新解鎖的完整模板，先前給過的只列 ID）；`index` 是 ~500 chars 的純 trace。全部預設 markdown，`--format=json` 給 tooling
+- **Output 分層**：`next` 是 full bootstrap（~2.8KB，列出全部 ready 的完整模板）；`complete / fail / skip` 是 delta（只列本次新解鎖的完整模板，先前給過的只列 ID）；`index` 是 ~500 chars 的純 trace。全部預設 markdown，`--format=json` 給 tooling。`complete` 帶 `--summary`／`--evidence` 時，delta output **不會帶回摘要內容**，只多一行 `Recorded: summary N chars, evidence M`
 
 ## 選模式（預設 A，零安裝）
 
@@ -98,9 +98,11 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 ```text
 1. python3 <絕對路徑>/plan_runner.py start <plan> <step_id>
 2. 依圍欄內的 agent / command / skill 欄位執行實際工作
-3. ok:  ... complete <plan> <step_id>
+3. ok:  ... complete <plan> <step_id> --summary="<摘要>" [--evidence=<路徑> ...]
    err: ... fail <plan> <step_id> --reason="<msg>"
 ```
+
+摘要寫法見 `/dispatch-loop` 第 6 步「摘要撰寫指引」；上限 500 字元，正規化後超過會被拒絕（rc=1），不會被截斷。
 
 `start` 印的絕對路徑可直接複製執行。有 Task 工具時：`start` 的 `## Next hints` 列出的 next step 可批次建成 pending task（`addBlockedBy` = 當前 task_id），給使用者一個 sliding window；先前已被 pre-create 的 hint task 改標成 in_progress，不要重複建立。
 
@@ -118,17 +120,18 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS"
 
 ## Step 4: 完成驗證
 
-`summary.all_done == true` 後：比對 plan 的 Acceptance Criteria 逐項勾選 → 有 parent task_id 就 `TaskUpdate(<id>, completed)` → `plan_runner.py detach` 收掉 pointer → 提示使用者跑 `/plan-archive` 歸檔至 `plans/completed/`。
+`summary.all_done == true` 後依序：比對 plan 的 Acceptance Criteria 逐項勾選 → 有 parent task_id 就 `TaskUpdate(<id>, completed)` → `plan_runner.py report "$ARGUMENTS"` 產生執行報告 → `plan_runner.py detach` 收掉 pointer → 提示使用者跑 `/plan-archive` 歸檔至 `plans/completed/`。**`report` 一定要在 `/plan-archive` 搬移檔案之前跑**：state 路徑是從 plan 所在目錄推出來的，`/plan-archive` 把 `.md` 搬進 `plans/completed/` 之後就推不到了。
 
 ## 控制面
 
 - `pause` / `resume` — 暫停／恢復注入（state 保留），想手動接管時用
 - `detach` — 移除 cwd 的 pointer（plan 完成或換 plan 時）；`pointer` — 看當前 cwd 解析到哪份 plan
 - `doctor` — hook 安裝自檢（唯讀）；`dag "$ARGUMENTS"` — DAG 視覺化（`--format=dot`），debug 用
+- `report "$ARGUMENTS" [--format md|json] [--output <path>] [--force]` — 依 phase 分組產生執行報告（狀態／耗時／evidence／摘要），純腳本、不呼叫 LLM、不寫 state；`--output` 指向 plan 或 state 檔一律拒絕，指向既有檔案需加 `--force`
 
 ## 全手動模式（連 `/goal` 都不用時）
 
-Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete` 並讀 `## Newly unlocked` 決定下一步；context 被 compaction 砍掉時跑 `index "$ARGUMENTS"`（~500 chars）看 trace，或 `next "$ARGUMENTS"` 重拿完整模板（會 reset delta 追蹤）。**已知弱點是你可能忘記查狀態**——`/goal` 存在的理由就是把「記得再跑一輪」這件事交出去，成本是一道指令，沒有理由不用。
+Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete`（含 `--summary`／`--evidence`，寫法同 Step 2）並讀 `## Newly unlocked` 決定下一步；收到 `locked` 錯誤（拿不到 state 鎖）就重跑同一個指令，不要換寫法或跳過。context 被 compaction 砍掉時跑 `index "$ARGUMENTS"`（~500 chars）看 trace，或 `next "$ARGUMENTS"` 重拿完整模板（會 reset delta 追蹤）。**已知弱點是你可能忘記查狀態**——`/goal` 存在的理由就是把「記得再跑一輪」這件事交出去，成本是一道指令，沒有理由不用。
 
 ## Plan 格式約束
 
@@ -170,6 +173,8 @@ parser 只認 step／phase／field 的樣式，不看 checkbox 打勾、也不�
 `pending` 等待中（deps 未滿足或未啟動）；`in_progress` 執行中（有 Task 工具時已回寫 task_id，否則 null）；`failed` 需使用者決定後續；`blocked` 因 dep 失敗而 block，dep reset 後自動回 pending；`skipped` 使用者主動跳過，後續 deps 視同 completed 解 block。
 
 transition 由 Python 強制驗證，不允許 `completed → pending` 等非法轉移（避免覆寫已完成工作）。
+
+每個 step 的 state 可能帶 `summary`／`evidence` 欄位（由 `complete --summary`／`--evidence` 寫入，`report` 讀取彙整）；舊 state 沒有這兩個欄位一樣能被 `status`／`next`／`report` 正常讀取，不會 raise。
 
 ## 與其他 skill 的關係
 

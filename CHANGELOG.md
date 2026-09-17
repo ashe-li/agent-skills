@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [v3.2.0] - 2026-09-17
+
+> **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」逐項核對：新增 `report` 子命令與 `complete` 的 `--summary`／`--evidence` 兩個選用 flag，都是向後相容的新功能，沒帶就與現行行為逐字相同；state.json 只新增欄位，舊 runner 讀新 state 一律用 `.get()` 取值、多出來的鍵會被忽略，新 runner 讀舊 state 也不會 raise；`complete`／`fail`／`skip` 改在 state lock 下執行，新出現的 lock error 只在兩個 session 同時競爭同一份 state 時才會發生，而原本那種情境下的行為是靜默 lost update，這是修 bug 不是介面變更；再次 `complete` 保留 `completed_at` 沒有任何程式邏輯依賴（已 grep 確認，`reset` 除外）；plan 格式契約、指令名、DSL、安全紅線都沒有改；三份 SKILL.md（`plan-run`、`dispatch-loop`、`plan-archive`）的流程調整是文件敘述，不是對外介面。最高位階為 MINOR。
+
+### Added
+- **`complete` 新增 `--summary`／`--evidence`，把派工時的判斷寫進 state**：摘要正規化（`\r\n`→`\n`、去除 ANSI／控制字元／bidi 與零寬字元、去頭尾空白）後以 code point 計算長度，上限 500 字元，超過或空字串一律**拒絕**（exit 1、不寫入、step 維持原狀態）而不截斷——截斷會悄悄丟掉尾段，而尾段通常正是「延後到其他 step 的待辦」這種最關鍵的資訊，呼叫方是 LLM，收到明確的長度錯誤後可以自己縮短重送，重試成本低。`--evidence` 可重複（不做逗號切分，因為路徑本身可能含逗號），單筆不得含換行、不得超過 300 字元，最多 20 筆，超過同樣拒絕；只記錄字串本身，不檢查檔案是否存在、不 resolve、不讀檔，避免任意讀檔的攻擊面，也允許 evidence 指向別的 worktree。摘要與 evidence **不會**出現在 `next`／`complete`／`fail`／`skip` 的 delta output，也不會進 Stop hook reason 的任何一種 kind，帶 flag 時只多印一行 `Recorded: summary <N> chars, evidence <M>`（json 對應 `recorded: {summary_chars, evidence_count}`）確認已寫入，不會把摘要內容重貼回對話，降低 summary 被當成 prompt injection 通道逐輪重新注入的風險。只帶其中一個 flag 時只更新該欄位，另一欄位維持原值不被清空。
+- **新增 `report` 子命令**：`plan_runner.py report <plan> [--format md|json] [--output <path>] [--force]`，純腳本、不呼叫 LLM、`report` 本身從不寫入 state。依 `phase_order` 分組，輸出每個 step 的狀態、摘要、耗時與 evidence，最後列出 failed／skipped／pending／blocked 清單與總進度。md 格式對 `parse_plan` 刻意無效——開頭固定為不含 Phase 字樣的 `### 執行摘要`、各 phase 標題用 `####`、不使用 `- [ ]`／`- [x]` 列表項（不命中 step 樣式）、摘要每行以 `>` 引用塊輸出（不命中欄位樣式）、整段包在 `## 執行摘要` 底下（parser 遇到 `^##` 會重置目前 step 的解析狀態），確保報告嵌進歸檔後的 plan 再被重新 `init` 也不會多出 step 或 phase；表格儲存格的 `|` 轉義、`<`／`>` 轉成 HTML entity 避免被誤渲染、evidence 放進 code span 並依內容動態選反引號分隔符，json 格式則交給 `json.dumps` 處理、不做 markdown 跳脫。`--output` 寫檔前先 `resolve()` 再比對，拒絕指向 plan 檔、state 檔或 state lock 檔（含透過 symlink 指向這三者的路徑），寫到既有檔案需加 `--force`，父目錄不存在直接報錯、不代為建立，並以 `mkstemp` + `os.replace` 原子寫入避免半寫壞檔。
+- **`/dispatch-loop` 補「摘要撰寫指引」**：`--summary` 四項依序必寫、沒有內容也要寫「無」——做了什麼（結果而非流水帳）、偏離 plan 原文的地方與理由、接受的副作用或已知限制、延後到其他 step 的待辦（標明目標 step ID）；逐字證據放 `--evidence`，不要塞進摘要本文；收到 `locked` 錯誤就重跑同一個指令，不要換寫法或跳過。
+
+### Changed
+- **`complete`／`fail`／`skip` 三個命令改在 state lock 下完成「讀取、判斷、寫入」**，比照 `cmd_start` 既有的鎖語意（`exclusive_lock` 最多重試 20 次、每次間隔 25ms，約 0.5 秒拿不到就回傳 `State is locked by another process. Retry in a moment.`）。修的競態：`start` 讀到 pending、寫入 in_progress 的過程中，若另一個 session 在鎖外對別的 step 跑 `complete`（讀舊 state 在前、`save_state` 在後），會把前者剛寫入的 in_progress 覆寫回 pending，連帶重算 blocked 與 `previously_reported_ready`，該 step 就可能被重派一次工——這在加鎖之前是靜默發生的。加鎖範圍不含 `next`（只寫 tracker）、`reset`（人主動操作）、`set-parent`，留待後續處理。
+- **`init` 新建的 step 預先帶 `summary: null`、`evidence: []`**，讀取端一律用 `.get("summary")`、`.get("evidence") or []`，舊 state 沒有這兩個欄位一樣能被 `status`／`next`／`report` 正常讀取。
+- **`reset` 會一併清空 `summary`／`evidence`**，與清空 `completed_at` 的語意一致：step 要重做，舊摘要會誤導。
+- **再次 `complete`（COMPLETED→COMPLETED）** 摘要覆寫、evidence 整組取代（不累加），使同一個指令跑兩次結果相同；但 `completed_at` 保留第一次的值（目前會被刷新），避免事後補摘要讓耗時失真。
+- **`plan-run` Step 4 在 `/plan-archive` 搬移檔案前跑 `report`**：state 路徑是從 plan 所在目錄推導的，`/plan-archive` 把 `.md` 搬進 `plans/completed/` 之後就推不到了，必須先跑完 `report` 再歸檔。
+- **`plan-archive` 新增 Step 2.5**：檢查 `.plan-state/<slug>.state.json` 是否存在，存在就跑 `report` 並把 stdout 原樣嵌入 plan 的 `## 執行摘要` 段（已存在就整段取代，不重複附加，位置在 `## 驗證結果` 之前）；不存在則寫一行「（本 plan 未經 /plan-run 推進，無執行紀錄）」。刻意用嵌入而非旁檔——state 在隱藏目錄裡，`mv` 不會帶走它，歸檔後 plan 和 state 就分開了，旁檔還要記得跟著搬、KB ingest 也不一定會把旁檔和 plan 關聯起來。
+
 ## [v3.1.0] - 2026-09-15
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：`/pr` 的 PDT ticket 規則（PR #72）是向後相容的新功能，對話與 branch 裡沒有 PDT 編號的使用者行為不變，PR 標題也不在 VERSIONING 列舉的對外介面（指令名、plan 格式契約、DSL、安全紅線）裡；release workflow 的 checkout 升級與 skip 提醒不動任何 skill 指令。其餘是文件與 `worktree` 修正（PR #70、#71）。`worktree` 單一 repo 清理改成預設不刪 branch 雖然改了行為，但原行為與同 repo 腳本硬規則「永遠不刪 branch」矛盾，屬修 bug，且使用者明確要求時仍可刪，因此不抬到 MAJOR。最高位階為 MINOR。
@@ -639,7 +656,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...HEAD
+[v3.2.0]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...v3.2.0
 [v3.1.0]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...v3.1.0
 [v3.0.0]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...v3.0.0
 [v2.2.0]: https://github.com/ashe-li/agent-skills/compare/v2.1.0...v2.2.0

@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`notion-plan` description 觸發範圍太窄，只讀不建 plan 的情境配不到**：原 description 只寫「串接 /design 建立實作計畫」，agent 遇到「依 Notion 需求修 bug、對照 Figma」這類單純讀取需求時配不到本 skill，改用 WebFetch（被 `webfetch-blocklist-guard.py` 擋下）再改用 `agent-browser` 手動 snapshot，拿到一堆空的 generic 節點，最後要使用者手動介入才改用 `/notion-plan`。改寫 description 明確涵蓋「讀取 Notion 頁面內容」這個更寬的觸發面（建 plan 只是其中一種用途），並在本文加註「不要用 WebFetch／agent-browser 手動讀取 Notion」；Step 5 新增「只讀不建 plan」分支，整理完內容即停下交回，不強制觸發 `/design`。新增 `--read-only` 引數示意用法。
+
 ## [v3.1.0] - 2026-09-15
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：`/pr` 的 PDT ticket 規則（PR #72）是向後相容的新功能，對話與 branch 裡沒有 PDT 編號的使用者行為不變，PR 標題也不在 VERSIONING 列舉的對外介面（指令名、plan 格式契約、DSL、安全紅線）裡；release workflow 的 checkout 升級與 skip 提醒不動任何 skill 指令。其餘是文件與 `worktree` 修正（PR #70、#71）。`worktree` 單一 repo 清理改成預設不刪 branch 雖然改了行為，但原行為與同 repo 腳本硬規則「永遠不刪 branch」矛盾，屬修 bug，且使用者明確要求時仍可刪，因此不抬到 MAJOR。最高位階為 MINOR。

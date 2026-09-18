@@ -12,9 +12,11 @@ Usage:
     plan_runner.py next plans/active/foo.md
     plan_runner.py start plans/active/foo.md S0.1 --task-id=tsk_abc
     plan_runner.py complete plans/active/foo.md S0.1
+    plan_runner.py complete plans/active/foo.md S0.1 --summary="..." --evidence=a.png --evidence=b.txt
     plan_runner.py fail plans/active/foo.md S0.1 --reason="..."
     plan_runner.py skip plans/active/foo.md S0.2
     plan_runner.py status plans/active/foo.md
+    plan_runner.py report plans/active/foo.md [--format=json] [--output=report.md] [--force]
     plan_runner.py reset plans/active/foo.md --step=S0.1
     plan_runner.py set-parent plans/active/foo.md --task-id=tsk_parent
     plan_runner.py dag plans/active/foo.md [--format=dot]
@@ -568,7 +570,11 @@ def state_lock_path_for(plan_path: Path) -> Path:
     return state_dir_for(plan_path) / f"{plan_path.stem}.state.lock"
 
 
-def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
+def init_state(
+    plan_path: Path,
+    parsed: dict[str, Any],
+    require_summary: bool = False,
+) -> dict[str, Any]:
     steps_state = {}
     for sid, step in parsed["steps"].items():
         steps_state[sid] = {
@@ -587,6 +593,8 @@ def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
             "started_at": None,
             "completed_at": None,
             "failure_reason": None,
+            "summary": None,
+            "evidence": [],
         }
 
     return {
@@ -595,6 +603,7 @@ def init_state(plan_path: Path, parsed: dict[str, Any]) -> dict[str, Any]:
         "title": parsed["title"],
         "phase_order": parsed["phase_order"],
         "parent_task_id": None,
+        "require_summary": bool(require_summary),
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "steps": steps_state,
@@ -695,7 +704,10 @@ def transition_step(
         if kwargs.get("session_id"):
             step["session_id"] = kwargs["session_id"]
     elif new_status == COMPLETED:
-        step["completed_at"] = now_iso()
+        # Re-complete (COMPLETED -> COMPLETED, e.g. backfilling a summary)
+        # keeps the first completion time so durations stay accurate.
+        if current != COMPLETED:
+            step["completed_at"] = now_iso()
     elif new_status == FAILED:
         step["completed_at"] = now_iso()
         step["failure_reason"] = kwargs.get("reason", "")
@@ -755,6 +767,22 @@ def emit(payload: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # LLM-optimized markdown formatters
 # ---------------------------------------------------------------------------
+
+# Printed after every `complete` command the runner suggests (next template
+# and hook reasons), so a model copying the command verbatim is prompted to
+# fill in a step summary. Pure hook-authored text: no plan or summary content.
+# Double-quoted so the whole value pastes into a shell as one word.
+COMPLETE_SUMMARY_PLACEHOLDER = '--summary="<1.做了什麼 2.偏離plan 3.副作用 4.延後待辦>"'
+# The placeholder's quoted value alone (no `--summary="..."` wrapper), derived
+# from the constant above so the two never drift apart. This is what a model
+# ends up passing as --summary when it copies the whole placeholder verbatim
+# instead of filling it in.
+COMPLETE_SUMMARY_PLACEHOLDER_TEXT = COMPLETE_SUMMARY_PLACEHOLDER.split("=", 1)[1].strip('"')
+_SUMMARY_REQUIRED_ERROR = (
+    "This plan requires a step summary (init --require-summary). "
+    f"Re-run complete with {COMPLETE_SUMMARY_PLACEHOLDER}"
+)
+
 
 def _runner_invocation(plan_path: str | None) -> str:
     """How the hook wants its own runner invoked, as an absolute path.
@@ -820,7 +848,7 @@ def _format_step_action_block(
     else:
         source = "Action" if inline_values else 'the "action" field above'
         lines.append(f"  2. (no agent/command/skill specified — manual execution per {source})")
-    lines.append(f"  3. ok: {runner} complete {plan} {sid}"
+    lines.append(f"  3. ok: {runner} complete {plan} {sid} {COMPLETE_SUMMARY_PLACEHOLDER}"
                  f" | err: {runner} fail {plan} {sid} --reason=<msg>")
     return lines
 
@@ -1004,6 +1032,12 @@ def format_transition_md(verb: str, data: dict[str, Any]) -> str:
         lines.append(f"Task: {data['task_id']}")
     if data.get("reason"):
         lines.append(f"Reason: {data['reason']}")
+    recorded = data.get("recorded")
+    if recorded:
+        lines.append(
+            f"Recorded: summary {recorded.get('summary_chars', 0)} chars, "
+            f"evidence {recorded.get('evidence_count', 0)}"
+        )
 
     # V2 sync block — emit TaskUpdate instruction when terminal transition
     # of a tracked task. Caller best-effort applies; failure must not stop
@@ -1042,6 +1076,10 @@ def format_transition_md(verb: str, data: dict[str, Any]) -> str:
     if "ready_steps" in data or "summary" in data:
         lines.append("")
         lines.extend(_format_state_view_lines(data))
+    if data.get("report_path"):
+        lines.append(f"Report: {data['report_path']}")
+    elif data.get("report_error"):
+        lines.append(f"Report: failed ({data['report_error']})")
     return "\n".join(lines)
 
 
@@ -1630,6 +1668,10 @@ PLAN_TITLE_TRUNCATE_CHARS = 120
 PLAN_FIELD_TRUNCATE_CHARS = 200
 PLAN_PATH_TRUNCATE_CHARS = 300
 STEP_ID_MAX_CHARS = 32
+# `complete --summary` / `--evidence` caps. Evidence items reuse
+# PLAN_PATH_TRUNCATE_CHARS as their per-item cap.
+STEP_SUMMARY_MAX_CHARS = 500
+STEP_EVIDENCE_MAX_ITEMS = 20
 _NON_STEP_ID_CHAR_RE = re.compile(r"[^A-Za-z0-9._-]")
 _FENCE_LOOKALIKE_CHAR = "‑"  # non-breaking hyphen: reads like '-', matches nothing
 
@@ -1659,6 +1701,66 @@ def _strip_unsafe_bytes(text: str) -> str:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     without_ansi = _ANSI_ESCAPE_RE.sub("", normalized)
     return _CONTROL_CHAR_RE.sub("", without_ansi)
+
+
+def _normalize_step_summary(raw: str | None) -> str | None:
+    """Validate and normalize `complete --summary`. None means "flag absent".
+
+    CRLF -> LF, ANSI/control/bidi bytes dropped, outer whitespace stripped,
+    then the cap is counted in code points. Rejects (ValueError) rather than
+    truncates: the tail of a summary is usually the deferred-work note.
+    """
+    if raw is None:
+        return None
+    text = _strip_unsafe_bytes(raw.replace("\r\n", "\n")).strip()
+    if not text:
+        raise ValueError(
+            "--summary is empty after normalization; omit the flag instead "
+            "of passing an empty value."
+        )
+    if text == COMPLETE_SUMMARY_PLACEHOLDER_TEXT:
+        raise ValueError(
+            "--summary is still the unfilled placeholder text; replace "
+            f"{COMPLETE_SUMMARY_PLACEHOLDER_TEXT!r} with the actual "
+            "1/做了什麼 2/偏離plan 3/副作用 4/延後待辦 content before completing."
+        )
+    if len(text) > STEP_SUMMARY_MAX_CHARS:
+        raise ValueError(
+            f"--summary is {len(text)} chars (limit {STEP_SUMMARY_MAX_CHARS}). "
+            "Shorten it; put verbatim evidence in --evidence paths instead."
+        )
+    return text
+
+
+def _normalize_evidence(raw: list[str] | None) -> tuple[str, ...] | None:
+    """Validate `complete --evidence` items. None means "flag absent".
+
+    Items are recorded as plain strings: never resolved, stat-ed, or opened.
+    Duplicates are dropped keeping first-seen order.
+    """
+    if raw is None:
+        return None
+    if len(raw) > STEP_EVIDENCE_MAX_ITEMS:
+        raise ValueError(
+            f"--evidence given {len(raw)} times (limit {STEP_EVIDENCE_MAX_ITEMS})."
+        )
+    seen: list[str] = []
+    for item in raw:
+        if "\n" in item or "\r" in item:
+            raise ValueError("--evidence item must not contain a newline.")
+        clean = _strip_unsafe_bytes(item).strip()
+        if not clean:
+            raise ValueError(
+                "--evidence item is empty after normalization; drop that flag."
+            )
+        if len(clean) > PLAN_PATH_TRUNCATE_CHARS:
+            raise ValueError(
+                f"--evidence item is {len(clean)} chars "
+                f"(limit {PLAN_PATH_TRUNCATE_CHARS})."
+            )
+        if clean not in seen:
+            seen.append(clean)
+    return tuple(seen)
 
 
 def _neutralize_fence_lookalikes(text: str) -> str:
@@ -1883,7 +1985,7 @@ def _render_report_result(
     lines.append("")
     lines.append(f"{safe_sid} 目前狀態為 in_progress，尚未回報結果。")
     lines.append("請先完成該 step 的實際工作，再回報下列其中一個指令：")
-    lines.append(f"  ok:  {runner} complete {plan} {safe_sid}")
+    lines.append(f"  ok:  {runner} complete {plan} {safe_sid} {COMPLETE_SUMMARY_PLACEHOLDER}")
     lines.append(f"  err: {runner} fail {plan} {safe_sid} --reason=<msg>")
     lines.append("")
     lines.append(_budget_hint_line(budget_info))
@@ -1910,20 +2012,58 @@ def _render_settle_background(
         lines.append("有背景工作尚未收斂。")
     lines.append("請先確認背景工作（agent/subprocess）的實際狀態，收斂後再回報：")
     if step_id:
-        lines.append(f"  ok:  {runner} complete {plan} {safe_sid}")
+        lines.append(f"  ok:  {runner} complete {plan} {safe_sid} {COMPLETE_SUMMARY_PLACEHOLDER}")
         lines.append(f"  err: {runner} fail {plan} {safe_sid} --reason=<msg>")
     lines.append("")
     lines.append(_budget_hint_line(budget_info))
     return "\n".join(lines)
 
 
-def _render_completion(state: dict[str, Any]) -> str:
+def _completion_report_path_hint(plan_path: Any) -> str:
+    """Best-effort report-path text for the completion message.
+
+    Stays pure like the rest of this renderer: `Path(...)` / `report_path_for()`
+    here only do string arithmetic (parent dir + stem), never filesystem I/O,
+    so this cannot violate decide_hook_action()'s no-I/O contract. `plan_path`
+    is the pointer's own field -- a string once `_hook_pointer_shape_ok()` has
+    passed -- but this helper is also reachable with `None` (no pointer to
+    thread through, e.g. a direct `render_hook_reason()` call in a test) or a
+    stray non-path string, and must never raise either way.
+
+    The fallback is a literal placeholder, not `state["slug"]`: this text is
+    printed *outside* the plan-data fence (the region an LLM reads as the
+    hook's own words, same as `_quote_plan_path()`'s docstring explains for
+    the path itself), and slug is plan-authored content that must stay
+    inside the fence.
+    """
+    if isinstance(plan_path, str) and plan_path.strip():
+        try:
+            return str(report_path_for(Path(plan_path)))
+        except (TypeError, ValueError, OSError):
+            pass
+    return "<plan-dir>/.plan-state/<slug>.report.md"
+
+
+def _render_completion(state: dict[str, Any], plan_path: Any = None) -> str:
     lines = [_hook_reason_header(state), ""]
     lines.extend(_plan_data_lines(state, None))
     lines.append("")
     lines.append("全部 step 已完成。")
     lines.append("請對照 plan 的 Acceptance Criteria 逐項確認是否達成，")
     lines.append("確認完成後建議執行 `/plan-archive` 將此 plan 歸檔。")
+    lines.append("")
+    report_path = _completion_report_path_hint(plan_path)
+    runner = _runner_invocation(plan_path)
+    plan = _quote_plan_path(plan_path)
+    lines.append(
+        f"執行報告已寫入 {report_path}；若該檔案不存在，"
+        f"改執行 `{runner} report {plan}` 取得。"
+    )
+    lines.append(
+        "在給使用者的最終回覆中，必須貼出報告的精簡版：Progress 進度行、"
+        "每個 phase 的 step 狀態表（可省略逐 step 摘要引文），"
+        "以及「未完成與例外」段全文——只把報告寫進檔案不算交付。"
+    )
     return "\n".join(lines)
 
 
@@ -1952,7 +2092,7 @@ def render_hook_reason(
     if kind == "settle_background":
         return _render_settle_background(state, step_id, budget_info, plan_path)
     if kind == "completion":
-        return _render_completion(state)
+        return _render_completion(state, plan_path)
     raise ValueError(f"Unknown hook reason kind: {kind!r}")
 
 
@@ -2811,7 +2951,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             "state_path": str(state_path_for(plan_path)),
         })
         return 1
-    state = init_state(plan_path, parsed)
+    state = init_state(plan_path, parsed, getattr(args, "require_summary", False))
     save_state(plan_path, state)
     payload = {
         "status": "initialized",
@@ -2839,11 +2979,19 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _emit_no_state_error() -> None:
+    """Shared error/exit for the missing-state case, so every caller
+    (`_require_state` and the existence-only check in `_run_locked`) emits
+    byte-identical output instead of drifting copies of the same message.
+    """
+    emit({"error": "No state. Run `init` first."})
+    sys.exit(1)
+
+
 def _require_state(plan_path: Path) -> dict[str, Any]:
     state = load_state(plan_path)
     if not state:
-        emit({"error": "No state. Run `init` first."})
-        sys.exit(1)
+        _emit_no_state_error()
     return state
 
 
@@ -2935,16 +3083,33 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_start(args: argparse.Namespace) -> int:
+def _run_locked(
+    args: argparse.Namespace,
+    locked_fn: Callable[[argparse.Namespace], int],
+) -> int:
+    """Run `locked_fn(args)` under the plan's state lock.
+
+    Only checks that the state file *exists* here -- it does not read or
+    json.loads it, since `locked_fn` must re-read state itself under the
+    lock anyway (a read taken before the lock can be stale by the time it
+    writes, which is the lost update this prevents). That re-read is also
+    what makes a full read here redundant: it would be parsed and thrown
+    away, then parsed again inside the lock.
+    """
     plan_path = Path(args.plan).resolve()
     # Establishes that the state (and therefore its directory) exists, so a
     # failure to take the lock below means contention, not a missing dir.
-    _require_state(plan_path)
+    if not state_path_for(plan_path).exists():
+        _emit_no_state_error()
     with exclusive_lock(state_lock_path_for(plan_path)) as may_write:
         if not may_write:
             emit({"error": "State is locked by another process. Retry in a moment."})
             return 1
-        return _cmd_start_locked(args)
+        return locked_fn(args)
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_start_locked)
 
 
 def _cmd_start_locked(args: argparse.Namespace) -> int:
@@ -2990,63 +3155,148 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
 
 
 def cmd_complete(args: argparse.Namespace) -> int:
-    plan_path = Path(args.plan).resolve()
-    state = _require_state(plan_path)
-    sid = args.step
+    # Flags are validated before taking the lock: a rejected call never
+    # touches state and never holds the lock.
+    try:
+        summary_text = _normalize_step_summary(getattr(args, "summary", None))
+        evidence_items = _normalize_evidence(getattr(args, "evidence", None))
+    except ValueError as e:
+        emit({"error": str(e)})
+        return 1
+    return _run_locked(
+        args, lambda a: _cmd_complete_locked(a, summary_text, evidence_items),
+    )
+
+
+def _apply_step_record(
+    state: dict[str, Any],
+    sid: str,
+    summary_text: str | None,
+    evidence_items: tuple[str, ...] | None,
+) -> dict[str, int] | None:
+    """Replace step `sid` with a copy carrying the passed flags' values.
+
+    Only fields whose flag was passed are overwritten; returns the
+    `recorded` counts (never the content), or None when no flag was passed.
+    """
+    if summary_text is None and evidence_items is None:
+        return None
+    step = state["steps"][sid]
+    updates: dict[str, Any] = {}
+    if summary_text is not None:
+        updates["summary"] = summary_text
+    if evidence_items is not None:
+        updates["evidence"] = list(evidence_items)
+    new_step = {**step, **updates}
+    state["steps"][sid] = new_step
+    return {
+        "summary_chars": len(new_step.get("summary") or ""),
+        "evidence_count": len(new_step.get("evidence") or []),
+    }
+
+
+def _transition_and_emit(
+    args: argparse.Namespace,
+    plan_path: Path,
+    state: dict[str, Any],
+    sid: str,
+    new_status: str,
+    verb: str,
+    *,
+    transition_kwargs: dict[str, Any] | None = None,
+    extra_payload: dict[str, Any] | None = None,
+    before_save: Callable[[dict[str, Any]], dict[str, int] | None] | None = None,
+) -> int:
+    """Shared tail of `complete`/`fail`/`skip`: validate `sid`, transition it
+    to `new_status`, build+save the state view, and emit the standard
+    transition payload/markdown.
+
+    `extra_payload` (e.g. `fail`'s `reason`) is merged in right after
+    `task_id`, before the state view -- matching where each command already
+    placed its own extra field. `before_save` runs after a successful
+    transition but before the view is built (used by `complete` to apply
+    the summary/evidence record via `_apply_step_record`); a non-None
+    return value is attached as `recorded` after the view, again matching
+    `complete`'s original placement.
+    """
     if sid not in state["steps"]:
         emit({"error": f"Unknown step: {sid}"})
         return 1
     try:
-        transition_step(state, sid, COMPLETED)
+        transition_step(state, sid, new_status, **(transition_kwargs or {}))
     except ValueError as e:
         emit({"error": str(e)})
         return 1
+    recorded = before_save(state) if before_save is not None else None
     task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
-    payload = {"status": "completed", "step": sid, "task_id": task_id, **view}
-    emit_formatted(payload, args.format, lambda d: format_transition_md("completed", d))
+    payload = {"status": verb, "step": sid, "task_id": task_id}
+    if extra_payload:
+        payload.update(extra_payload)
+    payload.update(view)
+    if recorded is not None:
+        payload["recorded"] = recorded
+    if new_status in (COMPLETED, SKIPPED):
+        payload.update(_write_completion_report(plan_path, state))
+    emit_formatted(payload, args.format, lambda d: format_transition_md(verb, d))
     return 0
+
+
+def _cmd_complete_locked(
+    args: argparse.Namespace,
+    summary_text: str | None,
+    evidence_items: tuple[str, ...] | None,
+) -> int:
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    sid = args.step
+    if _summary_missing(state, sid, summary_text):
+        emit({"error": _SUMMARY_REQUIRED_ERROR})
+        return 1
+    return _transition_and_emit(
+        args, plan_path, state, sid, COMPLETED, "completed",
+        before_save=lambda s: _apply_step_record(s, sid, summary_text, evidence_items),
+    )
+
+
+def _summary_missing(state: dict[str, Any], sid: str, summary_text: str | None) -> bool:
+    """True when a require-summary plan would complete `sid` with no summary.
+
+    Judged on the state re-read under the lock. A step that already holds a
+    summary (backfilled earlier) passes, so COMPLETED -> COMPLETED re-runs
+    stay idempotent. Unknown steps are left to the transition's own error.
+    """
+    if not state.get("require_summary") or summary_text is not None:
+        return False
+    step = state["steps"].get(sid)
+    return step is not None and not step.get("summary")
 
 
 def cmd_fail(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_fail_locked)
+
+
+def _cmd_fail_locked(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
     sid = args.step
-    if sid not in state["steps"]:
-        emit({"error": f"Unknown step: {sid}"})
-        return 1
-    try:
-        transition_step(state, sid, FAILED, reason=args.reason or "")
-    except ValueError as e:
-        emit({"error": str(e)})
-        return 1
-    task_id = state["steps"][sid].get("task_id")
-    view = _build_state_view(state)
-    save_state(plan_path, state)
-    payload = {"status": "failed", "step": sid, "task_id": task_id, "reason": args.reason, **view}
-    emit_formatted(payload, args.format, lambda d: format_transition_md("failed", d))
-    return 0
+    return _transition_and_emit(
+        args, plan_path, state, sid, FAILED, "failed",
+        transition_kwargs={"reason": args.reason or ""},
+        extra_payload={"reason": args.reason},
+    )
 
 
 def cmd_skip(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_skip_locked)
+
+
+def _cmd_skip_locked(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
     sid = args.step
-    if sid not in state["steps"]:
-        emit({"error": f"Unknown step: {sid}"})
-        return 1
-    try:
-        transition_step(state, sid, SKIPPED)
-    except ValueError as e:
-        emit({"error": str(e)})
-        return 1
-    task_id = state["steps"][sid].get("task_id")
-    view = _build_state_view(state)
-    save_state(plan_path, state)
-    payload = {"status": "skipped", "step": sid, "task_id": task_id, **view}
-    emit_formatted(payload, args.format, lambda d: format_transition_md("skipped", d))
-    return 0
+    return _transition_and_emit(args, plan_path, state, sid, SKIPPED, "skipped")
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -3074,6 +3324,103 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report_output_error(out: Path, plan_path: Path, force: bool) -> str | None:
+    """Validate `report --output` (already resolve()d). None means OK."""
+    protected = {
+        plan_path.resolve(),
+        state_path_for(plan_path).resolve(),
+        state_lock_path_for(plan_path).resolve(),
+    }
+    if out in protected:
+        return f"--output must not be the plan, its state file, or its lock file: {out}"
+    if not out.parent.is_dir():
+        return f"--output parent directory does not exist: {out.parent}"
+    if out.is_dir():
+        return f"--output is a directory: {out}"
+    if out.exists() and not force:
+        return f"--output already exists (pass --force to overwrite): {out}"
+    return None
+
+
+def _write_text_atomic(out: Path, text: str) -> None:
+    fd, tmp_name = tempfile.mkstemp(dir=str(out.parent), prefix=f".{out.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_name, out)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+
+def _render_report_text(state: dict[str, Any], fmt: str) -> str:
+    """Build the report text `report --format <fmt>` prints (sans newline).
+
+    Raises ImportError when plan_report cannot be loaded.
+    """
+    import plan_report  # lazy: hook-stop must never load this module
+    report = plan_report.build_report(state, progress=summary(state), now=now_iso())
+    if fmt == "json":
+        return plan_report.render_report_json(report)
+    return plan_report.render_report_md(report, strip_unsafe=_strip_unsafe_bytes)
+
+
+def report_path_for(plan_path: Path) -> Path:
+    return state_dir_for(plan_path) / f"{plan_path.stem}.report.md"
+
+
+def _write_completion_report(plan_path: Path, state: dict[str, Any]) -> dict[str, str]:
+    """On all_done, write the md report next to the state file.
+
+    Returns the payload keys to add: `report_path` on success, `report_error`
+    on failure, nothing when the plan is not all_done. The step transition
+    is already saved, so a failure here never changes the command's rc.
+    Only the path or a short reason is returned -- never report content.
+    """
+    if not summary(state)["all_done"]:
+        return {}
+    out = report_path_for(plan_path)
+    try:
+        text = _render_report_text(state, "md")
+        _write_text_atomic(out, text + "\n")  # byte-identical to `report` stdout
+    except ImportError as e:
+        return {"report_error": f"report module unavailable: {type(e).__name__}"}
+    except OSError as e:
+        return {"report_error": e.strerror or type(e).__name__}
+    # State is already saved; the report is an add-on and must not fail a successful transition.
+    except Exception as e:
+        return {"report_error": type(e).__name__}
+    return {"report_path": str(out)}
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """Render the execution-summary report. Read-only: never calls save_state
+    and never opens evidence paths."""
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    try:
+        text = _render_report_text(state, args.format)
+    except ImportError as e:
+        emit({"error": f"report module unavailable: {e}"})
+        return 1
+    if not args.output:
+        print(text)
+        return 0
+    out = Path(args.output).expanduser().resolve()
+    error = _report_output_error(out, plan_path, bool(args.force))
+    if error:
+        emit({"error": error})
+        return 1
+    try:
+        _write_text_atomic(out, text + "\n")  # byte-identical to stdout
+    except OSError as e:
+        emit({"error": f"failed to write --output: {e}"})
+        return 1
+    emit({"written": str(out), "format": args.format})
+    return 0
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
@@ -3084,6 +3431,8 @@ def cmd_reset(args: argparse.Namespace) -> int:
         s["started_at"] = None
         s["completed_at"] = None
         s["failure_reason"] = None
+        s["summary"] = None
+        s["evidence"] = []
 
     if args.all:
         for s in state["steps"].values():
@@ -3605,6 +3954,10 @@ def main() -> None:
     p_init.add_argument("plan")
     p_init.add_argument("--force", action="store_true")
     p_init.add_argument(
+        "--require-summary", dest="require_summary", action="store_true",
+        help="Make `complete` reject steps finished without --summary",
+    )
+    p_init.add_argument(
         "--attach", dest="attach", action="store_true", default=True,
         help="Attach cwd's pointer to this plan after init (default)",
     )
@@ -3631,6 +3984,22 @@ def main() -> None:
     p_complete = sub.add_parser("complete", help="Mark step completed")
     p_complete.add_argument("plan")
     p_complete.add_argument("step")
+    p_complete.add_argument(
+        "--summary", default=None,
+        help=(
+            f"Step summary stored in state (max {STEP_SUMMARY_MAX_CHARS} chars "
+            "after normalization; over-limit or empty is rejected, not truncated). "
+            "Never echoed in command output."
+        ),
+    )
+    p_complete.add_argument(
+        "--evidence", action="append", default=None, metavar="PATH",
+        help=(
+            "Evidence path recorded verbatim (never opened). Repeatable, "
+            f"max {STEP_EVIDENCE_MAX_ITEMS} items, {PLAN_PATH_TRUNCATE_CHARS} "
+            "chars each, no newlines; replaces any previously recorded list."
+        ),
+    )
     add_format_flag(p_complete)
     p_complete.set_defaults(func=cmd_complete)
 
@@ -3651,6 +4020,13 @@ def main() -> None:
     p_status.add_argument("plan")
     add_format_flag(p_status)
     p_status.set_defaults(func=cmd_status)
+
+    p_report = sub.add_parser("report", help="Execution-summary report (read-only)")
+    p_report.add_argument("plan")
+    add_format_flag(p_report)
+    p_report.add_argument("--output", default=None, help="Write the report to this file atomically")
+    p_report.add_argument("--force", action="store_true", help="Overwrite an existing --output file")
+    p_report.set_defaults(func=cmd_report)
 
     p_index = sub.add_parser("index", help="Ultra-compact ID+status trace view")
     p_index.add_argument("plan")

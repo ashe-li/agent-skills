@@ -322,7 +322,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 <summary>Features</summary>
 
 - **職責分離**：`plan_runner.py` + state file 決定「下一步做什麼」（依賴解析、順序、非法轉移驗證）；`/goal` 或 Stop hook 只決定「還要不要再跑一輪」。搞混這條分界就會誤以為換驅動器能換到別的東西
-- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`
+- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`；最後一個轉移讓 plan 變成 all_done 時，runner 自動寫出執行報告到 `.plan-state/<slug>.report.md` 並印 `Report: <path>`，不必手動再跑 `report`（純腳本，不呼叫 LLM；`/plan-archive` 歸檔時仍會重新跑一次嵌入 plan）。同時 Stop hook 的完成訊息會附上報告路徑，要求最終回覆貼出精簡版（進度行、各 phase 狀態表、「未完成與例外」全文），只寫進檔案不算交付
 - **跨 session 續推（模式 B 專屬）**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下）。模式 A 的 state file 一樣還在，只是要重下一次 `/goal`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴
@@ -330,6 +330,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
   - `next` — full bootstrap（~2.8KB），首次拿完整模板
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
+  - `report` — 產執行報告（依 phase 列狀態／耗時／evidence／摘要），all_done 時 runner 自動寫檔，不必手動跑；**不計入推進迴圈 token**：純腳本執行、不呼叫 LLM
 - **每 7 步一次 check-in**：實測 harness 對每個 turn 的 Stop 輪數設上限（9 次呼叫、8 次續推被採納），且該上限由所有 blocker 共用——多掛一支 blocker 不會換到更多輪。hook 主動在第 7 步（或更早的 phase 邊界）停下來留一輪餘裕，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷；`PLAN_RUN_BLOCK_BUDGET=8` 可用滿。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**
@@ -351,7 +352,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - **派工 prompt 六格骨架**：目標／動機／範圍／既有慣例／驗收條件／回報格式，缺一格不發；另附搜尋、實作、重構、研究、審查五種型態的 agent + model 微調
 - **抽查驗收**：不信任 subagent 自報——`ls` 驗檔案、`grep` 驗內容、`git log` 比對、測試親跑一次，過了才 `complete`
 - **Token 預算**：每 step 標【agent 數 × 模型層級 × 預估 token】，超預算 2 倍停下重估；附 2026-07-10 實測量級（實作 step 60–130K、headed 驗證 100–200K、30-agent 編隊 review 1.6M——對小 repo 過度設計）
-- **回收前 KB gate**：教訓寫進知識庫才准回收 agent，順序不可反過來
+- **回收前 KB gate**：順序固定不可反過來——(a) 教訓寫進知識庫（`_pending/`，成熟落 `wiki/learned/`），(b) 用 `plan_runner.py complete --summary --evidence` 寫摘要並標記完成；摘要撰寫指引規定四項必寫（做了什麼／偏離 plan 之處／接受的副作用／延後待辦），上限 500 字元超過即拒絕不截斷
 - **實證教訓**：派工必寫「禁止再委派」（轉派產生的孤兒 agent 會讓任務靜默蒸發）、視覺裁決不可用縮圖、稀缺配額 MCP 不下放 agent
 
 </details>

@@ -2019,13 +2019,51 @@ def _render_settle_background(
     return "\n".join(lines)
 
 
-def _render_completion(state: dict[str, Any]) -> str:
+def _completion_report_path_hint(plan_path: Any) -> str:
+    """Best-effort report-path text for the completion message.
+
+    Stays pure like the rest of this renderer: `Path(...)` / `report_path_for()`
+    here only do string arithmetic (parent dir + stem), never filesystem I/O,
+    so this cannot violate decide_hook_action()'s no-I/O contract. `plan_path`
+    is the pointer's own field -- a string once `_hook_pointer_shape_ok()` has
+    passed -- but this helper is also reachable with `None` (no pointer to
+    thread through, e.g. a direct `render_hook_reason()` call in a test) or a
+    stray non-path string, and must never raise either way.
+
+    The fallback is a literal placeholder, not `state["slug"]`: this text is
+    printed *outside* the plan-data fence (the region an LLM reads as the
+    hook's own words, same as `_quote_plan_path()`'s docstring explains for
+    the path itself), and slug is plan-authored content that must stay
+    inside the fence.
+    """
+    if isinstance(plan_path, str) and plan_path.strip():
+        try:
+            return str(report_path_for(Path(plan_path)))
+        except (TypeError, ValueError, OSError):
+            pass
+    return "<plan-dir>/.plan-state/<slug>.report.md"
+
+
+def _render_completion(state: dict[str, Any], plan_path: Any = None) -> str:
     lines = [_hook_reason_header(state), ""]
     lines.extend(_plan_data_lines(state, None))
     lines.append("")
     lines.append("全部 step 已完成。")
     lines.append("請對照 plan 的 Acceptance Criteria 逐項確認是否達成，")
     lines.append("確認完成後建議執行 `/plan-archive` 將此 plan 歸檔。")
+    lines.append("")
+    report_path = _completion_report_path_hint(plan_path)
+    runner = _runner_invocation(plan_path)
+    plan = _quote_plan_path(plan_path)
+    lines.append(
+        f"執行報告已寫入 {report_path}；若該檔案不存在，"
+        f"改執行 `{runner} report {plan}` 取得。"
+    )
+    lines.append(
+        "在給使用者的最終回覆中，必須貼出報告的精簡版：Progress 進度行、"
+        "每個 phase 的 step 狀態表（可省略逐 step 摘要引文），"
+        "以及「未完成與例外」段全文——只把報告寫進檔案不算交付。"
+    )
     return "\n".join(lines)
 
 
@@ -2054,7 +2092,7 @@ def render_hook_reason(
     if kind == "settle_background":
         return _render_settle_background(state, step_id, budget_info, plan_path)
     if kind == "completion":
-        return _render_completion(state)
+        return _render_completion(state, plan_path)
     raise ValueError(f"Unknown hook reason kind: {kind!r}")
 
 

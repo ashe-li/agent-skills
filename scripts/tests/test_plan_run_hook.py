@@ -690,6 +690,50 @@ class PlanPathInReasonTests(unittest.TestCase):
         self.assertIn("plan_runner.py start <plan> S0.1", reason)
 
 
+class CompletionReportSurfacingTests(unittest.TestCase):
+    """all_done 完成訊息必須指向 report 路徑，並要求把精簡版貼進最終回覆——
+
+    只把報告寫進 `.plan-state/<slug>.report.md` 等於沒交付（真實案例：36/36
+    all_done 的 plan，最終回覆只有 `Progress: 36/36 -- ALL DONE`，完全沒提
+    摘要）。`_render_completion` 仍是 `render_hook_reason()` 的一部分，必須
+    保持 decide_hook_action() 的 no-I/O 約束——這裡只斷言印出的文字，從不
+    檢查磁碟上是否真的有報告檔。
+    """
+
+    def test_completion_reason_includes_report_path(self):
+        pointer = make_pointer(plan_path=FAKE_PLAN_PATH, completion_announced=False)
+        state = make_state({"S0.1": make_step(status="completed")})
+        decision = pr.decide_hook_action(make_hook_input(), pointer, state)
+        self.assertEqual(decision.decision, "block")
+        expected = str(pr.report_path_for(Path(FAKE_PLAN_PATH)))
+        self.assertIn(expected, decision.reason)
+
+    def test_completion_reason_requires_pasting_summary_in_final_reply(self):
+        pointer = make_pointer(plan_path=FAKE_PLAN_PATH, completion_announced=False)
+        state = make_state({"S0.1": make_step(status="completed")})
+        decision = pr.decide_hook_action(make_hook_input(), pointer, state)
+        self.assertIn("必須", decision.reason)
+        self.assertIn("最終回覆", decision.reason)
+        self.assertIn("未完成與例外", decision.reason)
+
+    def test_completion_reason_points_at_report_subcommand_as_fallback(self):
+        pointer = make_pointer(plan_path=FAKE_PLAN_PATH, completion_announced=False)
+        state = make_state({"S0.1": make_step(status="completed")})
+        decision = pr.decide_hook_action(make_hook_input(), pointer, state)
+        self.assertIn(f"{self._runner()} report {FAKE_PLAN_PATH}", decision.reason)
+
+    def test_completion_renderer_without_plan_path_does_not_raise(self):
+        state = make_state({"S0.1": make_step(status="completed")})
+        reason = pr.render_hook_reason(state, "completion", None, make_budget())
+        self.assertIsInstance(reason, str)
+        self.assertIn("全部 step 已完成", reason)
+        self.assertIn(".plan-state/", reason)
+
+    @staticmethod
+    def _runner() -> str:
+        return f"python3 {Path(pr.__file__).resolve()}"
+
+
 class PointerResolutionTests(unittest.TestCase):
     """Cases 4, 14: the I/O layer (resolve_pointer / write_pointer_atomic).
 

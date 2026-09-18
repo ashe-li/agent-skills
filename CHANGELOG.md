@@ -24,6 +24,9 @@
 - **`plan-archive` 新增 Step 2.5**：檢查 `.plan-state/<slug>.state.json` 是否存在，存在就跑 `report` 並把 stdout 原樣嵌入 plan 的 `## 執行摘要` 段（已存在就整段取代，不重複附加，位置在 `## 驗證結果` 之前）；不存在則寫一行「（本 plan 未經 /plan-run 推進，無執行紀錄）」。刻意用嵌入而非旁檔——state 在隱藏目錄裡，`mv` 不會帶走它，歸檔後 plan 和 state 就分開了，旁檔還要記得跟著搬、KB ingest 也不一定會把旁檔和 plan 關聯起來。
 - **`next` 模板與 Stop hook 的 `ok:` 行一律帶佔位 `--summary="<1.做了什麼 2.偏離plan 3.副作用 4.延後待辦>"`**：先前這兩處印出的 `complete` 指令都沒帶 `--summary`，照著印出的指令做就不會寫摘要；現在改印帶佔位字串的版本，提醒要換成實際四項內容再送出，佔位文字本身不含任何 plan 或摘要內容。
 
+### Fixed
+- **all_done 時自動寫的執行報告從未被呈現給使用者**：Stop hook 在 all_done 時注入的 completion 訊息只叫模型對照 Acceptance Criteria 並建議 `/plan-archive`，完全沒提報告；`plan-run/SKILL.md` Step 4 也只寫「可 `cat` 給使用者看」，變成選配。實測案例：36/36 all_done 的 plan，最終回覆只有 `Progress: 36/36 — ALL DONE`，沒提到任何摘要。`_render_completion()` 改接收 `plan_path`，訊息加上算出的報告路徑（找不到時改印 `report` 子命令取得，不觸碰檔案系統，維持 `decide_hook_action()` 的 no-I/O 契約）與「必須在最終回覆貼出精簡版（Progress 進度行、phase step 狀態表、未完成與例外段全文）」的指令；`plan-run`、`plan-archive` 兩份 SKILL.md 的對應步驟同步改為必做而非可選。
+
 ## [v3.1.0] - 2026-09-15
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」核對：`/pr` 的 PDT ticket 規則（PR #72）是向後相容的新功能，對話與 branch 裡沒有 PDT 編號的使用者行為不變，PR 標題也不在 VERSIONING 列舉的對外介面（指令名、plan 格式契約、DSL、安全紅線）裡；release workflow 的 checkout 升級與 skip 提醒不動任何 skill 指令。其餘是文件與 `worktree` 修正（PR #70、#71）。`worktree` 單一 repo 清理改成預設不刪 branch 雖然改了行為，但原行為與同 repo 腳本硬規則「永遠不刪 branch」矛盾，屬修 bug，且使用者明確要求時仍可刪，因此不抬到 MAJOR。最高位階為 MINOR。

@@ -92,7 +92,7 @@ mkdir -p plans/completed
 mv plans/active/<filename>.md plans/completed/<filename>.md
 ```
 
-確認移動成功後輸出：`✅ 已歸檔：plans/completed/<filename>.md`
+確認移動成功後輸出：`✅ 已歸檔：plans/completed/<filename>.md`。**最終回覆必須附上嵌入的執行摘要精簡版**：Progress 進度行、每個 phase 的 step 狀態表（可省略逐 step 摘要引文）、Step 2.5「未完成與例外」段全文——只把摘要嵌進歸檔後的 `.md` 不算交付，使用者要在這次回覆裡就看到。Step 2.5 判定為「無執行紀錄」的 plan，這裡照實回覆「（本 plan 未經 /plan-run 推進，無執行紀錄）」，不用假造摘要內容。
 
 ---
 

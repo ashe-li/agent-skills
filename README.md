@@ -322,7 +322,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 <summary>Features</summary>
 
 - **職責分離**：`plan_runner.py` + state file 決定「下一步做什麼」（依賴解析、順序、非法轉移驗證）；`/goal` 或 Stop hook 只決定「還要不要再跑一輪」。搞混這條分界就會誤以為換驅動器能換到別的東西
-- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`；最後一個轉移讓 plan 變成 all_done 時，runner 自動寫出執行報告到 `.plan-state/<slug>.report.md` 並印 `Report: <path>`，不必手動再跑 `report`（純腳本，不呼叫 LLM；`/plan-archive` 歸檔時仍會重新跑一次嵌入 plan）。同時 Stop hook 的完成訊息會附上報告路徑，要求最終回覆貼出精簡版（進度行、各 phase 狀態表、「未完成與例外」全文），只寫進檔案不算交付
+- **LLM 只負責執行**：把指定的 step 拿來執行，完成後回報 `complete` / `fail` / `skip`；最後一個轉移讓 plan 變成 all_done 時，runner 自動寫出執行報告到 `.plan-state/<slug>.report.md`，並在輸出最上方（header 之後、state view 之前）以 `## 結案報告（plan 已全部完成）` 區塊印出 `Report: <path>`；之後跑 `status` 也會在 `Progress` 行下方顯示 `結案報告：<path>`，不必手動再跑 `report`（純腳本，不呼叫 LLM；`/plan-archive` 歸檔時仍會重新跑一次嵌入 plan）。同時 Stop hook 的完成訊息會附上報告路徑，要求最終回覆貼出精簡版（進度行、各 phase 狀態表、「未完成與例外」全文），只寫進檔案不算交付
 - **跨 session 續推（模式 B 專屬）**：pointer 存在 `~/.claude/plan-run/active/`，`/clear`、compaction、開新 session 之後第一輪結束就自動接上（plan 需位於 `$HOME` 底下）。模式 A 的 state file 一樣還在，只是要重下一次 `/goal`
 - **State 持久化**：`<plan-dir>/.plan-state/<slug>.state.json` 保存所有 step 狀態 + 已展示過的 instruction（給 delta 模式用）
 - **Task 工具 best-effort**：預設模型沒有這些工具（見 [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md)），推進不受影響；有工具時 state machine 指定 subject / activeForm / addBlockedBy，LLM 照表填入，避免串錯依賴

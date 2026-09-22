@@ -130,6 +130,7 @@ plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補�
 - `pause` / `resume` — 暫停／恢復注入（state 保留），想手動接管時用
 - `detach` — 移除 cwd 的 pointer（plan 完成或換 plan 時）；`pointer` — 看當前 cwd 解析到哪份 plan
 - `doctor` — hook 安裝自檢（唯讀）；`dag "$ARGUMENTS"` — DAG 視覺化（`--format=dot`），debug 用
+- `status "$ARGUMENTS" [--format md|json]` — 列出全部 step 與狀態；plan 已 all_done 時，`Progress` 行下方會多印 `結案報告：<path>`（json 為 `report_path`，只在檔案存在時才有），報告檔不存在則改印提示，請改跑 `report`
 - `report "$ARGUMENTS" [--format md|json] [--output <path>] [--force]` — 依 phase 分組產生執行報告（狀態／耗時／evidence／摘要），純腳本、不呼叫 LLM、不寫 state；`--output` 指向 plan 或 state 檔一律拒絕，指向既有檔案需加 `--force`。all_done 時 runner 已自動寫過一份到 `.plan-state/<slug>.report.md`，這裡是手動重跑／自訂輸出格式用
 
 ## 全手動模式（連 `/goal` 都不用時）

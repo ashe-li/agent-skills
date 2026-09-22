@@ -3267,10 +3267,112 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
 def cmd_next(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
+    checkpoint = None
+    if getattr(args, "resume", False):
+        checkpoint = _load_resume_checkpoint(plan_path)
+        if checkpoint is None:
+            return 1
     payload = _build_state_view(state, mode="full")
     save_state(plan_path, state)  # persist previously_reported_ready update
-    emit_formatted(payload, args.format, format_next_md)
+    if checkpoint is None:
+        emit_formatted(payload, args.format, format_next_md)
+        return 0
+    _emit_resume(args.format, plan_path, checkpoint, payload)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Resumable checkpoint (PR-A) — written after complete/fail/skip, read by
+# `next <plan> --resume`. `resume` itself is taken (pointer pause/resume, no
+# plan argument), so resuming a *plan* is a flag on `next`: it prints the
+# checkpoint and then the ordinary, live `next` view — the checkpoint says
+# what happened, the live state says what to do now.
+# ---------------------------------------------------------------------------
+
+def _checkpoint_file(plan_path: Path) -> Path:
+    return state_dir_for(plan_path) / f"{plan_path.stem}.checkpoint.json"
+
+
+def _checkpoint_stuck(plan_path: Path, state: dict[str, Any]) -> dict[str, Any] | None:
+    """The cwd pointer's STUCK record, if it is about this plan and that
+    step has still not moved; None otherwise (including any lookup error)."""
+    try:
+        resolved = resolve_pointer(Path.cwd())
+    except (OSError, ValueError):
+        return None
+    if resolved is None or Path(str(resolved.data.get("plan_path"))).resolve() != plan_path:
+        return None
+    data = resolved.data
+    step = state["steps"].get(data.get("stuck_step_id") or "")
+    kind = data.get("stuck_kind")
+    expected = PENDING if kind == STUCK_KIND_READY else IN_PROGRESS
+    if step is None or step.get("status") != expected:
+        return None
+    counter = "assign_repeat_count" if kind == STUCK_KIND_READY else "nag_counts"
+    return {
+        "step_id": data["stuck_step_id"], "kind": kind,
+        "count": _hook_counter(data, counter), "stuck_at": data.get("stuck_at"),
+    }
+
+
+def _checkpoint_preflight(plan_path: Path) -> dict[str, Any] | None:
+    try:
+        result = _run_plan_preflight(plan_path, Path.cwd())
+    except Exception:
+        return None
+    return {"ok": result.ok, "failed": [c.name for c in result.failures]}
+
+
+def _build_checkpoint(plan_path: Path, state: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    ck = _import_sibling("plan_runner_checkpoint")
+    data = ck.build_checkpoint(
+        state,
+        ready_steps=sorted(compute_ready_steps(state)),
+        stuck=_checkpoint_stuck(plan_path, state),
+        preflight=_checkpoint_preflight(plan_path),
+        now=now_iso(),
+    )
+    return ck, data
+
+
+def _write_checkpoint_best_effort(plan_path: Path, state: dict[str, Any]) -> None:
+    """The state transition already succeeded and was saved; a checkpoint
+    that cannot be written must not turn it into a reported failure."""
+    try:
+        ck, data = _build_checkpoint(plan_path, state)
+        ck.write_checkpoint_atomic(_checkpoint_file(plan_path), data)
+    except Exception:
+        return None
+    return None
+
+
+def _load_resume_checkpoint(plan_path: Path) -> dict[str, Any] | None:
+    """Checkpoint for `--resume`, or None after emitting why there is none."""
+    path = _checkpoint_file(plan_path)
+    try:
+        data = _import_sibling("plan_runner_checkpoint").load_checkpoint(path)
+    except (ImportError, OSError, ValueError) as exc:
+        emit({"error": f"checkpoint 無法讀取：{path}（{exc}）"})
+        return None
+    if data is None:
+        emit({"error": (
+            f"沒有 checkpoint：{path}。checkpoint 在第一次 complete/fail/skip 後才會產生；"
+            f"請改用 `next {plan_path}`（不帶 --resume）。"
+        )})
+    return data
+
+
+def _emit_resume(
+    fmt: str, plan_path: Path, checkpoint: dict[str, Any], payload: dict[str, Any],
+) -> None:
+    path = _checkpoint_file(plan_path)
+    if fmt == "json":
+        emit({"checkpoint": checkpoint, "checkpoint_path": str(path), **payload})
+        return
+    ck = _import_sibling("plan_runner_checkpoint")
+    print(ck.format_resume_md(checkpoint, path))
+    print()
+    print(format_next_md(payload))
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
@@ -3458,6 +3560,7 @@ def _transition_and_emit(
     task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
+    _write_checkpoint_best_effort(plan_path, state)
     payload = {"status": verb, "step": sid, "task_id": task_id}
     if extra_payload:
         payload.update(extra_payload)
@@ -4202,6 +4305,10 @@ def main() -> None:
 
     p_next = sub.add_parser("next", help="Show ready steps")
     p_next.add_argument("plan")
+    p_next.add_argument(
+        "--resume", action="store_true",
+        help="Print the last checkpoint (done steps, artifacts, open questions) before the live next view",
+    )
     add_format_flag(p_next)
     p_next.set_defaults(func=cmd_next)
 

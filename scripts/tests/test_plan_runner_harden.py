@@ -290,6 +290,113 @@ class PreflightCliTests(CliTestCase):
         self.assertIn("pra-nope-tool", outs[0]["systemMessage"])
 
 
+class CheckpointCliTests(CliTestCase):
+    def test_complete_fail_skip_write_checkpoint(self):
+        self.init()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("complete", str(self.plan), "S1", "--summary", "did", "--evidence", "e.txt")
+        data = json.loads(self.checkpoint_file.read_text())
+        self.assertEqual(data["next_ready_step"], "S2")
+        self.assertEqual(data["artifacts"], ["e.txt"])
+        self.assertEqual(data["preflight"], {"ok": True, "failed": []})
+        self.assertIsNone(data["stuck"])
+        self.cli("start", str(self.plan), "S2")
+        self.cli("fail", str(self.plan), "S2", "--reason", "boom")
+        self.assertIn("S2 failed: boom", json.loads(self.checkpoint_file.read_text())["open_questions"])
+        self.cli("skip", str(self.plan), "S2")
+        self.assertEqual(json.loads(self.checkpoint_file.read_text())["next_ready_step"], "S3")
+
+    def test_checkpoint_records_live_stuck(self):
+        self.init()
+        for _ in range(pr.HOOK_STUCK_AT):
+            self.hook()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("fail", str(self.plan), "S1", "--reason", "x")
+        self.assertIsNone(json.loads(self.checkpoint_file.read_text())["stuck"])
+
+    def test_resume_without_checkpoint_exits_1(self):
+        self.init()
+        r = self.cli("next", str(self.plan), "--resume")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("checkpoint", r.stdout)
+
+    def test_resume_prints_checkpoint_then_live_next(self):
+        self.init()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("complete", str(self.plan), "S1", "--summary", "did one", "--evidence", "e.txt")
+        r = self.cli("next", str(self.plan), "--resume")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("- S1: did one", r.stdout)
+        self.assertIn("- e.txt", r.stdout)
+        self.assertIn("S2", r.stdout)
+        rj = self.cli("next", str(self.plan), "--resume", "--format", "json")
+        data = json.loads(rj.stdout)
+        self.assertEqual(data["checkpoint"]["next_ready_step"], "S2")
+        self.assertEqual(data["checkpoint_path"], str(self.checkpoint_file))
+
+    def test_corrupt_checkpoint_exits_1(self):
+        self.init()
+        self.checkpoint_file.write_text("{")
+        r = self.cli("next", str(self.plan), "--resume")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("checkpoint", r.stdout)
+
+
+class CheckpointBestEffortTests(unittest.TestCase):
+    def test_checkpoint_preflight_none_when_module_missing(self):
+        with mock.patch.object(pr, "_import_sibling", side_effect=ImportError("x")):
+            self.assertIsNone(pr._checkpoint_preflight(Path("/x/p.md")))
+
+    def test_write_failure_is_swallowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "p.md"
+            plan.write_text(PLAN_TEXT)
+            with mock.patch.object(pr, "_import_sibling", side_effect=ImportError("x")):
+                self.assertIsNone(pr._write_checkpoint_best_effort(plan, {"steps": {}}))
+            with mock.patch.object(pr, "_build_checkpoint", side_effect=OSError("disk")):
+                self.assertIsNone(pr._write_checkpoint_best_effort(plan, {"steps": {}}))
+            self.assertFalse((Path(tmp) / ".plan-state").exists())
+
+
+class CheckpointStuckTests(unittest.TestCase):
+    """_checkpoint_stuck() reads the cwd pointer; resolve_pointer is mocked."""
+
+    PLAN = Path("/nonexistent-home/proj/p.md")
+
+    def _stuck(self, status, **pointer_fields):
+        data = {"plan_path": str(self.PLAN), "stuck_step_id": "S1", "stuck_kind": "ready",
+                "stuck_at": "2026-09-22T00:00:00+00:00", "assign_repeat_count": 3,
+                "nag_counts": 4, **pointer_fields}
+        state = {"steps": {"S1": {"status": status}}}
+        resolved = pr.ResolvedPointer(Path("/x.json"), data)
+        with mock.patch.object(pr, "resolve_pointer", return_value=resolved):
+            return pr._checkpoint_stuck(self.PLAN, state)
+
+    def test_ready_stall_still_pending_is_reported(self):
+        self.assertEqual(self._stuck("pending"), {
+            "step_id": "S1", "kind": "ready", "count": 3,
+            "stuck_at": "2026-09-22T00:00:00+00:00",
+        })
+
+    def test_in_progress_stall_uses_nag_count(self):
+        got = self._stuck("in_progress", stuck_kind="in_progress")
+        self.assertEqual((got["kind"], got["count"]), ("in_progress", 4))
+
+    def test_step_that_moved_on_is_not_reported(self):
+        self.assertIsNone(self._stuck("completed"))
+        self.assertIsNone(self._stuck("in_progress"))
+
+    def test_pointer_for_another_plan_is_ignored(self):
+        self.assertIsNone(self._stuck("pending", plan_path="/other/p.md"))
+
+    def test_no_record_or_lookup_error(self):
+        self.assertIsNone(self._stuck("pending", stuck_step_id=None))
+        with mock.patch.object(pr, "resolve_pointer", side_effect=OSError("x")):
+            self.assertIsNone(pr._checkpoint_stuck(self.PLAN, {"steps": {}}))
+        with mock.patch.object(pr, "resolve_pointer", return_value=None):
+            self.assertIsNone(pr._checkpoint_stuck(self.PLAN, {"steps": {}}))
+
+
 class PreflightDegradeTests(unittest.TestCase):
     def test_cli_reports_missing_module(self):
         args = mock.Mock(plan="/x/p.md", format="md")
@@ -297,6 +404,22 @@ class PreflightDegradeTests(unittest.TestCase):
                 mock.patch.object(pr, "emit") as emitted:
             self.assertEqual(pr.cmd_preflight(args), 1)
         self.assertIn("gone", emitted.call_args[0][0]["error"])
+
+
+class CheckpointStuckCliTests(CliTestCase):
+    PARALLEL = PLAN_TEXT.replace("  - Dependencies: S1\n", "")
+
+    def test_live_stall_on_another_step_lands_in_checkpoint(self):
+        self.plan.write_text(self.PARALLEL, encoding="utf-8")
+        self.init()
+        outs = [self.hook() for _ in range(pr.HOOK_STUCK_AT)]
+        self.assertIn("STUCK", outs[-1]["systemMessage"])
+        self.cli("start", str(self.plan), "S2")
+        self.cli("complete", str(self.plan), "S2", "--summary", "side step")
+        data = json.loads(self.checkpoint_file.read_text())
+        self.assertEqual(data["stuck"]["step_id"], "S1")
+        self.assertEqual(data["stuck"]["kind"], "ready")
+        self.assertIn("S1 STUCK (ready)", " ".join(data["open_questions"]))
 
 
 class SiblingImportTests(unittest.TestCase):

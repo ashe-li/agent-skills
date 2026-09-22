@@ -66,6 +66,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why", "Input", "Output",
+    "Requires-Approval", "Requires_Approval",
 )
 
 
@@ -218,6 +219,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 "skill": None,
                 "command": None,
                 "risk": None,
+                "requires_approval": False,
             }
             current_step_id = step_id
             continue
@@ -249,6 +251,11 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                     in_action_block = False
                 elif key == "risk":
                     steps[current_step_id]["risk"] = val
+                    in_action_block = False
+                elif key in ("requires-approval", "requires_approval"):
+                    steps[current_step_id]["requires_approval"] = (
+                        _import_sibling("plan_runner_guardrails").parse_requires_approval(val)
+                    )
                     in_action_block = False
                 continue
 
@@ -285,7 +292,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 _NORMALIZE_FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why",
-    "Input", "Output", "Test",
+    "Input", "Output", "Test", "Requires-Approval", "Requires_Approval",
 )
 
 
@@ -591,6 +598,7 @@ def init_state(
     plan_path: Path,
     parsed: dict[str, Any],
     require_summary: bool = False,
+    allowed_paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     steps_state = {}
     for sid, step in parsed["steps"].items():
@@ -612,6 +620,8 @@ def init_state(
             "failure_reason": None,
             "summary": None,
             "evidence": [],
+            "requires_approval": bool(step.get("requires_approval")),
+            "approved_at": None,
         }
 
     return {
@@ -624,6 +634,8 @@ def init_state(
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "steps": steps_state,
+        "allowed_paths": list(allowed_paths),
+        "out_of_scope_log": [],
     }
 
 
@@ -1982,9 +1994,12 @@ def _budget_hint_line(budget_info: BudgetDecision) -> str:
 
 
 def _other_ready_steps_line(state: dict[str, Any], step_id: str) -> str | None:
+    assignable, _gated = _import_sibling("plan_runner_guardrails").split_by_approval(
+        compute_ready_steps(state), state["steps"],
+    )
     ready = [
         safe
-        for sid in compute_ready_steps(state)
+        for sid in assignable
         if sid != step_id and (safe := _sanitize_step_id(sid))
     ]
     if not ready:
@@ -2469,6 +2484,7 @@ def _hook_block(
     )
     if suffix:
         reason = f"{reason}\n\n{suffix}"
+    reason = f"{reason}\n\n" + "\n".join(_guardrail_reason_lines(ctx))
     _clear_stuck_record(ctx)
     ctx.update(consecutive_blocks=ctx.counter("consecutive_blocks") + 1)
     return HookDecision(
@@ -2476,6 +2492,38 @@ def _hook_block(
         reason=reason,
         pointer_updates=ctx.updates(),
     )
+
+
+def _sanitize_sandbox_path(raw: Any) -> str:
+    """One display line for a sandbox path printed outside the fence.
+
+    The paths are hook-owned (pointer fields, or `init --allow-path` values
+    validated on the way in), but state and pointer files are user-writable,
+    so they get the same byte-stripping, newline folding and fence-defusing
+    as plan text before they reach the authoritative region.
+    """
+    text = _sanitize_plan_text(raw, PLAN_PATH_TRUNCATE_CHARS, collapse_newlines=True)
+    return text.split("\n", 1)[0].strip()
+
+
+def _guardrail_reason_lines(ctx: _HookContext) -> list[str]:
+    """Sandbox + scope rules appended to every blocking reason (PR-B).
+
+    Prompt text only: nothing intercepts tool calls. Lives outside the
+    fence because it is the hook's own instruction, not plan data.
+    """
+    gr = _import_sibling("plan_runner_guardrails")
+    plan_path = ctx.pointer.get("plan_path")
+    paths = [
+        clean for clean in (
+            _sanitize_sandbox_path(p) for p in gr.collect_allowed_paths(ctx.pointer, ctx.state)
+        ) if clean
+    ]
+    log_command = (
+        f"{_runner_invocation(plan_path)} log-out-of-scope {_quote_plan_path(plan_path)} "
+        '--text="<指令原文>" --source="<來源>"'
+    )
+    return gr.guardrail_lines(paths, log_command)
 
 
 def _hook_plain_budget(ctx: _HookContext) -> BudgetDecision:
@@ -2779,12 +2827,45 @@ def _budget_exhausted_message(
     )
 
 
+def _approval_gate(ctx: _HookContext, gated: tuple[str, ...]) -> HookDecision:
+    """Every ready step waits on a human: allow, and say what to decide.
+
+    Like a failed step this is a HITL stop, so the block counter is cleared
+    and the next real advance starts from a full budget.
+    """
+    step_id = gated[0]
+    plan_path = ctx.pointer.get("plan_path")
+    runner = _runner_invocation(plan_path)
+    plan = _quote_plan_path(plan_path)
+    sid = _sanitize_step_id(step_id)
+    if ctx.counter("consecutive_blocks") != 0:
+        ctx.update(consecutive_blocks=0)
+    lines = _import_sibling("plan_runner_guardrails").approval_gate_lines(
+        sid,
+        _plan_data_lines(ctx.state, ctx.state["steps"][step_id]),
+        approve_command=f"{runner} approve {plan} {sid}",
+        skip_command=f"{runner} skip {plan} {sid}",
+        others=[safe for s in gated[1:] if (safe := _sanitize_step_id(s))],
+    )
+    return _hook_allow(ctx, system_message="\n".join(lines))
+
+
 def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
-    """(10) Normal advance — S1.6 decides whether we still have budget."""
+    """(10) Normal advance — S1.6 decides whether we still have budget.
+
+    Steps marked Requires-Approval and not yet approved are never assigned;
+    an assignable sibling goes first, and only when every ready step is
+    gated does the hook stop and ask (PR-B).
+    """
     ready = sorted(compute_ready_steps(ctx.state))
     if not ready:
         return None
-    step_id = ready[0]
+    assignable, gated = _import_sibling("plan_runner_guardrails").split_by_approval(
+        ready, ctx.state["steps"],
+    )
+    if not assignable:
+        return _approval_gate(ctx, gated)
+    step_id = assignable[0]
     budget = decide_budget(ctx.pointer, ctx.state, step_id)
     if budget.decision != HOOK_BLOCK:
         return _hook_allow(ctx, system_message=_budget_exhausted_message(ctx, budget, step_id))
@@ -3135,10 +3216,31 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
 # CLI commands
 # ---------------------------------------------------------------------------
 
+def _init_allowed_paths(args: argparse.Namespace) -> tuple[tuple[str, ...], str | None]:
+    """`init --allow-path` values plus $PLAN_SANDBOX_ROOT, validated.
+
+    Read once here and stored in state, so the hook never depends on the
+    environment of whichever process happens to run it.
+    """
+    gr = _import_sibling("plan_runner_guardrails")
+    flags, error = gr.validate_allow_paths(getattr(args, "allow_path", None) or [], Path.cwd())
+    if error:
+        return (), f"--allow-path: {error}"
+    env_root = os.environ.get(gr.SANDBOX_ENV_VAR)
+    env_paths, error = gr.validate_allow_paths([env_root] if env_root else [], Path.cwd())
+    if error:
+        return (), f"${gr.SANDBOX_ENV_VAR}: {error}"
+    return tuple(dict.fromkeys((*flags, *env_paths))), None
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     if not plan_path.exists():
         emit({"error": f"Plan not found: {plan_path}"})
+        return 1
+    allowed_paths, path_error = _init_allowed_paths(args)
+    if path_error:
+        emit({"error": path_error})
         return 1
     parsed = parse_plan(plan_path)
     errors = validate_dag(parsed)
@@ -3163,8 +3265,11 @@ def cmd_init(args: argparse.Namespace) -> int:
             "state_path": str(state_path_for(plan_path)),
         })
         return 1
-    state = init_state(plan_path, parsed, getattr(args, "require_summary", False))
+    state = init_state(
+        plan_path, parsed, getattr(args, "require_summary", False), allowed_paths,
+    )
     save_state(plan_path, state)
+    risky = _import_sibling("plan_runner_guardrails").risky_step_warnings(state["steps"])
     payload = {
         "status": "initialized",
         "slug": state["slug"],
@@ -3173,7 +3278,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "total_steps": len(state["steps"]),
         "phase_order": state["phase_order"],
         "ready_steps": compute_ready_steps(state),
-        "warnings": parsed["warnings"],
+        "warnings": [*parsed["warnings"], *risky],
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
@@ -3472,6 +3577,15 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
     sid = args.step
     if sid not in state["steps"]:
         emit({"error": f"Unknown step: {sid}"})
+        return 1
+    if _import_sibling("plan_runner_guardrails").awaiting_approval(state["steps"][sid]):
+        emit({
+            "error": f"{sid} is marked Requires-Approval and has not been approved",
+            "hint": (
+                f"Stop and ask the user. Only a human may run: "
+                f"plan_runner.py approve {plan_path} {sid}"
+            ),
+        })
         return 1
     if not deps_all_completed(state, sid):
         unmet = [
@@ -3788,6 +3902,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         s["failure_reason"] = None
         s["summary"] = None
         s["evidence"] = []
+        s["approved_at"] = None
 
     if args.all:
         for s in state["steps"].values():
@@ -3804,6 +3919,59 @@ def cmd_reset(args: argparse.Namespace) -> int:
     recompute_blocked_status(state)
     save_state(plan_path, state)
     emit({"status": "reset", "summary": summary(state)})
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_approve_locked)
+
+
+def _cmd_approve_locked(args: argparse.Namespace) -> int:
+    """Human sign-off for a Requires-Approval step. Re-approving keeps the
+    first timestamp so the record shows when the decision was actually made.
+    """
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    step = state["steps"].get(args.step)
+    if step is None:
+        emit({"error": f"Unknown step: {args.step}"})
+        return 1
+    if not step.get("requires_approval"):
+        emit({"error": f"{args.step} is not marked Requires-Approval; nothing to approve"})
+        return 1
+    if not step.get("approved_at"):
+        step["approved_at"] = now_iso()
+        save_state(plan_path, state)
+    payload = {"status": "approved", "step": args.step, "approved_at": step["approved_at"]}
+    emit_formatted(payload, args.format, lambda d: f"Approved: {d['step']} at {d['approved_at']}")
+    return 0
+
+
+def cmd_log_out_of_scope(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_log_out_of_scope_locked)
+
+
+def _cmd_log_out_of_scope_locked(args: argparse.Namespace) -> int:
+    """Record an instruction that arrived from outside the plan. The text is
+    stored, never echoed back, so logging it cannot re-inject it.
+    """
+    gr = _import_sibling("plan_runner_guardrails")
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    running = [sid for sid, s in state["steps"].items() if s.get("status") == IN_PROGRESS]
+    entry, error = gr.build_out_of_scope_entry(
+        args.text, args.source, step_id=running[0] if running else None,
+        at=now_iso(), strip=_strip_unsafe_bytes,
+    )
+    if error is None:
+        new_log, error = gr.append_out_of_scope(state.get("out_of_scope_log"), entry)
+    if error is not None:
+        emit({"error": error})
+        return 1
+    state["out_of_scope_log"] = list(new_log)
+    save_state(plan_path, state)
+    payload = {"status": "logged", "count": len(new_log)}
+    emit_formatted(payload, args.format, lambda d: f"Logged out-of-scope instruction #{d['count']}")
     return 0
 
 
@@ -4320,6 +4488,14 @@ def main() -> None:
         "--no-attach", dest="attach", action="store_false",
         help="Skip pointer attach after init",
     )
+    p_init.add_argument(
+        "--allow-path", dest="allow_path", action="append", default=None, metavar="PATH",
+        help=(
+            "Extra sandbox path named in every hook reason (repeatable). Defaults "
+            "already cover repo root, cwd and the plan dir; $PLAN_SANDBOX_ROOT is "
+            "added when set. Prompt-level rule only, not enforced."
+        ),
+    )
     add_format_flag(p_init)
     p_init.set_defaults(func=cmd_init)
 
@@ -4368,6 +4544,24 @@ def main() -> None:
     p_fail.add_argument("--reason", default="")
     add_format_flag(p_fail)
     p_fail.set_defaults(func=cmd_fail)
+
+    p_approve = sub.add_parser(
+        "approve", help="Human approval for a Requires-Approval step (records time)",
+    )
+    p_approve.add_argument("plan")
+    p_approve.add_argument("step")
+    add_format_flag(p_approve)
+    p_approve.set_defaults(func=cmd_approve)
+
+    p_oos = sub.add_parser(
+        "log-out-of-scope",
+        help="Record an instruction that came from outside the plan (not followed)",
+    )
+    p_oos.add_argument("plan")
+    p_oos.add_argument("--text", required=True, help="The instruction, max 500 chars")
+    p_oos.add_argument("--source", default="", help="Where it came from, max 200 chars")
+    add_format_flag(p_oos)
+    p_oos.set_defaults(func=cmd_log_out_of_scope)
 
     p_skip = sub.add_parser("skip", help="Mark step skipped")
     p_skip.add_argument("plan")

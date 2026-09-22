@@ -937,7 +937,7 @@ def _awaiting_approval_lines(awaiting: list[str]) -> list[str]:
     return [
         "",
         f"## 需核准 ({len(awaiting)}): {', '.join(awaiting)} — 標了 Requires-Approval "
-        "尚未核准，`start` 會被拒絕；停下來問使用者，只有人能執行 `approve`",
+        "尚未核准，還不能開始；停下來問使用者，由人執行 `approve <plan> <step>` 核准後才會出現在 ready",
     ]
 
 
@@ -3340,7 +3340,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "state_path": str(state_path_for(plan_path)),
         "total_steps": len(state["steps"]),
         "phase_order": state["phase_order"],
-        "ready_steps": compute_ready_steps(state),
+        "ready_steps": _split_ready_for_cli(state)[0],
         "warnings": [*parsed["warnings"], *risky],
     }
     emit_formatted(payload, args.format, format_init_md)
@@ -3375,9 +3375,19 @@ def _require_state(plan_path: Path) -> dict[str, Any]:
     return state
 
 
-def _awaiting_approval_steps(state: dict[str, Any], ready: list[str]) -> list[str]:
-    gr = _import_sibling("plan_runner_guardrails")
-    return [sid for sid in ready if gr.awaiting_approval(state["steps"][sid])]
+def _split_ready_for_cli(state: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """(ready to hand out, waiting on approval) for the CLI views.
+
+    A Requires-Approval step that has not been approved is not "ready" in
+    any CLI output: it never gets a start template, only a line saying a
+    human has to approve it. After `approve` it rejoins the ready list and,
+    because `previously_reported_ready` never held it, shows up as newly
+    unlocked with its full instructions.
+    """
+    assignable, gated = _import_sibling("plan_runner_guardrails").split_by_approval(
+        compute_ready_steps(state), state["steps"],
+    )
+    return list(assignable), list(gated)
 
 
 def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, Any]:
@@ -3393,7 +3403,7 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
     Side effect: updates `state["previously_reported_ready"]` to current
     ready set so the next call's delta is computed correctly.
     """
-    current_ready = compute_ready_steps(state)
+    current_ready, awaiting = _split_ready_for_cli(state)
     in_progress = sorted(
         sid for sid, s in state["steps"].items() if s["status"] == IN_PROGRESS
     )
@@ -3415,7 +3425,7 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
         "parent_task_id": state.get("parent_task_id"),
         "ready_steps_new": [step_to_instruction(state, sid) for sid in newly],
         "ready_steps_still": still,  # IDs only — Claude already saw these
-        "awaiting_approval_steps": _awaiting_approval_steps(state, current_ready),
+        "awaiting_approval_steps": awaiting,
         "in_progress_steps": [
             {
                 "id": sid,
@@ -3501,7 +3511,7 @@ def _build_checkpoint(plan_path: Path, state: dict[str, Any]) -> tuple[Any, dict
     ck = _import_sibling("plan_runner_checkpoint")
     data = ck.build_checkpoint(
         state,
-        ready_steps=sorted(compute_ready_steps(state)),
+        ready_steps=sorted(_split_ready_for_cli(state)[0]),
         stuck=_checkpoint_stuck(plan_path, state),
         preflight=_checkpoint_preflight(plan_path),
         now=now_iso(),

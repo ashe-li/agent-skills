@@ -351,6 +351,40 @@ class CheckpointOpenQuestionsTests(unittest.TestCase):
         self.assertEqual(self._questions(state), [])
 
 
+class NextOmitsGatedStepsTests(unittest.TestCase):
+    """Unapproved gated steps are not "ready" in any CLI view: they appear
+    only in awaiting_approval_steps, and return to ready after approve."""
+
+    def _state(self):
+        return make_state({
+            "S1": make_step(requires_approval=True),
+            "S2": make_step(),
+        })
+
+    def test_delta_tracking_across_approval(self):
+        state = self._state()
+        first = pr._build_state_view(state)
+        self.assertEqual([s["id"] for s in first["ready_steps_new"]], ["S2"])
+        self.assertEqual(first["awaiting_approval_steps"], ["S1"])
+        self.assertEqual(state["previously_reported_ready"], ["S2"])
+        again = pr._build_state_view(state)
+        self.assertEqual(again["ready_steps_new"], [])
+        self.assertEqual(again["ready_steps_still"], ["S2"])
+        state["steps"]["S1"]["approved_at"] = "t"
+        after = pr._build_state_view(state)
+        self.assertEqual([s["id"] for s in after["ready_steps_new"]], ["S1"])
+        self.assertEqual(after["ready_steps_still"], ["S2"])
+        self.assertEqual(after["awaiting_approval_steps"], [])
+        self.assertEqual(sorted(state["previously_reported_ready"]), ["S1", "S2"])
+
+    def test_md_has_no_run_command_for_gated_step(self):
+        md = pr.format_next_md(pr._build_state_view(self._state(), mode="full"))
+        self.assertNotIn(" start <plan> S1", md)
+        self.assertNotIn("### S1", md)
+        self.assertIn("## 需核准 (1): S1", md)
+        self.assertIn("approve", md.split("## 需核准", 1)[1])
+
+
 class GuardrailInEveryBlockReasonTests(unittest.TestCase):
     TOKENS = (gr.SANDBOX_ENV_VAR, "~/.claude", "log-out-of-scope", "使用者")
 
@@ -548,14 +582,25 @@ class GuardrailCliTests(unittest.TestCase):
         self.assertFalse(any("do evil" in q for q in questions))
 
     def test_next_marks_steps_awaiting_approval(self):
-        self._init()
+        init = json.loads(self._init().stdout)
+        self.assertEqual(init["ready_steps"], ["S3"])
         md = self._run("next", str(self.plan)).stdout
         self.assertIn("需核准", md)
         self.assertIn("S1", md.split("需核准", 1)[1].split("\n", 1)[0])
+        self.assertNotIn(f"start {self.plan} S1", md)
         data = json.loads(self._run("next", str(self.plan), "--format", "json").stdout)
         self.assertEqual(data["awaiting_approval_steps"], ["S1"])
+        self.assertEqual([s["id"] for s in data["ready_steps_new"]], ["S3"])
         self._run("approve", str(self.plan), "S1")
-        self.assertNotIn("需核准", self._run("next", str(self.plan)).stdout)
+        md = self._run("next", str(self.plan)).stdout
+        self.assertNotIn("需核准", md)
+        self.assertIn("S1", md)
+
+    def test_checkpoint_next_ready_skips_gated(self):
+        self._init()
+        self._run("start", str(self.plan), "S3")
+        self._run("complete", str(self.plan), "S3", "--summary=done")
+        self.assertIsNone(self._checkpoint()["next_ready_step"])
 
     def test_approve_rejects_unmarked_and_unknown(self):
         self._init()

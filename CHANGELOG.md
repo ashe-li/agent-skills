@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.2.1] - 2026-09-22
+
 ### Fixed
 - **結案報告路徑在 `complete`／`skip`／`status` 輸出裡不夠顯眼**：實例（2026-09-22）：plan 全部完成後，`_write_completion_report()` 確實有自動寫報告，但 md 格式只在整份 state view 印完後補一行 `Report: <path>`，使用者／LLM 讀完落落長的 state view 就沒注意到，事後問「沒有結案報告嗎」；`status` 對 all_done 的 plan 更完全不提報告。`format_transition_md` 改在 header（`# completed: Sx`）之後、state view 之前先印 `## 結案報告（plan 已全部完成）` 區塊（失敗則 `## 結案報告寫入失敗`），state view 之後不再重複印一次；`status`（md）在 all_done 時加印「結案報告：<path>」，檔案不存在則提示改跑 `report` 子命令；`status`（json）在 all_done 且檔案存在時加上 `report_path` 鍵。hook-stop 的 all_done 分支（`_render_completion`）本來就已印出路徑與取得方式，未變動。
 - **`notion-plan` description 觸發範圍太窄，只讀不建 plan 的情境配不到**：原 description 只寫「串接 /design 建立實作計畫」，agent 遇到「依 Notion 需求修 bug、對照 Figma」這類單純讀取需求時配不到本 skill，改用 WebFetch（被 `webfetch-blocklist-guard.py` 擋下）再改用 `agent-browser` 手動 snapshot，拿到一堆空的 generic 節點，最後要使用者手動介入才改用 `/notion-plan`。改寫 description 明確涵蓋「讀取 Notion 頁面內容」這個更寬的觸發面（建 plan 只是其中一種用途），並在本文加註「不要用 WebFetch／agent-browser 手動讀取 Notion」；Step 5 新增「只讀不建 plan」分支，整理完內容即停下交回，不強制觸發 `/design`。新增 `--read-only` 引數示意用法。
@@ -666,7 +668,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.2.1...HEAD
+[v3.2.1]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...v3.2.1
 [v3.2.0]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...v3.2.0
 [v3.1.0]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...v3.1.0
 [v3.0.0]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...v3.0.0

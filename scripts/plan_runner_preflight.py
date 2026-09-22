@@ -20,8 +20,13 @@ healthy plan, which is worse than missing a check):
   with shlex and its first word (after `NAME=value` assignments) is the tool.
 - Skipped: shell builtins, and slash commands such as `/verify` or
   `/code-review` — those are Claude Code skills, not executables.
-- A tool containing `/` is checked as a path (relative to `base_dir`,
-  must be an executable file); anything else is looked up on PATH.
+- Skipped: any head word with shell expansion (`$VAR`, `${VAR}`, `$(...)`,
+  backticks) — its value is only known when the shell runs it.
+- Skipped: a relative path (`./run.sh`, `bin/x`) that comes after a `cd` /
+  `pushd` in the same command — the directory it resolves against is only
+  known at run time, and guessing it is how a healthy plan gets stopped.
+- Any other tool containing `/` is checked as a path (relative to
+  `base_dir`, must be an executable file); the rest is looked up on PATH.
 - A segment shlex cannot parse (unbalanced quotes) is skipped, not guessed.
 """
 from __future__ import annotations
@@ -39,6 +44,8 @@ KIND_PLAN = "plan"
 KIND_STATE = "state"
 KIND_TOOL = "tool"
 
+_DIR_CHANGERS = frozenset({"cd", "pushd", "popd"})
+_EXPANSION_CHARS = ("$", "`")
 SHELL_BUILTINS = frozenset({
     ".", ":", "[", "alias", "cd", "command", "eval", "exec", "exit", "export",
     "pushd", "popd", "read", "return", "set", "shift", "source", "test",
@@ -72,26 +79,39 @@ class PreflightResult:
         return tuple(check for check in self.checks if not check.ok)
 
 
-def _segment_tool(segment: str) -> str | None:
+def _segment_head(segment: str) -> str | None:
+    """First word of one segment after `NAME=value` assignments, or None
+    when there is none or shlex cannot parse the segment."""
     try:
         words = [w for w in shlex.split(segment) if not _ENV_ASSIGN_RE.match(w)]
     except ValueError:
         return None
-    if not words:
-        return None
-    head = words[0]
+    return words[0] if words else None
+
+
+def _is_relative_path(word: str) -> bool:
+    return "/" in word and not word.startswith(("/", "~"))
+
+
+def _checkable(head: str, after_cd: bool) -> bool:
     if head in SHELL_BUILTINS or _SLASH_COMMAND_RE.match(head):
-        return None
-    return head
+        return False
+    if any(ch in head for ch in _EXPANSION_CHARS):
+        return False
+    return not (after_cd and _is_relative_path(head))
 
 
 def extract_tools(command: str | None) -> tuple[str, ...]:
     """Tools one `Command:` value needs, in first-seen order, de-duplicated."""
     tools: list[str] = []
+    after_cd = False
     for segment in _SEGMENT_SPLIT_RE.split(command or ""):
-        tool = _segment_tool(segment)
-        if tool is not None and tool not in tools:
-            tools.append(tool)
+        head = _segment_head(segment)
+        if head is None:
+            continue
+        if _checkable(head, after_cd) and head not in tools:
+            tools.append(head)
+        after_cd = after_cd or head in _DIR_CHANGERS
     return tuple(tools)
 
 

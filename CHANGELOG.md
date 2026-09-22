@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+- **新增 `/rca` skill**：接收 Sentry issue、Grafana alert 或 CI 失敗 URL，同時派 OBSERVABILITY／HISTORY／KNOWLEDGE／INFRA 四路唯讀調查，再由 fresh-context SYNTHESIS 產出合併時間軸、以新證據裁決的矛盾清單、根因＋信心＋falsifier、四類分類（SELF-INFLICTED→CODIFY／DRIFT→REVERT／REAL DEFECT→FIX／EXTERNAL→RECORD），以及修復 PR 草稿與 rollback checklist。內建兩條反模式護欄（不用字面資源名 grep 判斷 IaC 管理；不讀值不報 secret）。附 `rca/scripts/obs_http.py`，這是 GET-only 的 Grafana／Sentry helper，給拿不到 MCP 的 subagent 用，憑證執行時才從 `~/.claude.json` 讀。每一路都要自己把報告寫檔，因為 teammate 的 idle notification 會截斷長報告。
+
 ## [v3.2.0] - 2026-09-17
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」逐項核對：新增 `report` 子命令與 `complete` 的 `--summary`／`--evidence` 兩個選用 flag，都是向後相容的新功能，沒帶就與現行行為逐字相同；state.json 只新增欄位，舊 runner 讀新 state 一律用 `.get()` 取值、多出來的鍵會被忽略，新 runner 讀舊 state 也不會 raise；`complete`／`fail`／`skip` 改在 state lock 下執行，新出現的 lock error 只在兩個 session 同時競爭同一份 state 時才會發生，而原本那種情境下的行為是靜默 lost update，這是修 bug 不是介面變更；再次 `complete` 保留 `completed_at` 沒有任何程式邏輯依賴（已 grep 確認，`reset` 除外）；plan 格式契約、指令名、DSL、安全紅線都沒有改；三份 SKILL.md（`plan-run`、`dispatch-loop`、`plan-archive`）的流程調整是文件敘述，不是對外介面。本次追加的 `init --require-summary` 同樣是 opt-in flag，不帶則 state 無此鍵、`complete` 行為與現行逐字相同，只有主動選用才會改變既有用法，故仍為 MINOR。最高位階為 MINOR。

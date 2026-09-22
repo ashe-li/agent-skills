@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+- **新增 `preflight` 子命令，hook 在第一步前先檢查執行環境**：`plan_runner.py preflight <plan> [--format md|json]` 檢查 runner 腳本本身（就是 hook reason 印出的那個路徑）、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具，任一項失敗 exit 1，每個缺項一行並附修復建議。起因是 E2E 實測：ready step 的指令跑不起來，模型一直沒有 `start`，hook 在 0/20 連發六輪同一道指令——環境缺東西應該在第一步之前一次講清楚。工具抽取規則刻意收窄，寧可漏查也不誤報：只看 `Command:`（`Action:` 的反引號多半是檔名與函式名），依 `&&`／`||`／`;`／`|` 切段取第一個字，跳過 `NAME=value`、shell builtin 與 `/verify` 這類 slash command（它們是 skill 不是執行檔），含 `/` 的當路徑檢查、其餘查 PATH。模式 B 的 hook 在還沒有任何 step 開始時，由 I/O 層先跑 preflight 再把結果傳進 `decide_hook_action()`（維持 no-I/O 契約）；失敗就 allow＋`[plan-run] PREFLIGHT 失敗` systemMessage 逐項列出，不再 block 重發一個跑不起來的 step。
+- **Stop hook 加單調進度斷言（STUCK）**：同一個 step 第 3 次被 hook 指派仍沒有進展（ready 沒被 `start`，或 in_progress 沒回報 `complete`／`fail`），改為 allow＋`[plan-run] STUCK` systemMessage，列出 step、次數、首次與本次時間、建議動作；之後這個 step 有進展前一律 allow、不重複訊息。原本 ready 分支第 2 次重複只加一段警告、照樣 block 到 `BLOCK_BUDGET`（7）用完，重送已經失敗兩次的指令不會有不同結果。門檻為常數 `HOOK_STUCK_AT = 3`。ready 的次數沿用 `assign_repeat_count`、不隨使用者開口歸零（新的一輪不會讓沒跑的 `start` 變成跑過）；in_progress 沿用 `nag_counts`、使用者開口就歸零，只抓 auto-advance 自己繞圈，不誤判跨 turn 的長 step。pointer 新增 optional 欄位 `attempt_first_at`、`stuck_step_id`、`stuck_kind`、`stuck_at`，舊 pointer 仍為 VALID。
+- **可續跑的 checkpoint 與 `next <plan> --resume`**：每次 `complete`／`fail`／`skip` 成功後原子寫入 `.plan-state/<slug>.checkpoint.json`，內容是新 session 接手需要的東西：已完成 steps（含摘要與 evidence）、artifacts（沿用 evidence）、open questions（失敗原因與仍有效的 STUCK）、下一個 ready step、STUCK 與 preflight 狀態。state 只記每個 step 在哪，看不出做了什麼、產出在哪、卡在哪。寫入是 best-effort，state 已存好時 checkpoint 寫不出來不會把轉換變成失敗。`next <plan> --resume` 先印 checkpoint 摘要再印即時的 next 視圖，沒有或讀不到 checkpoint 時 exit 1 並提示改用不帶 `--resume` 的 `next`。沒有另開 `resume` 子命令：`resume` 已是 pointer 的暫停／續行（不吃 plan 參數），續跑 plan 做成 `next` 的旗標，避免撞名與語意混淆。
+
+### Changed
+- **`plan_runner.py` 會載入同目錄的 `plan_runner_preflight.py`、`plan_runner_checkpoint.py`**：`_import_sibling()` 在 import 前把 `scripts/` 補進 `sys.path`，用 `importlib.util.spec_from_file_location` 載入（`python3 -I`、cwd 不在 scripts/）也能運作；hook 路徑遇到 `ImportError` 就略過 preflight，只複製 `plan_runner.py` 一個檔案的舊式安裝不會讓每個 Stop event 報錯。`AGENT_SKILLS_DIR` 須指向完整 checkout，見 `scripts/hooks/README.md`。
+
 ## [v3.2.0] - 2026-09-17
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」逐項核對：新增 `report` 子命令與 `complete` 的 `--summary`／`--evidence` 兩個選用 flag，都是向後相容的新功能，沒帶就與現行行為逐字相同；state.json 只新增欄位，舊 runner 讀新 state 一律用 `.get()` 取值、多出來的鍵會被忽略，新 runner 讀舊 state 也不會 raise；`complete`／`fail`／`skip` 改在 state lock 下執行，新出現的 lock error 只在兩個 session 同時競爭同一份 state 時才會發生，而原本那種情境下的行為是靜默 lost update，這是修 bug 不是介面變更；再次 `complete` 保留 `completed_at` 沒有任何程式邏輯依賴（已 grep 確認，`reset` 除外）；plan 格式契約、指令名、DSL、安全紅線都沒有改；三份 SKILL.md（`plan-run`、`dispatch-loop`、`plan-archive`）的流程調整是文件敘述，不是對外介面。本次追加的 `init --require-summary` 同樣是 opt-in flag，不帶則 state 無此鍵、`complete` 行為與現行逐字相同，只有主動選用才會改變既有用法，故仍為 MINOR。最高位階為 MINOR。

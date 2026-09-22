@@ -66,6 +66,14 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS" --requ
 
 `init` 預設會 attach（把 cwd 的 pointer 指向這份 plan，hook 從下一輪起接手）；模式 A 用 `--no-attach` 只建 state 不掛 pointer。`--require-summary` 讓這份 plan 的 state 記下 `require_summary: true`：之後 `complete` 沒帶 `--summary`、且該 step 還沒有摘要時會被拒絕（rc=1），已有摘要（事後補寫過）可不帶 flag 冪等重跑；`fail`／`skip` 不受影響。輸出含 `total_steps`、`phase_order`、`ready_steps`、`warnings`。
 
+init 之後跑一次 `preflight`，確認環境跑得動這份 plan：
+
+```bash
+python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
+```
+
+它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（取每段指令的第一個字；`/verify` 這類 slash command、shell builtin、`NAME=value` 不算）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
+
 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。已存在 state → 先 `plan_runner.py status "$ARGUMENTS"` 看狀態再決定，要重來用 `init --force`。
 
 > 有 Task 工具時可額外建一個父 task（subject 用 plan title），再 `plan_runner.py set-parent "$ARGUMENTS" --task-id=<id>` 寫回 state 供 audit。**沒有工具就跳過**，不要停下來問使用者、也不要改設定。
@@ -118,6 +126,10 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS" --requ
 > 2. **跳過** — `plan_runner.py skip "$ARGUMENTS" <id>`（風險自負）
 > 3. **中止** — `plan_runner.py pause`（不吃 plan 參數，作用於 cwd 的 pointer）
 
+## Step 3.5（模式 B）: STUCK —— 同一個 step 沒有進展
+
+hook 對同一個 step 第 3 次沒有進展時（ready 一直沒被 `start`，或 in_progress 一直沒回報 `complete`／`fail`），**不再 block**，改發 `[plan-run] STUCK：...` systemMessage，列出 step、次數、首次與本次時間、建議動作，之後這個 step 有進展前 hook 都不會再 block。看到 STUCK 不要重跑同一道指令：先查為什麼 `start`／`complete` 沒被執行（指令跑不起來就 `preflight`、做不了就 `skip`、結果不明就 `fail`）。ready 的次數不隨使用者開口歸零；in_progress 的次數在使用者開口時歸零，跨 turn 的長 step 不會被誤判。
+
 ## Step 4: 完成驗證
 
 plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補摘要），runner 會自動把執行報告寫到 `<plan-dir>/.plan-state/<slug>.report.md`（內容等於 `report` 指令的 md 輸出）。md 輸出在最上方（header 之後、state view 之前）就會印出 `## 結案報告（plan 已全部完成）` 區塊帶 `Report: <path>`（寫檔失敗則是 `## 結案報告寫入失敗` 帶 `Report: failed (<原因>)`）（json 對應 `report_path`／`report_error`）；`status` 在 all_done 時同樣會多印一行「結案報告：<path>」，檔案不存在則改印提示改跑 `report` 子命令。模式 B 的 Stop hook 在 all_done 時同樣會在注入訊息裡印出這個路徑（找不到就改跑 `report` 子命令取得），但 hook 訊息本身**不帶報告內容**——只有路徑與指令。
@@ -127,7 +139,9 @@ plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補�
 ## 控制面
 
 - `init "$ARGUMENTS" --require-summary` — 見 Step 1，讓這份 plan 的 `complete` 強制帶摘要
-- `pause` / `resume` — 暫停／恢復注入（state 保留），想手動接管時用
+- `preflight "$ARGUMENTS" [--format md|json]` — 見 Step 1，檢查環境跑不跑得動這份 plan，任一項失敗 exit 1
+- `next "$ARGUMENTS" --resume` — 新 session 接手時用：先印 checkpoint 摘要（已完成 step 與摘要、artifacts、open questions、STUCK／preflight 狀態），再印即時的 `next`；還沒有 checkpoint（沒做過任何 `complete`／`fail`／`skip`）時 exit 1，改跑不帶 `--resume` 的 `next`
+- `pause` / `resume` — 暫停／恢復注入（state 保留），想手動接管時用。`resume` 作用於 cwd 的 pointer、不吃 plan 參數，跟 `next --resume` 是兩回事
 - `detach` — 移除 cwd 的 pointer（plan 完成或換 plan 時）；`pointer` — 看當前 cwd 解析到哪份 plan
 - `doctor` — hook 安裝自檢（唯讀）；`dag "$ARGUMENTS"` — DAG 視覺化（`--format=dot`），debug 用
 - `status "$ARGUMENTS" [--format md|json]` — 列出全部 step 與狀態；plan 已 all_done 時，`Progress` 行下方會多印 `結案報告：<path>`（json 為 `report_path`，只在檔案存在時才有），報告檔不存在則改印提示，請改跑 `report`
@@ -135,7 +149,7 @@ plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補�
 
 ## 全手動模式（連 `/goal` 都不用時）
 
-Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete`（含 `--summary`／`--evidence`，寫法同 Step 2）並讀 `## Newly unlocked` 決定下一步；收到 `locked` 錯誤（拿不到 state 鎖）就重跑同一個指令，不要換寫法或跳過。context 被 compaction 砍掉時跑 `index "$ARGUMENTS"`（~500 chars）看 trace，或 `next "$ARGUMENTS"` 重拿完整模板（會 reset delta 追蹤）。**已知弱點是你可能忘記查狀態**——`/goal` 存在的理由就是把「記得再跑一輪」這件事交出去，成本是一道指令，沒有理由不用。
+Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete`（含 `--summary`／`--evidence`，寫法同 Step 2）並讀 `## Newly unlocked` 決定下一步；收到 `locked` 錯誤（拿不到 state 鎖）就重跑同一個指令，不要換寫法或跳過。context 被 compaction 砍掉時跑 `index "$ARGUMENTS"`（~500 chars）看 trace，換新 session 接手就跑 `next "$ARGUMENTS" --resume`（先看做過什麼、產出在哪、卡在哪），或 `next "$ARGUMENTS"` 重拿完整模板（會 reset delta 追蹤）。**已知弱點是你可能忘記查狀態**——`/goal` 存在的理由就是把「記得再跑一輪」這件事交出去，成本是一道指令，沒有理由不用。
 
 ## Plan 格式約束
 
@@ -177,6 +191,8 @@ parser 只認 step／phase／field 的樣式，不看 checkbox 打勾、也不�
 `pending` 等待中（deps 未滿足或未啟動）；`in_progress` 執行中（有 Task 工具時已回寫 task_id，否則 null）；`failed` 需使用者決定後續；`blocked` 因 dep 失敗而 block，dep reset 後自動回 pending；`skipped` 使用者主動跳過，後續 deps 視同 completed 解 block。
 
 transition 由 Python 強制驗證，不允許 `completed → pending` 等非法轉移（避免覆寫已完成工作）。
+
+每次 `complete`／`fail`／`skip` 成功後，runner 另外原子寫入 `.plan-state/<slug>.checkpoint.json`：已完成 steps（含摘要與 evidence）、artifacts、open questions（失敗原因與仍有效的 STUCK）、下一個 ready step、STUCK 與 preflight 狀態。它是給新 session 接手看的摘要，推進順序仍以 state 為準；寫不出來不影響該次轉換的 rc。
 
 每個 step 的 state 可能帶 `summary`／`evidence` 欄位（由 `complete --summary`／`--evidence` 寫入，`report` 讀取彙整）；舊 state 沒有這兩個欄位一樣能被 `status`／`next`／`report` 正常讀取，不會 raise。
 

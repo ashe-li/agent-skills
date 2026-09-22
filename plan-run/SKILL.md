@@ -76,7 +76,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
 
 `warnings` 若出現 `` S<id>: mentions `gh pr merge` but has no `Requires-Approval: true` ``（偵測 `gh pr merge`、`kubectl apply/delete`、`helm upgrade/install/uninstall`、`terraform apply/destroy`），把這條轉告使用者，問要不要在該 step 補 `Requires-Approval: true` 再 `init --force`；只是警告，不擋 init。
 
-`--allow-path <路徑>`（可重複）把額外路徑加進 sandbox 清單，環境變數 `PLAN_SANDBOX_ROOT` 有設定時也會在 init 當下記進 state；repo root、cwd、plan 所在目錄不用另外給。每個值都必須解析成**確實存在的目錄**；不存在、是檔案、含換行或控制字元、長度超過 300、超過 20 筆，或解析後是 `/`，init 直接 rc=1 拒絕，不建 state。規則內容見下方「Sandbox 與範圍外指令」。
+`--allow-path <路徑>`（可重複）把額外路徑加進 sandbox 清單，環境變數 `PLAN_SANDBOX_ROOT` 有設定時也會在 init 當下記進 state；repo root、cwd、plan 所在目錄不用另外給。值會解析成絕對路徑，不必已經存在，也可以是單一檔案（例如 step 自己才會建立的輸出目錄）；含換行或控制字元、長度超過 300、超過 20 筆，或解析後是 `/`，init 直接 rc=1 拒絕，不建 state。`PLAN_SANDBOX_ROOT` 不合法時只在 `warnings` 提醒並略過，不會讓 init 失敗。`init` 的輸出也會另列 `需核准` 段（json `awaiting_approval_steps`），`Ready now` 不含未核准的 step。規則內容見下方「Sandbox 與範圍外指令」。
 
 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。已存在 state → 先 `plan_runner.py status "$ARGUMENTS"` 看狀態再決定，要重來用 `init --force`。
 
@@ -141,7 +141,7 @@ step 標了 `Requires-Approval: true` 就要等人核准才會被指派。還沒
 - hook 不會把它當成 next step，也不會列在 `Also ready`。同時有不需核准的 ready step 就先派那些；**所有** ready step 都在等核准時，hook 才停下（allow，不 block），用 systemMessage 附上決策摘要：step、圍欄內的 action／risk、要人決定什麼、核准指令、`skip` 指令
 - `start` 直接 rc=1 拒絕並提示去問使用者
 
-未核准的 step 不算 ready：`next`、`init` 的 `ready_steps`、`complete`／`fail`／`skip` 附帶的狀態、checkpoint 的 next step 都不會列它，也不會給 start 模板；`next` 只在 `## 需核准 (N): <ids>` 段（json 為 `awaiting_approval_steps`）列出，附的是由人執行 `approve` 的說明。核准後它才回到 ready，並以 newly unlocked 的完整模板出現。
+未核准的 step 不算 ready：`next`、`init` 的 `ready_steps`、`complete`／`fail`／`skip` 附帶的狀態、checkpoint 的 next step 都不會列它，也不會給 start 模板；`next` 只在 `## 需核准 (N): <ids>` 段（json 為 `awaiting_approval_steps`）列出，附的是由人執行 `approve` 的說明。核准後它才回到 ready，並以 newly unlocked 的完整模板出現。`start` 印的 `## Next hints` 同樣不列未核准的 step。
 
 **`approve` 只能由人執行，你不可以自己跑**。看到這個關卡就停下，把摘要轉告使用者，等對方自己跑 `plan_runner.py approve "$ARGUMENTS" <id>`（會記錄 `approved_at`，重跑保留第一次的時間），或決定 `skip`。核准後 hook 下一輪就恢復正常推進。`reset` 會一併清掉 `approved_at`，重做的 step 要重新核准。
 

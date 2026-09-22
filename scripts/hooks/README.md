@@ -123,8 +123,10 @@ export AGENT_SKILLS_DIR=/Users/shiun/Documents/agent-skills-stop-hook
 `doctor` 是讀已安裝的 wrapper 取得預設值（不是自存一份常數），所以兩種指法它都認得。
 
 `AGENT_SKILLS_DIR` 必須指向完整的 checkout：`plan_runner.py` 會從同一個 `scripts/` 目錄載入
-`plan_runner_preflight.py`、`plan_runner_checkpoint.py`。只複製 `plan_runner.py` 一個檔案時 hook
-不會壞（preflight 會被略過），但 `preflight` 子命令與 checkpoint 就不會運作，`doctor` 也不會替你發現這件事。
+`plan_runner_preflight.py`、`plan_runner_checkpoint.py`、`plan_runner_guardrails.py`。只複製 `plan_runner.py`
+一個檔案時 hook 不會報錯，但**會停止自動推進**：少了 guardrails 就沒辦法附上 sandbox／授權範圍規則與
+核准關卡，所以 hook 改為 allow，並用 systemMessage 提醒一次模組缺失與修法（之後同一個 pointer 靜默，
+模組補回來會自動恢復）。`preflight` 子命令與 checkpoint 也不會運作，`doctor` 不會替你發現這件事。
 
 **警告**：這個環境變數只在目前 shell / session 有效，且是全域 Stop hook 共用的設定。
 若 `AGENT_SKILLS_DIR` 指向的 worktree 路徑之後被刪除（例如 `git worktree remove`），

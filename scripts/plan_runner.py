@@ -966,11 +966,19 @@ def format_index_md(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_status_md(data: dict[str, Any]) -> str:
+def format_status_md(data: dict[str, Any], plan_path: Path | None = None) -> str:
     s = data["summary"]
     lines: list[str] = [f"# {data['title']}"]
     lines.append(f"Progress: {s['progress']}"
                  + (" — ALL DONE" if s["all_done"] else ""))
+    if s["all_done"] and plan_path is not None:
+        report_path = data.get("report_path")
+        if report_path:
+            lines.append(f"結案報告：{report_path}")
+        else:
+            lines.append(
+                f"結案報告：尚未產生，執行 `plan_runner.py report {plan_path}` 補產生"
+            )
     parent = data.get("parent_task_id")
     if parent:
         lines.append(f"Parent task: {parent}")
@@ -1028,6 +1036,19 @@ def format_transition_md(verb: str, data: dict[str, Any]) -> str:
       pending TaskCreate entries (sliding-window task list).
     """
     lines = [f"# {verb}: {data.get('step', '?')}"]
+
+    # Prominent closing-report callout, right after the header and before
+    # everything else — the auto-written report (S1.2) was easy to miss when
+    # it only showed up as one trailing line after the full state view.
+    if data.get("report_path"):
+        lines.append("")
+        lines.append("## 結案報告（plan 已全部完成）")
+        lines.append(f"Report: {data['report_path']}")
+    elif data.get("report_error"):
+        lines.append("")
+        lines.append("## 結案報告寫入失敗")
+        lines.append(f"Report: failed ({data['report_error']})")
+
     if data.get("task_id"):
         lines.append(f"Task: {data['task_id']}")
     if data.get("reason"):
@@ -1076,10 +1097,6 @@ def format_transition_md(verb: str, data: dict[str, Any]) -> str:
     if "ready_steps" in data or "summary" in data:
         lines.append("")
         lines.extend(_format_state_view_lines(data))
-    if data.get("report_path"):
-        lines.append(f"Report: {data['report_path']}")
-    elif data.get("report_error"):
-        lines.append(f"Report: failed ({data['report_error']})")
     return "\n".join(lines)
 
 
@@ -3302,10 +3319,11 @@ def _cmd_skip_locked(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
+    plan_summary = summary(state)
     payload = {
         "slug": state["slug"],
         "title": state["title"],
-        "summary": summary(state),
+        "summary": plan_summary,
         "parent_task_id": state.get("parent_task_id"),
         "steps": [
             {
@@ -3320,7 +3338,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             for sid, s in state["steps"].items()
         ],
     }
-    emit_formatted(payload, args.format, format_status_md)
+    if plan_summary["all_done"]:
+        report_path = report_path_for(plan_path)
+        if report_path.exists():
+            payload["report_path"] = str(report_path)
+    emit_formatted(payload, args.format, lambda d: format_status_md(d, plan_path))
     return 0
 
 

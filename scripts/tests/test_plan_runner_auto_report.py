@@ -110,6 +110,10 @@ def _report_args(plan_path: Path) -> argparse.Namespace:
     return argparse.Namespace(plan=str(plan_path), format="md", output=None, force=False)
 
 
+def _status_args(plan_path: Path, *, fmt="md") -> argparse.Namespace:
+    return argparse.Namespace(plan=str(plan_path), format=fmt)
+
+
 def _new_plan(test_case: unittest.TestCase, *, require_summary=None) -> Path:
     tmp = tempfile.TemporaryDirectory(dir=Path.home(), prefix=".plan-run-test-")
     test_case.addCleanup(tmp.cleanup)
@@ -384,6 +388,92 @@ class AutoReportTests(unittest.TestCase):
         self.assertEqual(pr.load_state(plan)["steps"]["S1"]["status"], pr.COMPLETED)
         self.assertNotIn("Report:", out)
         self.assertFalse(_expected_report_path(plan).exists())
+
+
+# ---------------------------------------------------------------------------
+# (d2) closing-report block is prominent: right after the header, before the
+# state view, in `complete`/`skip` md output; `status` md surfaces it too.
+# ---------------------------------------------------------------------------
+
+class ReportPathProminentTests(unittest.TestCase):
+    def test_final_complete_shows_block_before_state_view(self):
+        plan = _new_plan(self)
+        report_path = _expected_report_path(plan)
+        _ok(self, pr.cmd_start, _start_args(plan, "S1"))
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S1"))
+        _ok(self, pr.cmd_start, _start_args(plan, "S2"))
+        out = _ok(self, pr.cmd_complete, _complete_args(plan, "S2", fmt="md"))
+
+        header_idx = out.index("# completed: S2")
+        block_idx = out.index("## 結案報告（plan 已全部完成）")
+        report_line_idx = out.index(f"Report: {report_path}")
+        state_view_idx = out.index("Progress:")
+        self.assertLess(header_idx, block_idx)
+        self.assertLess(block_idx, report_line_idx)
+        self.assertLess(report_line_idx, state_view_idx)
+        # 只印一次，不在 state view 之後重複
+        self.assertEqual(out.count(f"Report: {report_path}"), 1)
+
+    def test_non_final_complete_shows_no_block(self):
+        plan = _new_plan(self)
+        _ok(self, pr.cmd_start, _start_args(plan, "S1"))
+        out = _ok(self, pr.cmd_complete, _complete_args(plan, "S1", fmt="md"))
+        self.assertNotIn("結案報告", out)
+        self.assertNotIn("Report:", out)
+
+    def test_report_error_shows_failed_block_before_state_view(self):
+        plan = _new_plan(self)
+        _ok(self, pr.cmd_start, _start_args(plan, "S1"))
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S1"))
+        _ok(self, pr.cmd_start, _start_args(plan, "S2"))
+        with mock.patch.object(pr, "_render_report_text", side_effect=ValueError("bad")):
+            out = _ok(self, pr.cmd_complete, _complete_args(plan, "S2", fmt="md"))
+        header_idx = out.index("# completed: S2")
+        block_idx = out.index("## 結案報告寫入失敗")
+        failed_line_idx = out.index("Report: failed (ValueError)")
+        state_view_idx = out.index("Progress:")
+        self.assertLess(header_idx, block_idx)
+        self.assertLess(block_idx, failed_line_idx)
+        self.assertLess(failed_line_idx, state_view_idx)
+
+    def test_status_md_shows_report_path_when_file_exists(self):
+        plan = _new_plan(self)
+        report_path = _expected_report_path(plan)
+        _ok(self, pr.cmd_start, _start_args(plan, "S1"))
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S1"))
+        _ok(self, pr.cmd_start, _start_args(plan, "S2"))
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S2"))
+        self.assertTrue(report_path.exists())
+
+        out = _ok(self, pr.cmd_status, _status_args(plan, fmt="md"))
+        self.assertIn(f"結案報告：{report_path}", out.splitlines())
+        done_idx = next(i for i, l in enumerate(out.splitlines()) if "ALL DONE" in l)
+        report_idx = next(i for i, l in enumerate(out.splitlines()) if l.startswith("結案報告："))
+        self.assertEqual(report_idx, done_idx + 1)
+
+    def test_status_md_shows_hint_when_report_missing(self):
+        plan = _new_plan(self)
+        _ok(self, pr.cmd_start, _start_args(plan, "S1"))
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S1"))
+        _ok(self, pr.cmd_start, _start_args(plan, "S2"))
+        with mock.patch.object(pr, "_render_report_text", side_effect=ValueError("bad")):
+            _ok(self, pr.cmd_complete, _complete_args(plan, "S2"))
+        self.assertFalse(_expected_report_path(plan).exists())
+
+        out = _ok(self, pr.cmd_status, _status_args(plan, fmt="md"))
+        self.assertIn(f"執行 `plan_runner.py report {plan}` 補產生", out)
+
+    def test_status_json_has_report_path_only_when_all_done_and_file_exists(self):
+        plan = _new_plan(self)
+        _ok(self, pr.cmd_start, _start_args(plan, "S1"))
+        payload = json.loads(_ok(self, pr.cmd_status, _status_args(plan, fmt="json")))
+        self.assertNotIn("report_path", payload)
+
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S1"))
+        _ok(self, pr.cmd_start, _start_args(plan, "S2"))
+        _ok(self, pr.cmd_complete, _complete_args(plan, "S2"))
+        payload = json.loads(_ok(self, pr.cmd_status, _status_args(plan, fmt="json")))
+        self.assertEqual(payload["report_path"], str(_expected_report_path(plan)))
 
 
 # ---------------------------------------------------------------------------

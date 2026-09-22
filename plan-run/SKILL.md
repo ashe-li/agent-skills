@@ -141,7 +141,7 @@ step 標了 `Requires-Approval: true` 就要等人核准才會被指派。還沒
 - hook 不會把它當成 next step，也不會列在 `Also ready`。同時有不需核准的 ready step 就先派那些；**所有** ready step 都在等核准時，hook 才停下（allow，不 block），用 systemMessage 附上決策摘要：step、圍欄內的 action／risk、要人決定什麼、核准指令、`skip` 指令
 - `start` 直接 rc=1 拒絕並提示去問使用者
 
-`next` 的輸出會另列一段 `## 需核准 (N): <ids>`（json 為 `awaiting_approval_steps`），提醒這些 ready step 還不能 start。
+未核准的 step 不算 ready：`next`、`init` 的 `ready_steps`、`complete`／`fail`／`skip` 附帶的狀態、checkpoint 的 next step 都不會列它，也不會給 start 模板；`next` 只在 `## 需核准 (N): <ids>` 段（json 為 `awaiting_approval_steps`）列出，附的是由人執行 `approve` 的說明。核准後它才回到 ready，並以 newly unlocked 的完整模板出現。
 
 **`approve` 只能由人執行，你不可以自己跑**。看到這個關卡就停下，把摘要轉告使用者，等對方自己跑 `plan_runner.py approve "$ARGUMENTS" <id>`（會記錄 `approved_at`，重跑保留第一次的時間），或決定 `skip`。核准後 hook 下一輪就恢復正常推進。`reset` 會一併清掉 `approved_at`，重做的 step 要重新核准。
 

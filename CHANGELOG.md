@@ -4,10 +4,6 @@
 
 ## [Unreleased]
 
-### Fixed
-- **結案報告路徑在 `complete`／`skip`／`status` 輸出裡不夠顯眼**：實例（2026-09-22）：plan 全部完成後，`_write_completion_report()` 確實有自動寫報告，但 md 格式只在整份 state view 印完後補一行 `Report: <path>`，使用者／LLM 讀完落落長的 state view 就沒注意到，事後問「沒有結案報告嗎」；`status` 對 all_done 的 plan 更完全不提報告。`format_transition_md` 改在 header（`# completed: Sx`）之後、state view 之前先印 `## 結案報告（plan 已全部完成）` 區塊（失敗則 `## 結案報告寫入失敗`），state view 之後不再重複印一次；`status`（md）在 all_done 時加印「結案報告：<path>」，檔案不存在則提示改跑 `report` 子命令；`status`（json）在 all_done 且檔案存在時加上 `report_path` 鍵。hook-stop 的 all_done 分支（`_render_completion`）本來就已印出路徑與取得方式，未變動。
-- **`notion-plan` description 觸發範圍太窄，只讀不建 plan 的情境配不到**：原 description 只寫「串接 /design 建立實作計畫」，agent 遇到「依 Notion 需求修 bug、對照 Figma」這類單純讀取需求時配不到本 skill，改用 WebFetch（被 `webfetch-blocklist-guard.py` 擋下）再改用 `agent-browser` 手動 snapshot，拿到一堆空的 generic 節點，最後要使用者手動介入才改用 `/notion-plan`。改寫 description 明確涵蓋「讀取 Notion 頁面內容」這個更寬的觸發面（建 plan 只是其中一種用途），並在本文加註「不要用 WebFetch／agent-browser 手動讀取 Notion」；Step 5 新增「只讀不建 plan」分支，整理完內容即停下交回，不強制觸發 `/design`。新增 `--read-only` 引數示意用法。
-
 ## [v3.2.0] - 2026-09-17
 
 > **版本位階判定：MINOR。** 依 [VERSIONING.md](VERSIONING.md) 的判準「會讓照舊用法的既有使用者行為改變或壞掉的才是 MAJOR」逐項核對：新增 `report` 子命令與 `complete` 的 `--summary`／`--evidence` 兩個選用 flag，都是向後相容的新功能，沒帶就與現行行為逐字相同；state.json 只新增欄位，舊 runner 讀新 state 一律用 `.get()` 取值、多出來的鍵會被忽略，新 runner 讀舊 state 也不會 raise；`complete`／`fail`／`skip` 改在 state lock 下執行，新出現的 lock error 只在兩個 session 同時競爭同一份 state 時才會發生，而原本那種情境下的行為是靜默 lost update，這是修 bug 不是介面變更；再次 `complete` 保留 `completed_at` 沒有任何程式邏輯依賴（已 grep 確認，`reset` 除外）；plan 格式契約、指令名、DSL、安全紅線都沒有改；三份 SKILL.md（`plan-run`、`dispatch-loop`、`plan-archive`）的流程調整是文件敘述，不是對外介面。本次追加的 `init --require-summary` 同樣是 opt-in flag，不帶則 state 無此鍵、`complete` 行為與現行逐字相同，只有主動選用才會改變既有用法，故仍為 MINOR。最高位階為 MINOR。
@@ -29,6 +25,8 @@
 - **`next` 模板與 Stop hook 的 `ok:` 行一律帶佔位 `--summary="<1.做了什麼 2.偏離plan 3.副作用 4.延後待辦>"`**：先前這兩處印出的 `complete` 指令都沒帶 `--summary`，照著印出的指令做就不會寫摘要；現在改印帶佔位字串的版本，提醒要換成實際四項內容再送出，佔位文字本身不含任何 plan 或摘要內容。
 
 ### Fixed
+- **結案報告路徑在 `complete`／`skip`／`status` 輸出裡不夠顯眼**：實例（2026-09-22）：plan 全部完成後，`_write_completion_report()` 確實有自動寫報告，但 md 格式只在整份 state view 印完後補一行 `Report: <path>`，使用者／LLM 讀完落落長的 state view 就沒注意到，事後問「沒有結案報告嗎」；`status` 對 all_done 的 plan 更完全不提報告。`format_transition_md` 改在 header（`# completed: Sx`）之後、state view 之前先印 `## 結案報告（plan 已全部完成）` 區塊（失敗則 `## 結案報告寫入失敗`），state view 之後不再重複印一次；`status`（md）在 all_done 時加印「結案報告：<path>」，檔案不存在則提示改跑 `report` 子命令；`status`（json）在 all_done 且檔案存在時加上 `report_path` 鍵。hook-stop 的 all_done 分支（`_render_completion`）本來就已印出路徑與取得方式，未變動。
+- **`notion-plan` description 觸發範圍太窄，只讀不建 plan 的情境配不到**：原 description 只寫「串接 /design 建立實作計畫」，agent 遇到「依 Notion 需求修 bug、對照 Figma」這類單純讀取需求時配不到本 skill，改用 WebFetch（被 `webfetch-blocklist-guard.py` 擋下）再改用 `agent-browser` 手動 snapshot，拿到一堆空的 generic 節點，最後要使用者手動介入才改用 `/notion-plan`。改寫 description 明確涵蓋「讀取 Notion 頁面內容」這個更寬的觸發面（建 plan 只是其中一種用途），並在本文加註「不要用 WebFetch／agent-browser 手動讀取 Notion」；Step 5 新增「只讀不建 plan」分支，整理完內容即停下交回，不強制觸發 `/design`。新增 `--read-only` 引數示意用法。
 - **all_done 時自動寫的執行報告從未被呈現給使用者**：Stop hook 在 all_done 時注入的 completion 訊息只叫模型對照 Acceptance Criteria 並建議 `/plan-archive`，完全沒提報告；`plan-run/SKILL.md` Step 4 也只寫「可 `cat` 給使用者看」，變成選配。實測案例：36/36 all_done 的 plan，最終回覆只有 `Progress: 36/36 — ALL DONE`，沒提到任何摘要。`_render_completion()` 改接收 `plan_path`，訊息加上算出的報告路徑（找不到時改印 `report` 子命令取得，不觸碰檔案系統，維持 `decide_hook_action()` 的 no-I/O 契約）與「必須在最終回覆貼出精簡版（Progress 進度行、phase step 狀態表、未完成與例外段全文）」的指令；`plan-run`、`plan-archive` 兩份 SKILL.md 的對應步驟同步改為必做而非可選。
 
 ## [v3.1.0] - 2026-09-15

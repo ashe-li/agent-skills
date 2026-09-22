@@ -80,6 +80,87 @@ def run_n(pointer, state, n, **kwargs):
     return decisions, pointer
 
 
+class ReadyStuckTests(unittest.TestCase):
+    def test_third_assignment_is_stuck_and_later_ones_stay_quiet(self):
+        decisions, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT + 2)
+        pre = decisions[:pr.HOOK_STUCK_AT - 1]
+        hit = decisions[pr.HOOK_STUCK_AT - 1]
+        self.assertTrue(all(d.decision == pr.HOOK_BLOCK for d in pre))
+        self.assertEqual(hit.decision, pr.HOOK_ALLOW)
+        self.assertIn("STUCK", hit.system_message)
+        self.assertIn("`S1.1`", hit.system_message)
+        self.assertIn(f"{pr.HOOK_STUCK_AT} 次", hit.system_message)
+        self.assertEqual(len(ISO_RE.findall(hit.system_message)), 2)
+        self.assertIn(" start ", hit.system_message)
+        self.assertIn(" skip ", hit.system_message)
+        for later in decisions[pr.HOOK_STUCK_AT:]:
+            self.assertEqual(later.decision, pr.HOOK_ALLOW)
+            self.assertIsNone(later.system_message)
+        self.assertEqual(pointer["stuck_step_id"], "S1.1")
+        self.assertEqual(pointer["stuck_kind"], "ready")
+        self.assertIsNotNone(pointer["stuck_at"])
+        self.assertIsNotNone(pointer["attempt_first_at"])
+
+    def test_stuck_does_not_spend_block_budget(self):
+        decisions, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT)
+        self.assertEqual(pointer["consecutive_blocks"], pr.HOOK_STUCK_AT - 1)
+
+    def test_latch_survives_a_fresh_user_turn(self):
+        _, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT)
+        decision = advance(pointer, two_pending(), active=False)
+        self.assertEqual(decision.decision, pr.HOOK_ALLOW)
+
+    def test_start_releases_the_latch(self):
+        _, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT)
+        state = two_pending()
+        state["steps"]["S1.1"]["status"] = "in_progress"
+        decision = advance(pointer, state)
+        self.assertEqual(decision.decision, pr.HOOK_BLOCK)
+        self.assertIsNone(decision.pointer_updates["stuck_step_id"])
+        self.assertIsNone(decision.pointer_updates["stuck_kind"])
+
+    def test_new_step_restarts_the_count(self):
+        _, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT)
+        state = two_pending()
+        state["steps"]["S1.1"]["status"] = "completed"
+        decision = advance(pointer, state)
+        self.assertEqual(decision.decision, pr.HOOK_BLOCK)
+        self.assertIn("S1.2", decision.reason)
+        self.assertEqual(decision.pointer_updates["assign_repeat_count"], 1)
+        self.assertIsNone(decision.pointer_updates["stuck_step_id"])
+
+
+class InProgressStuckTests(unittest.TestCase):
+    def _state(self):
+        return make_state({"S1.1": make_step(
+            status="in_progress", phase="P1", started_at="2026-09-22T01:02:03+00:00",
+        )})
+
+    def test_third_nag_is_stuck(self):
+        decisions, pointer = run_n(make_pointer(), self._state(), pr.HOOK_STUCK_AT + 1)
+        self.assertTrue(all(d.decision == pr.HOOK_BLOCK for d in decisions[:2]))
+        hit = decisions[pr.HOOK_STUCK_AT - 1]
+        self.assertEqual(hit.decision, pr.HOOK_ALLOW)
+        self.assertIn("STUCK", hit.system_message)
+        self.assertIn("2026-09-22T01:02:03", hit.system_message)
+        self.assertIn(" complete ", hit.system_message)
+        self.assertIn(" fail ", hit.system_message)
+        self.assertEqual(decisions[-1].decision, pr.HOOK_ALLOW)
+        self.assertIsNone(decisions[-1].system_message)
+        self.assertEqual(pointer["stuck_kind"], "in_progress")
+
+    def test_count_restarts_on_a_fresh_user_turn(self):
+        _, pointer = run_n(make_pointer(), self._state(), pr.HOOK_STUCK_AT)
+        decision = advance(pointer, self._state(), active=False)
+        self.assertEqual(decision.decision, pr.HOOK_BLOCK)
+        self.assertIsNone(decision.pointer_updates["stuck_step_id"])
+
+    def test_missing_started_at_still_reports(self):
+        state = make_state({"S1.1": make_step(status="in_progress", phase="P1")})
+        decisions, _ = run_n(make_pointer(), state, pr.HOOK_STUCK_AT)
+        self.assertIn("STUCK", decisions[-1].system_message)
+
+
 class PreflightBranchTests(unittest.TestCase):
     def test_failure_before_any_start_allows_loudly(self):
         decision = advance(make_pointer(), two_pending(), preflight=failing_preflight("jq", "rg"))
@@ -108,6 +189,15 @@ class PreflightBranchTests(unittest.TestCase):
         decision = advance(make_pointer(paused=True), two_pending(),
                            preflight=failing_preflight("jq"))
         self.assertIsNone(decision.system_message)
+
+
+class PointerSchemaTests(unittest.TestCase):
+    def test_new_fields_are_optional_strings(self):
+        good = make_pointer(stuck_step_id="S1", stuck_kind="ready",
+                            stuck_at=pr.now_iso(), attempt_first_at=pr.now_iso())
+        self.assertTrue(pr._pointer_fields_well_typed(good))
+        self.assertTrue(pr._pointer_fields_well_typed(make_pointer()))
+        self.assertFalse(pr._pointer_fields_well_typed(make_pointer(stuck_step_id=3)))
 
 
 class HookPreflightIoTests(unittest.TestCase):

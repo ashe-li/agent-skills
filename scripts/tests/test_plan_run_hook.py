@@ -501,10 +501,12 @@ class ReadyStepNagTests(unittest.TestCase):
     def test_repeat_count_survives_a_fresh_user_turn(self):
         """A new turn does not retroactively run the `start` we asked for,
         so this counter is deliberately not in _HOOK_TURN_COUNTERS."""
-        pointer = make_pointer(last_assigned_step_id="S1.1", assign_repeat_count=3)
+        # Starts at 1 so the carried-over count lands on the repeat note
+        # (2) rather than on HOOK_STUCK_AT, which has its own tests.
+        pointer = make_pointer(last_assigned_step_id="S1.1", assign_repeat_count=1)
         decision = self._advance(pointer, self._two_pending(), stop_hook_active=False)
         self.assertEqual(decision.pointer_updates["consecutive_blocks"], 1)  # reset, then this block
-        self.assertEqual(decision.pointer_updates["assign_repeat_count"], 4)
+        self.assertEqual(decision.pointer_updates["assign_repeat_count"], 2)
         self.assertIn("仍停在 pending", decision.reason)
         self.assertIn("state 沒有收到對應的 start", decision.reason)
 
@@ -557,17 +559,30 @@ class ReadyStepNagTests(unittest.TestCase):
 
     def test_six_blocks_with_no_start_end_in_a_visible_stall(self):
         """The S2.3 end-to-end failure, reduced: the LLM never runs `start`,
-        so the same reason repeats until the budget runs out. The final
-        check-in has to name that, not read like an ordinary summary."""
+        so the same reason repeats. It used to repeat until BLOCK_BUDGET ran
+        out; the STUCK assertion (HOOK_STUCK_AT) now ends it well before
+        that, and the stop has to name the stall, not read like a summary."""
         pointer = make_pointer()
         state = self._two_pending()
         stop_hook_active = False
-        for _ in range(pr.BLOCK_BUDGET):
+        for _ in range(pr.HOOK_STUCK_AT - 1):
             decision = self._advance(pointer, state, stop_hook_active=stop_hook_active)
             self.assertEqual(decision.decision, "block")
             pointer = decision.pointer_updates
             stop_hook_active = True
         final = self._advance(pointer, state)
+        self.assertLess(pr.HOOK_STUCK_AT, pr.BLOCK_BUDGET)
+        self.assertEqual(final.decision, "allow")
+        self.assertIn("STUCK", final.system_message)
+
+    def test_budget_exhaustion_still_names_a_zero_advance_turn(self):
+        """The zero-advance budget message is still reachable when the block
+        budget was spent before the same-step streak reached HOOK_STUCK_AT."""
+        pointer = make_pointer(
+            consecutive_blocks=pr.BLOCK_BUDGET, turn_start_completed=0,
+            last_assigned_step_id="S1.1", assign_repeat_count=1,
+        )
+        final = self._advance(pointer, self._two_pending())
         self.assertEqual(final.decision, "allow")
         self.assertIn("本輪 0 步推進", final.system_message)
 
@@ -642,7 +657,9 @@ class PlanPathInReasonTests(unittest.TestCase):
     def test_nag_escalation_note_uses_the_real_path_and_step(self):
         reason = self._reason(
             FAKE_PLAN_PATH, status="in_progress",
-            nag_counts=pr.HOOK_NAG_ESCALATE_AT,
+            # This call is the HOOK_NAG_ESCALATE_AT-th nag; one more would
+            # reach HOOK_STUCK_AT and stop blocking altogether.
+            nag_counts=pr.HOOK_NAG_ESCALATE_AT - 1,
         )
         self.assertIn(f"{self._runner()} fail {FAKE_PLAN_PATH} S0.1", reason)
         self.assertNotIn("fail <plan>", reason)

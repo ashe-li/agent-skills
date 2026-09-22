@@ -1169,6 +1169,10 @@ _POINTER_REQUIRED_STR_FIELDS = ("repo_root", "cwd", "created_at", "last_seen_at"
 _POINTER_OPTIONAL_STR_FIELDS = (
     "created_by_session", "driver_session_id", "driver_transcript_path",
     "last_advance_at", "warned_at", "last_assigned_step_id",
+    # PR-A STUCK record: when the current same-step streak began, and which
+    # step (and branch kind) was declared stuck, when. All optional so older
+    # pointers stay VALID.
+    "attempt_first_at", "stuck_step_id", "stuck_kind", "stuck_at",
 )
 _POINTER_BOOL_FIELDS = ("paused", "checkpoint_pending", "completion_announced")
 _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
@@ -2174,6 +2178,15 @@ HOOK_NAG_ESCALATE_AT = 2
 # From this consecutive assignment of the SAME ready step onward, the reason
 # says outright that the previous turn's `start` was never run.
 HOOK_ASSIGN_REPEAT_ESCALATE_AT = 2
+# Monotonic-progress assertion: the Nth time the hook would hand out the same
+# step with no progress, it stops blocking and reports STUCK instead. At 3 the
+# model has had two explicit instructions (the second one already carrying
+# _ASSIGN_REPEAT_NOTE); a third identical block is the E2E failure where the
+# hook re-sent the same `start` for six turns at 0/20.
+HOOK_STUCK_AT = 3
+STUCK_KIND_READY = "ready"
+STUCK_KIND_IN_PROGRESS = "in_progress"
+_STUCK_POINTER_FIELDS = ("stuck_step_id", "stuck_kind", "stuck_at")
 
 HOOK_ALLOW = "allow"
 HOOK_BLOCK = "block"
@@ -2227,6 +2240,28 @@ _ASSIGN_REPEAT_NOTE = (
     "請先實際執行上面第 1 行的 start 指令，再繼續後面的動作。"
 )
 
+
+# Printed to the *user* when HOOK_STUCK_AT is reached. Allow, not block: a
+# block would only repeat the instruction that has already failed twice.
+_STUCK_REPORT_MESSAGE = (
+    "[plan-run] STUCK：`{step}`（{kind_label}）已連續 {count} 次被 hook 指派仍沒有進展"
+    "（首次 {first_at}，本次 {now}）。自動推進已停止，這個 step 有進展前不會再 block。"
+    "建議動作：{actions}"
+)
+_STUCK_ACTIONS = {
+    STUCK_KIND_READY: (
+        "確認指令能跑後執行 `{runner} start {plan} {step}`；做不了就 "
+        "`{runner} skip {plan} {step}`；環境問題先跑 `{runner} preflight {plan}`。"
+    ),
+    STUCK_KIND_IN_PROGRESS: (
+        "確認結果後執行 `{runner} complete {plan} {step} --summary=...`，"
+        "或 `{runner} fail {plan} {step} --reason=...`。"
+    ),
+}
+_STUCK_KIND_LABELS = {
+    STUCK_KIND_READY: "pending，start 一直沒被執行",
+    STUCK_KIND_IN_PROGRESS: "in_progress，complete/fail 一直沒被回報",
+}
 
 # Printed to the *user* before any step has started when preflight fails.
 # Allow, not block: every block would hand out a step that cannot run.
@@ -2434,6 +2469,7 @@ def _hook_block(
     )
     if suffix:
         reason = f"{reason}\n\n{suffix}"
+    _clear_stuck_record(ctx)
     ctx.update(consecutive_blocks=ctx.counter("consecutive_blocks") + 1)
     return HookDecision(
         decision=HOOK_BLOCK,
@@ -2650,6 +2686,9 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
     # so its repeat counter has served its purpose and starts over.
     if ctx.pointer.get("last_assigned_step_id") is not None:
         ctx.update(last_assigned_step_id=None, assign_repeat_count=0)
+    if nags >= HOOK_STUCK_AT:
+        started_at = ctx.state["steps"][in_progress[0]].get("started_at")
+        return _stuck_decision(ctx, STUCK_KIND_IN_PROGRESS, in_progress[0], nags, started_at)
     suffix = None
     if nags >= HOOK_NAG_ESCALATE_AT:
         suffix = _NAG_ESCALATION_NOTE.format(
@@ -2671,7 +2710,44 @@ def _record_assignment(ctx: _HookContext, step_id: str) -> int:
     previous = _hook_str(ctx.pointer.get("last_assigned_step_id"))
     count = ctx.counter("assign_repeat_count") + 1 if previous == step_id else 1
     ctx.update(last_assigned_step_id=step_id, assign_repeat_count=count)
+    if count == 1:
+        ctx.update(attempt_first_at=now_iso())
     return count
+
+
+def _clear_stuck_record(ctx: _HookContext) -> None:
+    """Any ordinary block means the plan is moving again (a new step, a step
+    now in progress, or a fresh turn's first nag), so a stale STUCK record
+    must not outlive it — the checkpoint would report a stall that ended."""
+    if any(ctx.pointer.get(key) is not None for key in _STUCK_POINTER_FIELDS):
+        ctx.update(**{key: None for key in _STUCK_POINTER_FIELDS})
+
+
+def _stuck_decision(
+    ctx: _HookContext, kind: str, step_id: str, count: int, first_at: Any,
+) -> HookDecision:
+    """(9)/(10) past HOOK_STUCK_AT: report once, then stay out of the way.
+
+    Only the crossing itself (count == HOOK_STUCK_AT) speaks; every later
+    turn with the same stall allows silently. Blocking again would re-send
+    the instruction that has already failed, which is the loop this exists
+    to end. Progress (a new step, or the step moving on) resets `count`.
+    """
+    if count != HOOK_STUCK_AT:
+        return _hook_allow(ctx)
+    now = now_iso()
+    ctx.update(stuck_step_id=step_id, stuck_kind=kind, stuck_at=now)
+    safe_step = _sanitize_step_id(step_id)
+    actions = _STUCK_ACTIONS[kind].format(
+        runner=_runner_invocation(ctx.pointer.get("plan_path")),
+        plan=_quote_plan_path(ctx.pointer.get("plan_path")),
+        step=safe_step,
+    )
+    message = _STUCK_REPORT_MESSAGE.format(
+        step=safe_step, kind_label=_STUCK_KIND_LABELS[kind], count=count,
+        first_at=_sanitize_plan_field(first_at) or "?", now=now, actions=actions,
+    )
+    return _hook_allow(ctx, system_message=message)
 
 
 def _budget_exhausted_message(
@@ -2713,6 +2789,9 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
     if budget.decision != HOOK_BLOCK:
         return _hook_allow(ctx, system_message=_budget_exhausted_message(ctx, budget, step_id))
     repeats = _record_assignment(ctx, step_id)
+    if repeats >= HOOK_STUCK_AT:
+        first_at = ctx.pointer.get("attempt_first_at")
+        return _stuck_decision(ctx, STUCK_KIND_READY, step_id, repeats, first_at)
     if bool(ctx.pointer.get("checkpoint_pending")) != budget.checkpoint_pending:
         ctx.update(checkpoint_pending=budget.checkpoint_pending)
     suffix = None

@@ -2,8 +2,7 @@
 out-of-scope instruction log.
 
 Everything here is pure except validate_allow_paths(), which resolves each
-path and checks it is an existing directory (it only runs from `init`, never
-from the hook). No environment reads, no import of plan_runner (it is loaded
+path (it only runs from `init`, never from the hook). No environment reads, no import of plan_runner (it is loaded
 by path in tests, so a back-import would create a second copy of that
 module). Where plan_runner's own sanitizers and fence are needed, the caller
 passes them in.
@@ -113,10 +112,12 @@ def validate_allow_paths(
 ) -> tuple[tuple[str, ...], str | None]:
     """Resolve sandbox paths against `base`; reject rather than repair.
 
-    Returns (paths, None) or ((), error). Only existing directories are
-    accepted, which also rules out single-line text dressed up as a path
-    (a rule sentence appended after a real directory is not a directory).
-    `/` is refused outright: a sandbox rooted at `/` is no sandbox.
+    Returns (paths, None) or ((), error). A path need not exist yet and may
+    be a file: an output directory is often created by the step itself.
+    Text that merely looks like a path is not this function's problem --
+    the hook prints every value inside the data fence, which is where the
+    injection defence lives. `/` is refused outright: a sandbox rooted at
+    `/` is no sandbox.
     """
     if len(raw_paths) > ALLOW_PATHS_MAX_ITEMS:
         return (), f"at most {ALLOW_PATHS_MAX_ITEMS} sandbox paths"
@@ -125,12 +126,9 @@ def validate_allow_paths(
         problem = _allow_path_error(raw)
         if problem:
             return (), f"sandbox path {raw!r} {problem}"
-        resolved_path = (base / Path(raw).expanduser()).resolve()
-        path = str(resolved_path)
+        path = str((base / Path(raw).expanduser()).resolve())
         if path == "/":
             return (), "sandbox path must not be the filesystem root /"
-        if not resolved_path.is_dir():
-            return (), f"sandbox path {raw!r} is not an existing directory"
         if path not in resolved:
             resolved.append(path)
     return tuple(resolved), None

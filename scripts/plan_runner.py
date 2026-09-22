@@ -1079,6 +1079,7 @@ def format_init_md(data: dict[str, Any]) -> str:
         lines.append(f"  - {ph}")
     lines.append("")
     lines.append(f"Ready now: {', '.join(data['ready_steps']) or '(none)'}")
+    lines.extend(_awaiting_approval_lines(data.get("awaiting_approval_steps") or []))
     if data.get("warnings"):
         lines.append("")
         lines.append("Warnings:")
@@ -3279,21 +3280,24 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
 # CLI commands
 # ---------------------------------------------------------------------------
 
-def _init_allowed_paths(args: argparse.Namespace) -> tuple[tuple[str, ...], str | None]:
-    """`init --allow-path` values plus $PLAN_SANDBOX_ROOT, validated.
+def _init_allowed_paths(
+    args: argparse.Namespace,
+) -> tuple[tuple[str, ...], str | None, list[str]]:
+    """`init --allow-path` values plus $PLAN_SANDBOX_ROOT: (paths, error, warnings).
 
     Read once here and stored in state, so the hook never depends on the
-    environment of whichever process happens to run it.
+    environment of whichever process happens to run it. A bad flag is the
+    caller's own typo and fails init; a bad environment variable is ambient
+    (often a leftover export), so it is only warned about and skipped.
     """
     gr = _import_sibling("plan_runner_guardrails")
     flags, error = gr.validate_allow_paths(getattr(args, "allow_path", None) or [], Path.cwd())
     if error:
-        return (), f"--allow-path: {error}"
+        return (), f"--allow-path: {error}", []
     env_root = os.environ.get(gr.SANDBOX_ENV_VAR)
-    env_paths, error = gr.validate_allow_paths([env_root] if env_root else [], Path.cwd())
-    if error:
-        return (), f"${gr.SANDBOX_ENV_VAR}: {error}"
-    return tuple(dict.fromkeys((*flags, *env_paths))), None
+    env_paths, env_error = gr.validate_allow_paths([env_root] if env_root else [], Path.cwd())
+    warnings = [f"${gr.SANDBOX_ENV_VAR} ignored: {env_error}"] if env_error else []
+    return tuple(dict.fromkeys((*flags, *env_paths))), None, warnings
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -3301,7 +3305,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not plan_path.exists():
         emit({"error": f"Plan not found: {plan_path}"})
         return 1
-    allowed_paths, path_error = _init_allowed_paths(args)
+    allowed_paths, path_error, path_warnings = _init_allowed_paths(args)
     if path_error:
         emit({"error": path_error})
         return 1
@@ -3333,6 +3337,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     )
     save_state(plan_path, state)
     risky = _import_sibling("plan_runner_guardrails").risky_step_warnings(state["steps"])
+    ready_now, awaiting = _split_ready_for_cli(state)
     payload = {
         "status": "initialized",
         "slug": state["slug"],
@@ -3340,8 +3345,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         "state_path": str(state_path_for(plan_path)),
         "total_steps": len(state["steps"]),
         "phase_order": state["phase_order"],
-        "ready_steps": _split_ready_for_cli(state)[0],
-        "warnings": [*parsed["warnings"], *risky],
+        "ready_steps": ready_now,
+        "awaiting_approval_steps": awaiting,
+        "warnings": [*parsed["warnings"], *path_warnings, *risky],
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
@@ -3682,9 +3688,11 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
         emit({"error": str(e)})
         return 1
     save_state(plan_path, state)
+    gr = _import_sibling("plan_runner_guardrails")
     next_hints = [
         step_to_instruction(state, nid)
         for nid in compute_next_after_completion(state, sid)
+        if not gr.awaiting_approval(state["steps"][nid])
     ]
     payload = {
         "status": "started",
@@ -4733,7 +4741,17 @@ def main() -> None:
     p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args()
-    sys.exit(args.func(args))
+    try:
+        rc = args.func(args)
+    except ModuleNotFoundError as exc:
+        if not (exc.name or "").startswith("plan_runner_"):
+            raise
+        emit({"error": (
+            f"缺少 {exc.name}.py：plan_runner.py 必須連同同目錄的 plan_runner_*.py 一起安裝"
+            f"（{Path(__file__).resolve().parent}）。請改指向完整的 checkout 後重跑。"
+        )})
+        rc = 1
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

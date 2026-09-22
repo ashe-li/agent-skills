@@ -120,7 +120,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py init "$ARGUMENTS" --requ
 
 ## Step 4: 完成驗證
 
-plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補摘要），runner 會自動把執行報告寫到 `<plan-dir>/.plan-state/<slug>.report.md`（內容等於 `report` 指令的 md 輸出），輸出多一行 `Report: <path>`（json 為 `report_path`）；寫檔失敗不影響該次 rc，改印 `Report: failed (<原因>)`（json `report_error`）。模式 B 的 Stop hook 在 all_done 時同樣會在注入訊息裡印出這個路徑（找不到就改跑 `report` 子命令取得），但 hook 訊息本身**不帶報告內容**——只有路徑與指令。
+plan 變成 `all_done` 時（以及之後每次 `complete`／`skip`，例如補摘要），runner 會自動把執行報告寫到 `<plan-dir>/.plan-state/<slug>.report.md`（內容等於 `report` 指令的 md 輸出）。md 輸出在最上方（header 之後、state view 之前）就會印出 `## 結案報告（plan 已全部完成）` 區塊帶 `Report: <path>`（寫檔失敗則是 `## 結案報告寫入失敗` 帶 `Report: failed (<原因>)`）（json 對應 `report_path`／`report_error`）；`status` 在 all_done 時同樣會多印一行「結案報告：<path>」，檔案不存在則改印提示改跑 `report` 子命令。模式 B 的 Stop hook 在 all_done 時同樣會在注入訊息裡印出這個路徑（找不到就改跑 `report` 子命令取得），但 hook 訊息本身**不帶報告內容**——只有路徑與指令。
 
 `summary.all_done == true` 後依序：比對 plan 的 Acceptance Criteria 逐項勾選 → 有 parent task_id 就 `TaskUpdate(<id>, completed)` → 讀 `Report:` 印出的路徑（檔案不存在就跑 `plan_runner.py report <plan>` 取得）→ **在給使用者的最終回覆中貼出報告的精簡版：Progress 進度行、每個 phase 的 step 狀態表（可省略逐 step 摘要引文）、「未完成與例外」段全文**——這一步是必做，不是可選：報告只寫進檔案、沒有出現在回覆裡，等於沒有交付給使用者，實測發生過 36/36 all_done 的 plan 最終回覆只寫 `Progress: 36/36 — ALL DONE`、完全沒提摘要 → `plan_runner.py detach` 收掉 pointer → 提示使用者跑 `/plan-archive` 歸檔至 `plans/completed/`。**歸檔時 `/plan-archive` 仍會重新跑一次 `report` 嵌入 plan**（state 可能在自動寫檔之後又有變動），不必也不應該自己手動再跑一次 `report` 去覆蓋它。
 

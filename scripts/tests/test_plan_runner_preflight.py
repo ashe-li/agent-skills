@@ -48,6 +48,22 @@ class ExtractToolsTests(unittest.TestCase):
         self.assertEqual(pf.extract_tools(None), ())
         self.assertEqual(pf.extract_tools("   "), ())
 
+    def test_shell_expansions_are_skipped(self):
+        for command in ("$RUNNER --x", "${TOOL} run", "$(which jq) .", "`which jq` ."):
+            self.assertEqual(pf.extract_tools(command), (), command)
+        self.assertEqual(pf.extract_tools("$RUNNER x && git status"), ("git",))
+
+    def test_relative_path_after_cd_is_skipped(self):
+        self.assertEqual(pf.extract_tools("cd sub && ./run.sh"), ())
+        self.assertEqual(pf.extract_tools("cd sub; bin/x && make"), ("make",))
+        self.assertEqual(pf.extract_tools("pushd sub && ./run.sh"), ())
+
+    def test_relative_path_without_cd_is_still_checked(self):
+        self.assertEqual(pf.extract_tools("./run.sh --x"), ("./run.sh",))
+
+    def test_absolute_path_after_cd_is_still_checked(self):
+        self.assertEqual(pf.extract_tools("cd sub && /usr/bin/env x"), ("/usr/bin/env",))
+
     def test_absolute_path_executable_is_kept_verbatim(self):
         self.assertEqual(pf.extract_tools("/usr/bin/env python3"), ("/usr/bin/env",))
 
@@ -103,6 +119,12 @@ class RunPreflightTests(unittest.TestCase):
             runner_path=self.runner, plan_path=self.plan, state_path=self.state,
             commands=commands, base_dir=self.base, which=which,
         )
+
+    def test_probe_p7_commands_are_not_false_failures(self):
+        """verify-ab probe P7: `cd sub && ./run.sh` and `$RUNNER --x` used to
+        fail preflight and stop the hook before step one."""
+        result = self._run(["cd sub && ./run.sh", "$RUNNER --x"])
+        self.assertTrue(result.ok, [c.name for c in result.failures])
 
     def test_all_present_is_ok(self):
         result = self._run(["git status", "/verify", None, "cd x && python3 -c 1"])

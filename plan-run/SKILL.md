@@ -72,7 +72,7 @@ init 之後跑一次 `preflight`，確認環境跑得動這份 plan：
 python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
 ```
 
-它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（取每段指令的第一個字；`/verify` 這類 slash command、shell builtin、`NAME=value` 不算）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
+它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（取每段指令的第一個字；`/verify` 這類 slash command、shell builtin、`NAME=value`、含 `$`／反引號的變數展開、以及同一條指令裡 `cd` 之後的相對路徑都不算，寧可漏查也不誤報）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
 
 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。已存在 state → 先 `plan_runner.py status "$ARGUMENTS"` 看狀態再決定，要重來用 `init --force`。
 

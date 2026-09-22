@@ -3362,6 +3362,23 @@ def _load_resume_checkpoint(plan_path: Path) -> dict[str, Any] | None:
     return data
 
 
+_FENCE_MARKER_RE = re.compile(
+    "|".join(re.escape(m) for m in (PLAN_FENCE_START, PLAN_FENCE_END)), re.IGNORECASE,
+)
+
+
+def _sanitize_checkpoint_value(raw: Any) -> str:
+    """One checkpoint value, made safe for the `--resume` data fence.
+
+    Same pipeline as hook-reason plan fields, folded to one line and
+    summary-sized. Folding turns an injected fence line into mid-line text,
+    which _neutralize_fence_lookalikes() (line-based) no longer sees, so any
+    fence marker left anywhere in the value is defused here as well.
+    """
+    text = _sanitize_plan_text(raw, STEP_SUMMARY_MAX_CHARS, collapse_newlines=True)
+    return _FENCE_MARKER_RE.sub(lambda m: m.group(0).replace("-", _FENCE_LOOKALIKE_CHAR), text)
+
+
 def _emit_resume(
     fmt: str, plan_path: Path, checkpoint: dict[str, Any], payload: dict[str, Any],
 ) -> None:
@@ -3370,7 +3387,10 @@ def _emit_resume(
         emit({"checkpoint": checkpoint, "checkpoint_path": str(path), **payload})
         return
     ck = _import_sibling("plan_runner_checkpoint")
-    print(ck.format_resume_md(checkpoint, path))
+    print(ck.format_resume_md(
+        checkpoint, path, clean=_sanitize_checkpoint_value,
+        fence=(PLAN_FENCE_START, PLAN_FENCE_END),
+    ))
     print()
     print(format_next_md(payload))
 

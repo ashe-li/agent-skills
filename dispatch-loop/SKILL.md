@@ -24,8 +24,31 @@ redundancy-peers: [plan-run]
 2. **派工**：用下方「派工 prompt 骨架」；prompt 必含目標/動機/範圍/驗收條件/回報格式；設計稿等大素材給**檔案路徑**不貼內容
 3. **同 working tree 的 step 循序派**（共改同檔、共用 lockfile 會衝突）；真正獨立且不改檔才並行
 4. **抽查回報**（不信任自報）：檔案存在 `ls`、關鍵內容 `grep`、`git log` 比對、測試**親跑**一次；抽查過才 `complete`，疑點退回或補驗
-5. `plan_runner.py complete/fail` → 讀 delta output 進下一 step
-6. **回收前 KB gate**：agent 回報收畢、標 completed 前，把該路產出摘要/教訓寫進 session 檔（`_pending/`）；教訓成熟的落 `wiki/learned/`。順序固定：記錄 → 回收，不可反過來
+5. **判斷要不要 complete**：抽查過關就往下走第 6 步；不過關 `plan_runner.py fail <plan> <step> --reason=...`，退回派工或補驗
+6. **回收前 KB gate**：agent 回報收畢，回收前依序完成兩件事，順序固定不可反過來：
+   (a) **教訓**寫進 KB——session 檔（`_pending/`），教訓成熟的落 `wiki/learned/`；
+   (b) **摘要**用 `plan_runner.py complete <plan> <step> --summary="..." --evidence=<路徑> ...` 寫進 state——這一個指令同時完成記錄與標記完成，寫法見下方「摘要撰寫指引」
+
+### 摘要撰寫指引
+
+`--summary` 四項依序必寫，沒有內容也要寫「無」，不得省略：
+
+1. 做了什麼（結果，不是流水帳）
+2. 偏離 plan 原文的地方和理由（例：「Action 寫 vitest，實際沿用 repo 既有的 jest」）
+3. 接受的副作用或已知限制
+4. 延後到其他 step 的待辦（標明目標 step ID）
+
+上限 500 字元，正規化後超過會被拒絕（rc=1，不截斷），要自己縮短再送一次；逐字證據放 `--evidence=<路徑>`（可重複，不逗號切分），不要塞進摘要本文。摘要**不會**出現在後續的 delta output 或 Stop hook reason，不需要為了省 token 刻意寫短到丟資訊——尤其是第 2、4 項，丟了就等於白寫。收到 `locked` 錯誤就重跑同一個指令，不要換寫法或跳過。
+
+`/plan-run` 下 `init` 一律帶 `--require-summary`，摘要必填：`next`／hook 印出的 `ok:` 那行帶的是佔位字串 `--summary="<1.做了什麼 2.偏離plan 3.副作用 4.延後待辦>"`，只是提醒格式，不能照抄送出——必須換成這一步實際的四項內容，否則會被拒絕（rc=1）。
+
+範例：
+
+```
+plan_runner.py complete plans/active/foo.md S3.2 \
+  --summary="1. 改寫 dispatch-loop 第 6 步與新增摘要撰寫指引；2. 無偏離；3. 無已知限制；4. README 其餘 plan-run 段落留給後續 step" \
+  --evidence=dispatch-loop/SKILL.md --evidence=README.md
+```
 
 ## 派工 prompt 骨架
 

@@ -1,13 +1,13 @@
 ---
 name: notion-plan
-description: 貼上 Notion URL，自動抓取頁面需求內容，串接 /design 建立實作計畫。
+description: 讀取 notion.so／notion.com／app.notion.com／notion.site 頁面內容（需求、規格、bug 回報、對照 Figma），可選串接 /design 建立實作計畫——建 plan 只是其中一種用途，依需求讀 Notion 修 bug、對照設計稿等「只讀不建 plan」情境同樣適用，整理完內容就停下交回，不強制往 /design 走。觸發：貼出上述任一 Notion 網域的 URL 且需要讀取其內容，或 /notion-plan <Notion URL>。**不要用 WebFetch／agent-browser 手動讀取 Notion 頁面**——Notion 是 100% client-side rendering，WebFetch 只讀原始 HTML 會拿到空殼，agent-browser 手動 snapshot 拿到的多半是空的 generic 節點，兩者都不會報錯、看起來像抓到內容了。寫回 Notion 請改用 `notion-report`。
 allowed-tools: Bash, Read, AskUserQuestion, Skill
-argument-hint: <Notion URL>
+argument-hint: <Notion URL> [--read-only]
 ---
 
-# /notion-plan — 從 Notion URL 自動建立實作計畫
+# /notion-plan — 從 Notion URL 讀取內容，可選建立實作計畫
 
-貼上 Notion URL，自動擷取頁面需求內容並串接 `/design` 建立實作計畫。一條指令完成 Notion 抓取 → 結構化整理 → plans/active/<slug>.md 產出。
+貼上 Notion URL，自動擷取頁面需求內容並整理成結構化 Markdown；預設接著串接 `/design` 建立實作計畫（一條指令完成 Notion 抓取 → 結構化整理 → plans/active/<slug>.md 產出），但**建 plan 只是其中一種用途**——依 Notion 需求修 bug、讀規格對照 Figma、單純想要頁面內容等「只讀不建 plan」的情境，同樣該用本 skill 抓取，只是在 Step 4 完成後停下、把內容交回當前對話，不觸發 Step 5 的 `/design`。
 
 > 使用 `playwright-cli`（非 Playwright MCP）：snapshot 存入 `.playwright-cli/*.yml` 按需讀取，避免每次操作自動注入 ~58KB 到 context。
 
@@ -203,8 +203,12 @@ playwright-cli -s=notion close
 
 ---
 
-## Step 5：輸出 Notion 內容並觸發 /design
+## Step 5：輸出 Notion 內容，視用途決定是否觸發 /design
 
+**只讀不建 plan**（依 Notion 需求修 bug、對照 Figma、單純要頁面內容等情境，或使用者帶 `--read-only`）：
+將 Step 3 整理好的結構化 Markdown 完整輸出至對話中即結束，交回內容供當前任務使用，**不觸發 `/design`**。
+
+**要建 plan**（預設用途，或使用者明確要求建立實作計畫）：
 將 Step 3 整理好的結構化 Markdown 完整輸出至對話中，供後續 `/design` 讀取，再觸發：
 
 ```
@@ -223,6 +227,7 @@ Skill(skill="design", args="[SOURCE: /notion-plan] 根據上方 Notion 頁面的
 /notion-plan https://www.notion.com/workspace/Page-Title-abc123
 /notion-plan https://www.notion.so/workspace/Page-Title-abc123     # 舊網域，自動轉址至 notion.com
 /notion-plan https://workspace.notion.site/public-page-abc123
+/notion-plan https://app.notion.com/p/workspace/Page-Title-abc123 --read-only   # 只讀內容，不建 plan
 ```
 
 ## 限制

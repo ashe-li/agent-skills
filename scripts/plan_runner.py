@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -66,6 +67,22 @@ FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why", "Input", "Output",
 )
+
+
+def _import_sibling(name: str) -> Any:
+    """Import a module that lives next to this file (plan_runner_preflight,
+    plan_runner_checkpoint).
+
+    Run as a script, `sys.path[0]` is already this directory; loaded through
+    importlib.util.spec_from_file_location (the test suite, or any caller
+    using `python3 -I`) it is not, and a bare import fails. Callers on the
+    hook path must still catch ImportError: a runner copied without its
+    siblings has to degrade, not crash every Stop event.
+    """
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return importlib.import_module(name)
 
 
 def now_iso() -> str:
@@ -798,11 +815,19 @@ def _runner_invocation(plan_path: str | None) -> str:
     runner override has a seam. Falls back to the bare name only if this
     module has no resolvable file path (frozen/exec'd from memory).
     """
-    try:
-        here = Path(__file__).resolve()
-    except (OSError, NameError):
+    here = _runner_script_path()
+    if here is None:
         return "plan_runner.py"
     return f"python3 {_quote_plan_path(str(here))}"
+
+
+def _runner_script_path() -> Path | None:
+    """The file _runner_invocation() prints — and therefore the one
+    `preflight` must prove exists and is readable."""
+    try:
+        return Path(__file__).resolve()
+    except (OSError, NameError):
+        return None
 
 
 def _format_step_action_block(
@@ -2203,6 +2228,15 @@ _ASSIGN_REPEAT_NOTE = (
 )
 
 
+# Printed to the *user* before any step has started when preflight fails.
+# Allow, not block: every block would hand out a step that cannot run.
+_PREFLIGHT_FAILED_MESSAGE = (
+    "[plan-run] PREFLIGHT 失敗：plan `{slug}` 的執行環境缺東西，本輪不自動推進"
+    "（修好前每輪都會提醒，但不會 block）。\n{items}\n"
+    "修好後執行 `{runner} preflight {plan}` 確認。"
+)
+
+
 # Printed to the *user* (system_message, not reason) when the auto-advance
 # budget runs out. The zero-advance variant exists because the two outcomes
 # were previously indistinguishable: 6 blocks that completed 6 steps and 6
@@ -2345,11 +2379,13 @@ class _HookContext:
         pointer: dict[str, Any],
         state: Any,
         mtime_lookup: Callable[[str], float | None],
+        preflight: Any = None,
     ) -> None:
         self.hook_input = hook_input
         self.pointer = dict(pointer)
         self.state = state
         self.mtime_lookup = mtime_lookup
+        self.preflight = preflight
         self.dirty = False
 
     def update(self, **fields: Any) -> None:
@@ -2689,6 +2725,37 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
     return _hook_block(ctx, "next_step", step_id, budget, suffix)
 
 
+def _hook_nothing_started(state: dict[str, Any]) -> bool:
+    return all(
+        step.get("status") in (PENDING, BLOCKED) for step in state["steps"].values()
+    )
+
+
+def _branch_preflight(ctx: _HookContext) -> HookDecision | None:
+    """(8.5) Before the first step starts, a failed preflight means every
+    step we could hand out would fail to run. Allow and say what is missing,
+    one line per item, instead of blocking on a step that cannot start.
+
+    `ctx.preflight` is computed by the I/O layer (_hook_preflight) — this
+    branch only reads `.ok` / `.failures`, keeping decide_hook_action pure.
+    """
+    result = ctx.preflight
+    if result is None or result.ok or not _hook_nothing_started(ctx.state):
+        return None
+    items = "\n".join(
+        f"- {_sanitize_plan_field(c.kind)} {_sanitize_plan_field(c.name)}："
+        f"{_sanitize_plan_field(c.hint)}"
+        for c in result.failures
+    )
+    message = _PREFLIGHT_FAILED_MESSAGE.format(
+        slug=_sanitize_plan_field(ctx.state.get("slug")) or "?",
+        items=items,
+        runner=_runner_invocation(ctx.pointer.get("plan_path")),
+        plan=_quote_plan_path(ctx.pointer.get("plan_path")),
+    )
+    return _hook_allow(ctx, system_message=message)
+
+
 def _branch_stuck(ctx: _HookContext) -> HookDecision:
     """(11) Nothing ready, nothing running, not finished — say so and stop."""
     counts = ", ".join(
@@ -2711,6 +2778,7 @@ _HOOK_BRANCHES: tuple[Callable[[_HookContext], HookDecision | None], ...] = (
     _branch_all_done,
     _branch_failed_step,
     _branch_background_tasks,
+    _branch_preflight,
     _branch_in_progress,
     _branch_ready_step,
 )
@@ -2721,8 +2789,12 @@ def decide_hook_action(
     pointer: dict[str, Any] | None,
     state: dict[str, Any] | None,
     mtime_lookup: Callable[[str], float | None] = _default_mtime_lookup,
+    preflight: Any = None,
 ) -> HookDecision:
     """Decide block/allow for one Stop hook invocation. Pure — no I/O.
+
+    `preflight` is a plan_runner_preflight.PreflightResult the caller has
+    already computed (or None when it was not run / not applicable).
 
     Branches are evaluated in order, first match wins; only lease
     arbitration (4) can handle its case and still fall through. The caller
@@ -2736,7 +2808,7 @@ def decide_hook_action(
     if not isinstance(pointer, dict):                        # (1) not our cwd
         return HookDecision(decision=HOOK_ALLOW, silent=True)
 
-    ctx = _HookContext(hook_input, pointer, state, mtime_lookup)
+    ctx = _HookContext(hook_input, pointer, state, mtime_lookup, preflight)
     _reset_turn_counters(ctx)
     for branch in _HOOK_BRANCHES:
         decision = branch(ctx)
@@ -2806,6 +2878,49 @@ def _load_hook_state(pointer_data: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+def _plan_commands(plan_path: Path) -> list[str | None]:
+    """Every step's `Command:` value, or [] when the plan cannot be read —
+    preflight reports the unreadable plan itself."""
+    try:
+        steps = parse_plan(plan_path)["steps"]
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    return [step.get("command") for step in steps.values()]
+
+
+def _run_plan_preflight(plan_path: Path, base_dir: Path) -> Any:
+    """The one preflight both `preflight` and the hook run. Raises
+    ImportError when plan_runner_preflight is not next to this file."""
+    pf = _import_sibling("plan_runner_preflight")
+    runner = _runner_script_path() or Path("plan_runner.py")
+    return pf.run_preflight(
+        runner_path=runner,
+        plan_path=plan_path,
+        state_path=state_path_for(plan_path),
+        commands=_plan_commands(plan_path),
+        base_dir=base_dir,
+    )
+
+
+def _hook_preflight(pointer: Any, state: Any, cwd: str | None) -> Any:
+    """Preflight for the hook, or None when it does not apply or cannot run.
+
+    Only before the first step starts: once work is under way, a tool that
+    went missing shows up as that step failing, and re-checking every tool
+    on every Stop event would tax every turn for nothing. Never raises —
+    a broken preflight must degrade to "no preflight", not to a hook crash.
+    """
+    if not isinstance(pointer, dict) or not _hook_state_shape_ok(state):
+        return None
+    plan_raw = pointer.get("plan_path")
+    if not isinstance(plan_raw, str) or not plan_raw or not _hook_nothing_started(state):
+        return None
+    try:
+        return _run_plan_preflight(Path(plan_raw), Path(cwd or Path(plan_raw).parent))
+    except Exception:
+        return None
+
+
 def _hook_output_payload(decision: HookDecision) -> dict[str, Any] | None:
     """Map a HookDecision to the JSON dict to print, or None to print
     nothing at all. Output shape is centralized here so the wire format
@@ -2866,7 +2981,8 @@ def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDeci
     resolved = resolve_pointer_for_hook(cwd) if cwd else None
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
-    decision = decide_hook_action(hook_input, pointer, state)
+    preflight = _hook_preflight(pointer, state, cwd) if pointer is not None else None
+    decision = decide_hook_action(hook_input, pointer, state, preflight=preflight)
     _apply_hook_side_effects(decision, resolved)
     return decision
 
@@ -3076,6 +3192,21 @@ def cmd_next(args: argparse.Namespace) -> int:
     save_state(plan_path, state)  # persist previously_reported_ready update
     emit_formatted(payload, args.format, format_next_md)
     return 0
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).resolve()
+    try:
+        pf = _import_sibling("plan_runner_preflight")
+        result = _run_plan_preflight(plan_path, Path.cwd())
+    except ImportError as exc:
+        emit({"error": f"plan_runner_preflight 無法載入：{exc}"})
+        return 1
+    if args.format == "json":
+        emit(pf.result_to_dict(result))
+    else:
+        print(pf.format_md(result))
+    return 0 if result.ok else 1
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -4037,6 +4168,13 @@ def main() -> None:
     p_skip.add_argument("step")
     add_format_flag(p_skip)
     p_skip.set_defaults(func=cmd_skip)
+
+    p_preflight = sub.add_parser(
+        "preflight", help="Check runner, plan, state and every Command: tool exist (exit 1 on any failure)",
+    )
+    p_preflight.add_argument("plan")
+    add_format_flag(p_preflight)
+    p_preflight.set_defaults(func=cmd_preflight)
 
     p_status = sub.add_parser("status", help="Show all steps and statuses")
     p_status.add_argument("plan")

@@ -2831,7 +2831,10 @@ def _approval_gate(ctx: _HookContext, gated: tuple[str, ...]) -> HookDecision:
     """Every ready step waits on a human: allow, and say what to decide.
 
     Like a failed step this is a HITL stop, so the block counter is cleared
-    and the next real advance starts from a full budget.
+    and the next real advance starts from a full budget. Waiting on a human
+    is not a stall either: the assignment streak and any STUCK record are
+    cleared, so a gated step can never be reported STUCK and the first
+    assignment after `approve` counts from one.
     """
     step_id = gated[0]
     plan_path = ctx.pointer.get("plan_path")
@@ -2840,6 +2843,9 @@ def _approval_gate(ctx: _HookContext, gated: tuple[str, ...]) -> HookDecision:
     sid = _sanitize_step_id(step_id)
     if ctx.counter("consecutive_blocks") != 0:
         ctx.update(consecutive_blocks=0)
+    if ctx.pointer.get("last_assigned_step_id") is not None or ctx.counter("assign_repeat_count"):
+        ctx.update(last_assigned_step_id=None, assign_repeat_count=0)
+    _clear_stuck_record(ctx)
     lines = _import_sibling("plan_runner_guardrails").approval_gate_lines(
         sid,
         _plan_data_lines(ctx.state, ctx.state["steps"][step_id]),

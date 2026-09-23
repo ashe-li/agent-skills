@@ -163,6 +163,23 @@ def expand_deps(
     return expanded
 
 
+def _approval_field(raw: str, step_id: str) -> tuple[bool, str | None] | None:
+    """(gated, init warning) when `raw` is a Requires-Approval field line.
+
+    The key is matched leniently (bold, space, any case) and the value
+    fail-closed — see plan_runner_guardrails (review F4). Guardrails are
+    only imported for lines that mention approval, so a runner copied
+    without its siblings still parses plans that never use the gate.
+    """
+    if "approval" not in raw.lower():
+        return None
+    gr = _import_sibling("plan_runner_guardrails")
+    value = gr.match_requires_approval_field(raw)
+    if value is None:
+        return None
+    return gr.parse_requires_approval(value), gr.approval_value_warning(step_id, value)
+
+
 def parse_plan(plan_path: Path) -> dict[str, Any]:
     """Parse plan.md into step graph."""
     text = plan_path.read_text(encoding="utf-8")
@@ -239,6 +256,12 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
             continue
 
         if current_step_id:
+            approval = _approval_field(raw, current_step_id)
+            if approval is not None:
+                steps[current_step_id]["requires_approval"] = approval[0]
+                parse_warnings.extend(w for w in approval[1:] if w)
+                in_action_block = False
+                continue
             m_field = field_re.match(raw)
             if m_field:
                 key = m_field.group("key").lower()
@@ -265,11 +288,6 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                     in_action_block = False
                 elif key == "risk":
                     steps[current_step_id]["risk"] = val
-                    in_action_block = False
-                elif key in ("requires-approval", "requires_approval"):
-                    steps[current_step_id]["requires_approval"] = (
-                        _import_sibling("plan_runner_guardrails").parse_requires_approval(val)
-                    )
                     in_action_block = False
                 continue
 

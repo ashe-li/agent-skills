@@ -700,6 +700,15 @@ def recompute_blocked_status(state: dict[str, Any]) -> None:
             step["status"] = PENDING
 
 
+def step_start_count(step: dict[str, Any]) -> int:
+    """How many times `start` has moved this step to in_progress. State is
+    user-writable, so anything but a non-negative int reads as 0."""
+    value = step.get("start_count")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def transition_step(
     state: dict[str, Any],
     step_id: str,
@@ -716,6 +725,9 @@ def transition_step(
     step["status"] = new_status
     if new_status == IN_PROGRESS:
         step["started_at"] = now_iso()
+        # Survives `reset` on purpose: the hook's STUCK count compares it
+        # to tell "start was never run" from "start ran, then fail + reset".
+        step["start_count"] = step_start_count(step) + 1
         if kwargs.get("task_id"):
             step["task_id"] = kwargs["task_id"]
         if kwargs.get("session_id"):
@@ -1181,7 +1193,11 @@ _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
 # by an older build stays VALID instead of being condemned as malformed —
 # validate_pointer() failing would disable auto-advance for that cwd, which
 # is a far worse outcome than a missing nag counter.
-_POINTER_OPTIONAL_COUNTER_FIELDS = ("assign_repeat_count", "turn_start_completed")
+_POINTER_OPTIONAL_COUNTER_FIELDS = (
+    "assign_repeat_count", "turn_start_completed",
+    # The step's start_count when it was last handed out (review F2).
+    "assigned_start_count",
+)
 
 
 class ResolvedPointer(NamedTuple):
@@ -2700,16 +2716,27 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
 
 
 def _record_assignment(ctx: _HookContext, step_id: str) -> int:
-    """Count how many times in a row we have handed out this same step.
+    """Count how many times in a row we have handed out this same step
+    without a `start` of it in between.
 
     Reset by the assignment changing, not by the turn changing — see the
-    note on _HOOK_TURN_COUNTERS. Branch (9) clears it as soon as a step is
-    actually in progress, which is the only proof that a `start` we asked
-    for was really run.
+    note on _HOOK_TURN_COUNTERS. Proof that a `start` we asked for was
+    really run resets it too: branch (9) seeing the step in progress, or
+    the step's `start_count` having moved since the last assignment — the
+    latter catches start -> fail -> reset inside one turn, which leaves the
+    step pending again and is invisible to (9) (review F2).
     """
+    starts = step_start_count(ctx.state["steps"][step_id])
+    recorded = ctx.pointer.get("assigned_start_count")
+    # A pointer from before the field existed has no record: keep its streak.
+    same_attempt = recorded is None or recorded == starts
     previous = _hook_str(ctx.pointer.get("last_assigned_step_id"))
-    count = ctx.counter("assign_repeat_count") + 1 if previous == step_id else 1
-    ctx.update(last_assigned_step_id=step_id, assign_repeat_count=count)
+    repeat = previous == step_id and same_attempt
+    count = ctx.counter("assign_repeat_count") + 1 if repeat else 1
+    ctx.update(
+        last_assigned_step_id=step_id, assign_repeat_count=count,
+        assigned_start_count=starts,
+    )
     if count == 1:
         ctx.update(attempt_first_at=now_iso())
     return count

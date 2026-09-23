@@ -40,7 +40,9 @@ _DASH_LIKES = str.maketrans({c: "-" for c in "\u2010\u2011\u2012\u2013\u2014\u20
 # Optional blockquote, then a `-` / `*` / `+` bullet, a `1.` / `1)` number,
 # or nothing; any indentation.
 _LINE_PREFIX = r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s+)?"
-_BOLD = r"(?:\*\*|__)?"
+# Markdown wrapping around a key or right after its separator: `**bold**`,
+# `__bold__`, `` `code` `` (review r3b), in any combination.
+_BOLD = r"(?:\*\*|__|`)*"
 _REQUIRES_APPROVAL_KEY = _BOLD + r"requires[\s_-]*approval" + _BOLD
 # `Requires-Approval: x` with the tolerance people actually type: any case,
 # `-` / `_` / space / nothing between the words, `**bold**` or `__bold__`
@@ -59,9 +61,12 @@ _REQUIRES_APPROVAL_NO_SEPARATOR_RE = re.compile(
 # pre-filter of its own; every step line goes through approval_line().
 _APPROVAL_HINT_RE = re.compile(r"a+p+r+o*v", re.IGNORECASE)
 # `key: value` with a field-name-shaped key (letters, digits, spaces, `-`,
-# `_`, `/`, bold markers), so a sentence that happens to contain a colon
-# is not a field.
-_FIELD_LIKE_LINE_RE = re.compile(_LINE_PREFIX + r"(?P<key>[\w\s/*-]{1,40}?)\s*[:=]")
+# `_`, `/`), optionally wrapped in bold or backticks as a whole. Wrapping
+# inside the key (`see the `approve` step:`) is free text, not a key, so a
+# sentence that happens to contain a colon never counts (review N2-FP).
+_FIELD_LIKE_LINE_RE = re.compile(
+    _LINE_PREFIX + _BOLD + r"(?P<key>[\w\s/-]{1,40}?)" + _BOLD + r"\s*[:=]"
+)
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.

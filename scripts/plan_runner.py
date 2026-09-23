@@ -3162,6 +3162,41 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
 # CLI commands
 # ---------------------------------------------------------------------------
 
+def _dag_error_payload(
+    plan_path: Path, parsed: dict[str, Any], errors: list[str],
+) -> dict[str, Any]:
+    """`init`'s error payload for a plan whose DAG does not validate."""
+    payload: dict[str, Any] = {
+        "error": "DAG validation failed",
+        "details": errors,
+        "warnings": parsed["warnings"],
+    }
+    if any("No steps found" in e for e in errors):
+        payload["hint"] = (
+            "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
+            f"Try: plan_runner.py normalize {plan_path} --diff "
+            f"→ if diff looks reasonable: --write → re-run init."
+        )
+    return payload
+
+
+def _attach_after_init(plan_path: Path, fmt: str) -> None:
+    """Attach the cwd pointer after a successful `init`.
+
+    attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
+    JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
+    文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
+    """
+    attach_stream = sys.stderr if fmt == "json" else sys.stdout
+    pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
+    if error is not None:
+        print(error, file=attach_stream)
+        return
+    _print_attach_result(
+        plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
+    )
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     if not plan_path.exists():
@@ -3170,18 +3205,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     parsed = parse_plan(plan_path)
     errors = validate_dag(parsed)
     if errors:
-        payload: dict[str, Any] = {
-            "error": "DAG validation failed",
-            "details": errors,
-            "warnings": parsed["warnings"],
-        }
-        if any("No steps found" in e for e in errors):
-            payload["hint"] = (
-                "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
-                f"Try: plan_runner.py normalize {plan_path} --diff "
-                f"→ if diff looks reasonable: --write → re-run init."
-            )
-        emit(payload)
+        emit(_dag_error_payload(plan_path, parsed, errors))
         return 1
     existing = load_state(plan_path)
     if existing and not args.force:
@@ -3205,17 +3229,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
-        # attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
-        # JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
-        # 文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
-        attach_stream = sys.stderr if args.format == "json" else sys.stdout
-        pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
-        if error is not None:
-            print(error, file=attach_stream)
-        else:
-            _print_attach_result(
-                plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
-            )
+        _attach_after_init(plan_path, args.format)
     return 0
 
 

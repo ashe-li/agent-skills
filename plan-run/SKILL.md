@@ -193,7 +193,7 @@ Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete`�
 | Step ID | `S\d+(\.\d+)?[a-z]?`（例：`S0.1`、`S1a`、`S3.1a`、`S12`） |
 | Step 欄位 | `  - <key>: <value>`（縮排 2 空格，ASCII 或全形冒號皆可） |
 | 可辨識欄位 | `Files`、`Action`、`Agent`、`Skill`、`Command`、`Agent/Skill`、`Dependencies`、`Risk`、`Why`、`Input`、`Output`、`Requires-Approval` |
-| Requires-Approval | 先做 NFKC 正規化（全形字母與全形冒號可用），key 大小寫不拘，`Requires-Approval`、`Requires_Approval`、`Requires Approval` 皆可，可加 `**粗體**`；行首可有 blockquote `>`，清單符號 `-`／`*`／`+`、編號 `1.`／`1)` 或不加，縮排不拘；分隔用冒號或 `=`，漏了分隔符當成需要核准並警告；不認得的欄位名稱含 approval 的任何拼法（例如 `Require-Approval`、`Requires-Apprval`、`Approver`）也當成需要核准並警告，只看欄位名稱、不看自由文字；欄位到下一個 `##`／`###` heading 為止；多行時任一為 true 即需要核准；**fail-closed**：只有 `false`／`no`／`0`／`none`／空值（大小寫不拘，可包反引號、引號或粗體）視為不需要核准，其他值一律需要核准，`true`／`yes`／`1` 以外的值另在 `init` 的 `warnings` 點名 |
+| Requires-Approval | 先做 NFKC 正規化（全形字母與全形冒號可用），key 大小寫不拘，`Requires-Approval`、`Requires_Approval`、`Requires Approval` 皆可，可加 `**粗體**` 或反引號；行首可有 blockquote `>`，清單符號 `-`／`*`／`+`、編號 `1.`／`1)` 或不加，縮排不拘；分隔用冒號或 `=`，漏了分隔符當成需要核准並警告；不認得的欄位名稱含 approval 的任何拼法（例如 `Require-Approval`、`Requires-Apprval`、`Approver`）也當成需要核准並警告，只看欄位名稱、不看自由文字；欄位到下一個 `##`／`###` heading 為止；多行時任一為 true 即需要核准；**fail-closed**：只有 `false`／`no`／`0`／`none`／空值（大小寫不拘，可包反引號、引號或粗體）視為不需要核准，其他值一律需要核准，`true`／`yes`／`1` 以外的值另在 `init` 的 `warnings` 點名 |
 | Dependencies 值 | 逗號、斜線、空白分隔的 step ID 清單；支援 range 語法 |
 
 **Range 語法**（展開為 plan 內出現順序的完整 list）：`Dependencies: S4.1 ~ S6` → `[S4.1, S4.2, S4.3, S5, S6]`；支援 `~`、`...`、`..`、`–`、`—` 五種分隔符；可與單一 ID 混用；端點不存在時降級為只保留端點 + warning。

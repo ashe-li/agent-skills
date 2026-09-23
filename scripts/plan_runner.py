@@ -184,12 +184,18 @@ def _record_approval(
     step: dict[str, Any], step_id: str, approval: tuple[bool | None, str | None],
     warnings: list[str],
 ) -> None:
-    """Fold one approval line into the step. A warning-only line (gated
-    None) carries no verdict."""
+    """Fold one approval line into the step: any gated line wins, so a later
+    `false` never reopens a gate an earlier line closed (review N3). A
+    warning-only line (gated None) carries no verdict and is not folded."""
     gated, warning = approval
     warnings.extend([warning] if warning else [])
-    if gated is not None:
-        step["requires_approval"] = gated
+    if gated is None:
+        return
+    earlier = step.setdefault("_approval_lines", [])
+    if earlier and gated not in earlier:
+        warnings.append(_import_sibling("plan_runner_guardrails").approval_conflict_warning(step_id))
+    earlier.append(gated)
+    step["requires_approval"] = any(earlier)
 
 
 def parse_plan(plan_path: Path) -> dict[str, Any]:
@@ -315,6 +321,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 
     step_order = list(steps.keys())
     for sid, step in steps.items():
+        step.pop("_approval_lines", None)
         raw = step.pop("_deps_raw", None)
         if raw:
             step["deps"] = expand_deps(raw, step_order, sid, parse_warnings)

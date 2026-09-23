@@ -128,6 +128,13 @@ def approval_line(
     )
 
 
+def approval_conflict_warning(step_id: str) -> str:
+    return (
+        f"{step_id}: Requires-Approval appears more than once with conflicting "
+        "values; any true wins (treated as requiring approval)"
+    )
+
+
 def approval_value_warning(step_id: str, raw: str) -> str | None:
     """init warning for a value that gated the step without being understood."""
     if is_recognised_approval_value(raw):

@@ -58,8 +58,10 @@ _REQUIRES_APPROVAL_NO_SEPARATOR_RE = re.compile(
 # so `provider` / `improve` are not hits. The parser has no cheaper
 # pre-filter of its own; every step line goes through approval_line().
 _APPROVAL_HINT_RE = re.compile(r"a+p+r+o*v", re.IGNORECASE)
-# A `key: value` line — the shape of a step field.
-_FIELD_LIKE_LINE_RE = re.compile(_LINE_PREFIX + r"(?P<key>[^:=]{1,80}?)\s*[:=]")
+# `key: value` with a field-name-shaped key (letters, digits, spaces, `-`,
+# `_`, `/`, bold markers), so a sentence that happens to contain a colon
+# is not a field.
+_FIELD_LIKE_LINE_RE = re.compile(_LINE_PREFIX + r"(?P<key>[\w\s/*-]{1,40}?)\s*[:=]")
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -130,11 +132,10 @@ def approval_line(
     parsed with the value rules; the same key with its separator missing
     gates and warns. A `key: value` line the parser does not know whose
     *key* spells approval in any way (`Require-Approval`, `Requires-Apprval`,
-    `Approval-Required`...) gates the step and names the line. When only
-    the value of such a line mentions approval the step is not gated, but
-    init names the line. `known_field` lines (Action, Risk...) and lines
-    that never mention approval are left alone.
-    gated is None for a line that only earns a warning and no verdict.
+    `Approval-Required`...) gates the step and names the line. Free text is
+    never looked at (review N2-FP): `Test: approval flow works` or a note
+    saying "approve" decides nothing. `known_field` lines (Action, Risk...)
+    and lines whose key never mentions approval are left alone.
     """
     value = match_requires_approval_field(line)
     if value is not None:
@@ -147,17 +148,12 @@ def approval_line(
             "Write `Requires-Approval: true` or `false`"
         )
     field = None if known_field else _FIELD_LIKE_LINE_RE.match(text)
-    if field is None or not _APPROVAL_HINT_RE.search(text):
+    if field is None or not _APPROVAL_HINT_RE.search(field.group("key")):
         return None
-    if _APPROVAL_HINT_RE.search(field.group("key")):
-        return True, (
-            f"{step_id}: line {line.strip()!r} looks like Requires-Approval but the "
-            "key is not recognised; treated as requiring approval (fail-closed). "
-            "Write `Requires-Approval: true` or `false`"
-        )
-    return None, (
-        f"{step_id}: line {line.strip()!r} mentions approval in an unrecognised "
-        "field; not gated. Add `Requires-Approval: true` if a human must sign off"
+    return True, (
+        f"{step_id}: line {line.strip()!r} looks like Requires-Approval but the "
+        "key is not recognised; treated as requiring approval (fail-closed). "
+        "Write `Requires-Approval: true` or `false`"
     )
 
 

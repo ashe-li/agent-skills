@@ -140,11 +140,12 @@ class ApprovalLineTests(unittest.TestCase):
             self.assertIn("S7", warning)
             self.assertIn(line.strip(), warning)
 
-    def test_approval_only_in_an_unknown_value_warns_without_gating(self):
-        gated, warning = gr.approval_line("S7", "  - Test: approval flow works", known_field=False)
-        self.assertIsNone(gated)
-        self.assertIn("S7", warning)
-        self.assertIn("Test: approval flow works", warning)
+    def test_approval_only_in_free_text_is_ignored(self):
+        """Review N2-FP: the hint looks at field keys only, never free text."""
+        for line in ("  - Test: approval flow works",
+                     "- User review + approve（改 Status: APPROVED）",
+                     "- **Deploy**(同一 stage 三個 action,Manual Approval 後同時跑 ECS+EKS):"):
+            self.assertIsNone(gr.approval_line("S7", line, known_field=False), line)
 
     RESIDUAL = (
         # Review N2-R: each of these used to pass silently.
@@ -532,11 +533,10 @@ class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
                 self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
                 self.assertEqual(parsed["warnings"], [])
 
-    def test_value_only_mention_warns_but_does_not_decide(self):
+    def test_value_only_mention_is_ignored(self):
         parsed = _parse_s1("  - Test: approval flow works", "  - Requires-Approval: false")
         self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
-        self.assertEqual(len(parsed["warnings"]), 1, parsed["warnings"])
-        self.assertNotIn("conflict", parsed["warnings"][0])
+        self.assertEqual(parsed["warnings"], [])
 
     def test_residual_shapes_gate_through_parse_plan(self):
         for line in ApprovalLineTests.RESIDUAL + ("  - Requires-Approval true",):
@@ -544,6 +544,26 @@ class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
                 parsed = _parse_s1(line)
                 self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
                 self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
+
+    def test_heading_ends_the_last_steps_fields(self):
+        """Review N2-FP: a `### Notes` section after the last step is not part
+        of it, so bullets there can neither gate it nor add fields."""
+        body = "\n".join([
+            "# P", "", "### Phase 1: A", "",
+            "- [ ] S1 First", "  - Action: do A",
+            "- [ ] S2 Last", "  - Action: do B", "  - Requires-Approval: false", "",
+            "### Notes", "",
+            "  - Approval-Required: true",
+            "  - Command: `rm -rf /`",
+            "- User review + approve（改 Status: APPROVED）",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.md"
+            path.write_text(body, encoding="utf-8")
+            parsed = pr.parse_plan(path)
+        self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
+        self.assertIsNone(parsed["steps"]["S2"]["command"])
+        self.assertEqual(parsed["warnings"], [])
 
     def test_no_mention_of_approval_is_ungated(self):
         parsed = _parse_s1("  - Owner: alice")

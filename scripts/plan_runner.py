@@ -246,6 +246,10 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 current_phase = phase_name
                 if phase_name not in phase_order:
                     phase_order.append(phase_name)
+            # Any `###` heading ends the current step's fields, the same as
+            # `##` below: a `### Notes` after the last step is not part of
+            # it (review N2-FP).
+            current_step_id = None
             continue
 
         m_step = step_re.match(raw)

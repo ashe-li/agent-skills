@@ -9,7 +9,23 @@ on:
       - "*/fixtures/**"
       - "scripts/check_skill.py"
       - "scripts/check_release_fixtures.py"
+      # scripts/tests/ 的 unittest 守的是 scripts/ 底下全部程式（plan_runner
+      # 與其 sibling 模組、hooks），只列上面兩支 check 腳本會讓改 runner 的
+      # PR 完全不觸發測試。workflow 自身也列進來，改 CI 時要能看到它跑。
+      - "scripts/**"
+      - ".github/workflows/skill-quality.yml"
 jobs:
+  unit-tests:
+    # 在這之前 scripts/tests/ 從沒在 CI 跑過（CHANGELOG 舊條目已記錄），
+    # 幾百個測試都不擋 merge。repo 只用 stdlib unittest，不需要 pytest。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pyyaml
+      - name: Run scripts/tests
+        run: python -m unittest discover scripts/tests
   quality:
     runs-on: ubuntu-latest
     steps:

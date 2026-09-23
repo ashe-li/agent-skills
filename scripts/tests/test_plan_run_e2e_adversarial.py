@@ -1,6 +1,6 @@
 """Adversarial E2E: inject the failures plan-run is supposed to survive.
 
-Ten scenarios, each in its own fake $HOME, driven only through the CLI and
+Thirteen scenarios, each in its own fake $HOME, driven only through the CLI and
 the `hook-stop` entry point as subprocesses (see plan_run_e2e_support.py):
 
   C1 a script is missing (a Command: tool, the state file, the runner itself)
@@ -13,6 +13,9 @@ the `hook-stop` entry point as subprocesses (see plan_run_e2e_support.py):
   C8 a flaky step retried with start -> fail -> reset (review F2: not STUCK)
   C9 history rewritten by reset / init --force (review F3: --resume is live)
   C10 Requires-Approval written loosely (review F4: the gate still holds)
+  C11 a shell comment in `Command:` (fresh review N1: no false "missing tool")
+  C12 a misspelled Requires-Approval key (fresh review N2: gated and named)
+  C13 conflicting Requires-Approval lines (fresh review N3: any true wins)
 
 What this suite cannot see, stated so a green run is not over-read:
 
@@ -54,6 +57,18 @@ SHELL_SYNTAX_COMMAND = (
 )
 SHELL_SYNTAX_TOOLS = ["wc", "cat", "git", "python3"]
 MISSING_TOOL = "plan-run-e2e-missing-tool-zz9"
+
+# Fresh review N1: `;` inside a trailing comment used to split out
+# `harmless` as a tool; `a#b`-style words must still not be comments.
+COMMENT_COMMAND = "git --version  # prints version; harmless && nope-tool-zz9"
+# Fresh review N2: misspelled keys used to be dropped without a warning.
+MISSPELLED_APPROVAL_FIELDS = (
+    ("require", "  - Require-Approval: true\n"),
+    ("aproval", "  - Requires-Aproval: true\n"),
+    ("approval-required", "  - Approval-Required: true\n"),
+)
+# Fresh review N3: a later `false` used to reopen the gate.
+CONFLICTING_APPROVAL_FIELDS = "  - Requires-Approval: true\n  - Requires-Approval: false\n"
 
 # Review F4: each of these used to parse as "no approval needed".
 LOOSE_APPROVAL_FIELDS = (
@@ -501,6 +516,64 @@ class C10LooseApprovalSyntax(AdversarialCase):
         warnings = parse_json(sb.cli("init", "plan.md", "--format", "json").stdout).get("warnings", [])
         self.check("AC-C10.3", "無法辨識的值：init warnings 點名 S1 與 Requires-Approval",
                    any("S1" in w and "Requires-Approval" in w for w in warnings), warnings)
+        self.assert_all_checks_passed()
+
+
+class C11CommentInCommand(AdversarialCase):
+
+    def test_c11_shell_comment_is_not_a_tool(self):
+        self.log.scenario = "C11-shell-comment"
+        sb = self.sandbox(LINEAR_PLAN.format(s1_extra=f"  - Command: `{COMMENT_COMMAND}`\n"))
+        sb.cli("init", "plan.md")
+        pf = sb.cli("preflight", "plan.md", "--format", "json")
+        report = parse_json(pf.stdout)
+        tools = [c.get("name") for c in report.get("checks", []) if c.get("kind") == "tool"]
+        self.check("AC-C11.1", "註解裡的 `;` 之後不算指令：preflight rc=0 且只查 git",
+                   pf.returncode == 0 and report.get("ok") is True and tools == ["git"],
+                   f"rc={pf.returncode} tools={tools}")
+        _, payload, _ = sb.hook("s1", sb.transcript("t1"))
+        self.check("AC-C11.2", "hook 照常派 S1，不發 PREFLIGHT 失敗",
+                   assigns_only(payload, "S1")
+                   and not system_message(payload).startswith(e2e.PREFLIGHT_MSG), payload)
+        self.assert_all_checks_passed()
+
+
+class C12MisspelledApprovalKey(AdversarialCase):
+
+    def test_c12_misspelled_key_is_gated_and_named(self):
+        self.log.scenario = "C12-misspelled-approval-key"
+        for label, field in MISSPELLED_APPROVAL_FIELDS:
+            sb = self.sandbox(GATED_PLAN.format(gate=field))
+            init = parse_json(sb.cli("init", "plan.md", "--format", "json").stdout)
+            warnings = init.get("warnings", [])
+            self.check(f"AC-C12.1[{label}]", "init warnings 點名 S1 與拼錯的那一行",
+                       any("S1" in w and field.strip().lstrip("- ") in w for w in warnings),
+                       warnings)
+            _, payload, _ = sb.hook("s1", sb.transcript("t1"))
+            refused = sb.cli("start", "plan.md", "S1")
+            self.check(f"AC-C12.2[{label}]", "S1 列在 awaiting_approval、hook 先派 S4、start S1 被拒",
+                       init.get("awaiting_approval_steps") == ["S1"]
+                       and assigns_only(payload, "S4") and refused.returncode != 0
+                       and sb.statuses().get("S1") == "pending",
+                       {"awaiting": init.get("awaiting_approval_steps"),
+                        "start_rc": refused.returncode})
+        self.assert_all_checks_passed()
+
+
+class C13ConflictingApproval(AdversarialCase):
+
+    def test_c13_any_true_line_wins(self):
+        self.log.scenario = "C13-conflicting-approval"
+        sb = self.sandbox(GATED_PLAN.format(gate=CONFLICTING_APPROVAL_FIELDS))
+        init = parse_json(sb.cli("init", "plan.md", "--format", "json").stdout)
+        self.check("AC-C13.1", "true 後面接 false：S1 仍需核准，init 警告衝突",
+                   init.get("awaiting_approval_steps") == ["S1"]
+                   and any("S1" in w and "conflict" in w for w in init.get("warnings", [])),
+                   {k: init.get(k) for k in ("awaiting_approval_steps", "warnings")})
+        refused = sb.cli("start", "plan.md", "S1")
+        self.check("AC-C13.2", "start S1 被拒且仍是 pending",
+                   refused.returncode != 0 and sb.statuses().get("S1") == "pending",
+                   f"rc={refused.returncode}")
         self.assert_all_checks_passed()
 
 

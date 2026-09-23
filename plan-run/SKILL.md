@@ -72,11 +72,11 @@ init 之後跑一次 `preflight`，確認環境跑得動這份 plan：
 python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
 ```
 
-它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（用 `shlex` 切 token，取每個指令位置的第一個字；引號或跳脫裡的 `;`／`&&`／`|` 不算分隔，`if`／`for`／`while`／`case`／`[[ ]]`／`{ }`／`!`／`time` 等 shell 關鍵字、`env`／`NAME=value` 前綴、`$( )`／`(( ))` 內容、指令自己定義的函式、`/verify` 這類 slash command、shell builtin、含 `$`／反引號的變數展開、以及同一條指令裡 `cd` 之後的相對路徑都不算；引號不成對的指令整條略過，寧可漏查也不誤報）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
+它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（用 `shlex` 切 token，取每個指令位置的第一個字；引號或跳脫裡的 `;`／`&&`／`|` 不算分隔，未加引號、位於字首的 `#` 到行尾視為註解（`a#b`、`${#arr}` 不算），`if`／`for`／`while`／`case`／`[[ ]]`／`{ }`／`!`／`time` 等 shell 關鍵字、`env`／`NAME=value` 前綴、`$( )`／`(( ))` 內容、指令自己定義的函式、`/verify` 這類 slash command、shell builtin、含 `$`／反引號的變數展開、以及同一條指令裡 `cd` 之後的相對路徑都不算；引號不成對的指令整條略過，寧可漏查也不誤報）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
 
 `warnings` 若出現 `` S<id>: mentions `gh pr merge` but has no `Requires-Approval: true` ``（偵測 `gh pr merge`、`kubectl apply/delete`、`helm upgrade/install/uninstall`、`terraform apply/destroy`），把這條轉告使用者，問要不要在該 step 補 `Requires-Approval: true` 再 `init --force`；只是警告，不擋 init。
 
-`--allow-path <路徑>`（可重複）把額外路徑加進 sandbox 清單，環境變數 `PLAN_SANDBOX_ROOT` 有設定時也會在 init 當下記進 state；repo root、cwd、plan 所在目錄不用另外給。值會解析成絕對路徑，不必已經存在，也可以是單一檔案（例如 step 自己才會建立的輸出目錄）；值會先展開 `~` 並 resolve（含 `..` 與 symlink）；含換行或控制字元、長度超過 300、超過 20 筆，或解析後是 `/`、頂層目錄（例如 `/tmp/..` 在 macOS 會變成 `/private`）、`$HOME` 本身或包含它的目錄、`~/.claude` 或其底下的路徑，init 直接 rc=1 拒絕，不建 state。`PLAN_SANDBOX_ROOT` 不合法時只在 `warnings` 提醒並略過，不會讓 init 失敗。`init` 的輸出也會另列 `需核准` 段（json `awaiting_approval_steps`），`Ready now` 不含未核准的 step。規則內容見下方「Sandbox 與範圍外指令」。
+`--allow-path <路徑>`（可重複）把額外路徑加進 sandbox 清單，環境變數 `PLAN_SANDBOX_ROOT` 有設定時也會在 init 當下記進 state；repo root、cwd、plan 所在目錄不用另外給。值會解析成絕對路徑，不必已經存在，也可以是單一檔案（例如 step 自己才會建立的輸出目錄）；值會先展開 `~` 並 resolve（含 `..` 與 symlink）；含換行或控制字元、長度超過 300、超過 20 筆，或解析後是 `/`、頂層目錄（例如 `/tmp/..` 在 macOS 會變成 `/private`）、`$HOME` 本身或包含它的目錄、`~/.claude` 或其底下的路徑（比對不分大小寫；`~/.claude` 是 symlink 時，它的實體目標與包含該目標的目錄也算），init 直接 rc=1 拒絕，不建 state。`PLAN_SANDBOX_ROOT` 不合法時只在 `warnings` 提醒並略過，不會讓 init 失敗。`init` 的輸出也會另列 `需核准` 段（json `awaiting_approval_steps`），`Ready now` 不含未核准的 step。規則內容見下方「Sandbox 與範圍外指令」。
 
 回傳 `No steps found in plan` → 回 Step 0 跑 normalize。已存在 state → 先 `plan_runner.py status "$ARGUMENTS"` 看狀態再決定，要重來用 `init --force`。
 
@@ -136,7 +136,7 @@ hook 對同一個 step 第 3 次沒有進展時（ready 一直沒被 `start`，�
 
 ## Step 3.6: 人工核准關卡（Requires-Approval）
 
-step 標了 `Requires-Approval: true` 就要等人核准才會被指派。這個關卡是 fail-closed：只要寫了這個欄位，值不是 `false`／`no`／`0`／`none`／空值，就一律當成需要核准；`true`／`yes`／`1` 以外的值（例如 `required`、`true (prod deploy)`）也會擋，並在 `init` 的 `warnings` 點名，看到就轉告使用者改成 `true` 或 `false`。還沒核准時：
+step 標了 `Requires-Approval: true` 就要等人核准才會被指派。這個關卡是 fail-closed：只要寫了這個欄位，值不是 `false`／`no`／`0`／`none`／空值，就一律當成需要核准；`true`／`yes`／`1` 以外的值（例如 `required`、`true (prod deploy)`）也會擋，並在 `init` 的 `warnings` 點名，看到就轉告使用者改成 `true` 或 `false`。key 拼錯（`Require-Approval`、`Requires-Aproval`、`Approval-Required` 等，任何拼法的 approval 出現在不認得的欄位名稱裡）同樣當成需要核准並點名那一行；只有值提到 approval 的不認得欄位（例如 `Test: approval flow`）只警告、不擋。同一個 step 寫了多行時，任一行需要核准就需要核准，值互相衝突會警告。還沒核准時：
 
 - hook 不會把它當成 next step，也不會列在 `Also ready`。同時有不需核准的 ready step 就先派那些；**所有** ready step 都在等核准時，hook 才停下（allow，不 block），用 systemMessage 附上決策摘要：step、圍欄內的 action／risk、要人決定什麼、核准指令、`skip` 指令
 - `start` 直接 rc=1 拒絕並提示去問使用者
@@ -193,7 +193,7 @@ Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete`�
 | Step ID | `S\d+(\.\d+)?[a-z]?`（例：`S0.1`、`S1a`、`S3.1a`、`S12`） |
 | Step 欄位 | `  - <key>: <value>`（縮排 2 空格，ASCII 或全形冒號皆可） |
 | 可辨識欄位 | `Files`、`Action`、`Agent`、`Skill`、`Command`、`Agent/Skill`、`Dependencies`、`Risk`、`Why`、`Input`、`Output`、`Requires-Approval` |
-| Requires-Approval | key 大小寫不拘，`Requires-Approval`、`Requires_Approval`、`Requires Approval` 皆可，可加 `**粗體**`，ASCII 或全形冒號；**fail-closed**：只有 `false`／`no`／`0`／`none`／空值（大小寫不拘，可包反引號、引號或粗體）視為不需要核准，其他值一律需要核准，`true`／`yes`／`1` 以外的值另在 `init` 的 `warnings` 點名 |
+| Requires-Approval | key 大小寫不拘，`Requires-Approval`、`Requires_Approval`、`Requires Approval` 皆可，可加 `**粗體**`，清單符號 `-`／`*`／`+` 或不加、縮排不拘，分隔用 ASCII 或全形冒號或 `=`；key 拼錯也當成需要核准並警告；多行時任一為 true 即需要核准；**fail-closed**：只有 `false`／`no`／`0`／`none`／空值（大小寫不拘，可包反引號、引號或粗體）視為不需要核准，其他值一律需要核准，`true`／`yes`／`1` 以外的值另在 `init` 的 `warnings` 點名 |
 | Dependencies 值 | 逗號、斜線、空白分隔的 step ID 清單；支援 range 語法 |
 
 **Range 語法**（展開為 plan 內出現順序的完整 list）：`Dependencies: S4.1 ~ S6` → `[S4.1, S4.2, S4.3, S5, S6]`；支援 `~`、`...`、`..`、`–`、`—` 五種分隔符；可與單一 ID 混用；端點不存在時降級為只保留端點 + warning。

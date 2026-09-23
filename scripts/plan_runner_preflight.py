@@ -16,26 +16,38 @@ healthy plan, which is worse than missing a check):
 
 - Only the `Command:` field is scanned. `Action:` backticks are mostly file
   paths and function names, so they are never treated as tools.
-- The command is split on `&&`, `||`, `;` and `|`; each segment is split
-  with shlex and its first word (after `NAME=value` assignments) is the tool.
-- Skipped: shell builtins, and slash commands such as `/verify` or
-  `/code-review` — those are Claude Code skills, not executables.
-- Skipped: any head word with shell expansion (`$VAR`, `${VAR}`, `$(...)`,
-  backticks) — its value is only known when the shell runs it.
+- The whole command is tokenized once with `shlex` (POSIX quoting,
+  `punctuation_chars` for operators), so `;`, `&&`, `||`, `|`, `&`, `(` and
+  newlines only separate commands when they are unquoted and unescaped:
+  `python3 -c "import a; import b"` needs `python3`, never `import`.
+- The first word at each command position is the tool, after `NAME=value`
+  assignments and the `env` / `time` / `!` prefixes (`env` with an option
+  such as `-i` is skipped entirely).
+- Shell keywords are not tools: `if then elif else fi for select while until
+  do done case esac in function time ! { } [[ ]]`. The body of `[[ ... ]]`
+  and of `case ... esac` is skipped, and so is everything inside `$( ... )`,
+  `$(( ... ))`, `(( ... ))` and `<( ... )`.
+- Skipped: shell builtins, functions the command defines itself (`f() {`,
+  `function f`), and slash commands such as `/verify` or `/code-review` —
+  those are Claude Code skills, not executables.
+- Skipped: any head word with shell expansion (`$VAR`, `${VAR}`, backticks)
+  or a glob — its value is only known when the shell runs it.
 - Skipped: a relative path (`./run.sh`, `bin/x`) that comes after a `cd` /
   `pushd` in the same command — the directory it resolves against is only
   known at run time, and guessing it is how a healthy plan gets stopped.
 - Any other tool containing `/` is checked as a path (relative to
   `base_dir`, must be an executable file); the rest is looked up on PATH.
-- A segment shlex cannot parse (unbalanced quotes) is skipped, not guessed.
+- A command shlex cannot parse (unbalanced quotes) yields no tools at all:
+  the shell would not run it as written, so there is nothing to guess.
 """
 from __future__ import annotations
 
+import io
 import os
 import re
 import shlex
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -46,14 +58,29 @@ KIND_TOOL = "tool"
 
 _DIR_CHANGERS = frozenset({"cd", "pushd", "popd"})
 _EXPANSION_CHARS = ("$", "`")
+_GLOB_CHARS = ("*", "?")
 SHELL_BUILTINS = frozenset({
-    ".", ":", "[", "alias", "cd", "command", "eval", "exec", "exit", "export",
-    "pushd", "popd", "read", "return", "set", "shift", "source", "test",
-    "trap", "type", "ulimit", "umask", "unset",
+    ".", ":", "[", "alias", "bg", "builtin", "cd", "command", "declare", "echo",
+    "eval", "exec", "exit", "export", "false", "fg", "getopts", "hash", "jobs",
+    "let", "local", "popd", "printf", "pushd", "pwd", "read", "readonly",
+    "return", "set", "shift", "shopt", "source", "test", "trap", "true",
+    "type", "typeset", "ulimit", "umask", "unset", "wait",
 })
+# Keywords after which the next word is still at command position.
+_KEYWORDS_KEEP_COMMAND = frozenset({
+    "if", "then", "elif", "else", "while", "until", "do", "!", "{",
+})
+# Keywords that close a construct or introduce non-command words.
+_KEYWORDS_END_COMMAND = frozenset({
+    "fi", "done", "esac", "}", "]]", "in", "for", "select",
+})
+# Keywords whose whole body is skipped up to the matching closing word.
+_KEYWORDS_SKIP_TO = {"[[": "]]", "case": "esac"}
 _SLASH_COMMAND_RE = re.compile(r"^/[A-Za-z0-9:_-]+$")
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
+_OPERATOR_CHARS = "();<>|&\n"
+_SEPARATOR_CHARS = frozenset(";&|(\n")
+_QUOTING_CHARS = ("'", '"', "\\")
 
 Which = Callable[[str], "str | None"]
 
@@ -79,14 +106,54 @@ class PreflightResult:
         return tuple(check for check in self.checks if not check.ok)
 
 
-def _segment_head(segment: str) -> str | None:
-    """First word of one segment after `NAME=value` assignments, or None
-    when there is none or shlex cannot parse the segment."""
+@dataclass(frozen=True)
+class _Token:
+    text: str
+    is_operator: bool
+
+
+@dataclass(frozen=True)
+class _ScanState:
+    """Where the scanner is in the command; replaced, never mutated."""
+    tools: tuple[str, ...] = ()
+    functions: frozenset[str] = field(default_factory=frozenset)
+    command_position: bool = True
+    after_cd: bool = False
+    redirect_target: bool = False
+    prefix: str | None = None
+    skip_to: str | None = None
+    paren_depth: int = 0
+    after_dollar: bool = False
+
+
+def _is_operator(text: str, raw: str) -> bool:
+    """An all-punctuation token is an operator only when it was written
+    bare: `\\;` and `';'` are ordinary words to the shell."""
+    return (
+        bool(text)
+        and all(ch in _OPERATOR_CHARS for ch in text)
+        and not any(q in raw for q in _QUOTING_CHARS)
+    )
+
+
+def _tokenize(command: str) -> tuple[_Token, ...] | None:
+    """shlex tokens tagged operator/word, or None when shlex cannot parse."""
+    lexer = shlex.shlex(io.StringIO(command), posix=True, punctuation_chars=_OPERATOR_CHARS)
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    tokens: list[_Token] = []
+    start = 0
     try:
-        words = [w for w in shlex.split(segment) if not _ENV_ASSIGN_RE.match(w)]
+        for text in iter(lexer.get_token, None):
+            # shlex reads one char ahead around operators; step back over it
+            # so `raw` is this token's own source text.
+            end = lexer.instream.tell() - len(getattr(lexer, "_pushback_chars", ()))
+            tokens.append(_Token(text, _is_operator(text, command[start:end])))
+            start = end
     except ValueError:
         return None
-    return words[0] if words else None
+    return tuple(tokens)
 
 
 def _is_relative_path(word: str) -> bool:
@@ -94,25 +161,121 @@ def _is_relative_path(word: str) -> bool:
 
 
 def _checkable(head: str, after_cd: bool) -> bool:
+    if not head or head.startswith("-"):
+        return False
     if head in SHELL_BUILTINS or _SLASH_COMMAND_RE.match(head):
         return False
-    if any(ch in head for ch in _EXPANSION_CHARS):
+    if any(ch in head for ch in _EXPANSION_CHARS + _GLOB_CHARS):
         return False
     return not (after_cd and _is_relative_path(head))
 
 
+def _paren_delta(text: str) -> int:
+    return text.count("(") - text.count(")")
+
+
+def _on_paren_body(state: _ScanState, token: _Token) -> _ScanState:
+    """Inside `$(...)` / `((...))`: count parens, check nothing."""
+    if not token.is_operator:
+        return state
+    depth = state.paren_depth + _paren_delta(token.text)
+    if depth > 0:
+        return replace(state, paren_depth=depth)
+    separated = any(ch in _SEPARATOR_CHARS for ch in token.text.lstrip(")"))
+    return replace(state, paren_depth=0, command_position=separated)
+
+
+def _on_operator(state: _ScanState, token: _Token) -> _ScanState:
+    text = token.text
+    base = replace(state, after_dollar=False, prefix=None)
+    opens_substitution = "(" in text and (state.after_dollar or text.startswith("(("))
+    if ("<" in text or ">" in text) and "(" in text or opens_substitution:
+        return replace(base, paren_depth=max(_paren_delta(text), 1), command_position=False)
+    if "<" in text or ">" in text:
+        return replace(base, redirect_target=True, prefix=state.prefix)
+    return replace(base, command_position=any(ch in _SEPARATOR_CHARS for ch in text))
+
+
+def _on_keyword(state: _ScanState, word: str) -> _ScanState | None:
+    """State after a shell keyword at command position, None if not one."""
+    if word in _KEYWORDS_SKIP_TO:
+        return replace(state, skip_to=_KEYWORDS_SKIP_TO[word], command_position=False)
+    if word in _KEYWORDS_KEEP_COMMAND:
+        return state
+    if word in _KEYWORDS_END_COMMAND:
+        return replace(state, command_position=False)
+    if word in ("time", "env", "function"):
+        return replace(state, prefix=word)
+    return None
+
+
+def _on_prefixed(state: _ScanState, word: str) -> _ScanState | None:
+    """Handle the word right after `time` / `env` / `function`; None means
+    the word is an ordinary head and scanning should continue with it."""
+    prefix = state.prefix
+    cleared = replace(state, prefix=None)
+    if prefix == "function":
+        return replace(cleared, functions=state.functions | {word})
+    if prefix == "time" and word == "-p":
+        return cleared
+    if prefix == "env" and word.startswith("-"):
+        return replace(cleared, command_position=False)
+    if prefix == "env" and _ENV_ASSIGN_RE.match(word):
+        return state
+    return None if prefix in ("time", "env") else cleared
+
+
+def _on_head(state: _ScanState, word: str, next_token: _Token | None) -> _ScanState:
+    """A word at command position: keyword, assignment, function name, or tool."""
+    if state.prefix is not None:
+        handled = _on_prefixed(state, word)
+        if handled is not None:
+            return handled
+        state = replace(state, prefix=None)
+    if _ENV_ASSIGN_RE.match(word):
+        return state
+    keyword = _on_keyword(state, word)
+    if keyword is not None:
+        return keyword
+    done = replace(state, command_position=False, after_cd=state.after_cd or word in _DIR_CHANGERS)
+    if next_token is not None and next_token.is_operator and next_token.text.startswith("("):
+        return replace(done, functions=state.functions | {word})
+    wanted = _checkable(word, state.after_cd) and word not in state.functions
+    if not wanted or word in state.tools:
+        return done
+    return replace(done, tools=state.tools + (word,))
+
+
+def _on_word(state: _ScanState, token: _Token, next_token: _Token | None) -> _ScanState:
+    state = replace(state, after_dollar=token.text.endswith("$"))
+    if state.redirect_target:
+        return replace(state, redirect_target=False)
+    if not state.command_position:
+        return state
+    return _on_head(state, token.text, next_token)
+
+
+def _scan(state: _ScanState, token: _Token, next_token: _Token | None) -> _ScanState:
+    if state.paren_depth:
+        return _on_paren_body(state, token)
+    if state.skip_to is not None:
+        closed = not token.is_operator and token.text == state.skip_to
+        return replace(state, skip_to=None) if closed else state
+    if token.is_operator:
+        return _on_operator(state, token)
+    return _on_word(state, token, next_token)
+
+
 def extract_tools(command: str | None) -> tuple[str, ...]:
     """Tools one `Command:` value needs, in first-seen order, de-duplicated."""
-    tools: list[str] = []
-    after_cd = False
-    for segment in _SEGMENT_SPLIT_RE.split(command or ""):
-        head = _segment_head(segment)
-        if head is None:
-            continue
-        if _checkable(head, after_cd) and head not in tools:
-            tools.append(head)
-        after_cd = after_cd or head in _DIR_CHANGERS
-    return tuple(tools)
+    tokens = _tokenize(command or "")
+    if tokens is None:
+        return ()
+    state = _ScanState()
+    for index, token in enumerate(tokens):
+        next_token = tokens[index + 1] if index + 1 < len(tokens) else None
+        state = _scan(state, token, next_token)
+    return state.tools
 
 
 def check_tool(name: str, base_dir: Path, which: Which = shutil.which) -> PreflightCheck:

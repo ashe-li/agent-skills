@@ -246,6 +246,49 @@ def _contains(outer: Path, inner: Path) -> bool:
     return _folded(inner)[:len(folded_outer)] == folded_outer
 
 
+def _identity(path: Path) -> tuple[int, int] | None:
+    """(st_dev, st_ino), or None when `path` does not exist or cannot be
+    stat'ed."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino
+
+
+def _identities_up(path: Path) -> frozenset[tuple[int, int]]:
+    """Identities of `path` and of every ancestor that exists. For a path
+    that is not created yet this starts at its first existing ancestor."""
+    found = (_identity(p) for p in (path, *path.parents))
+    return frozenset(i for i in found if i is not None)
+
+
+def _same_or_inside(path: Path, protected: Path) -> bool:
+    """`path` is `protected` or below it, judged by inode, not by string."""
+    target = _identity(protected)
+    return target is not None and target in _identities_up(path)
+
+
+def _same_or_contains(path: Path, protected: Path) -> bool:
+    """`path` is `protected` or one of its ancestors, judged by inode."""
+    here = _identity(path)
+    return here is not None and here in _identities_up(protected)
+
+
+def _inode_scope_error(path: Path, home: Path, claude_dir: Path) -> str | None:
+    """The same rules as the string checks, compared by (st_dev, st_ino).
+
+    A macOS firmlink (`/System/Volumes/Data/Users/<me>/.claude`) resolves
+    to a different string for the very same directory, so string rules
+    alone let it through (review N4-F).
+    """
+    if _same_or_contains(path, home):
+        return f"sandbox path {path} is $HOME or a directory containing it (same inode)"
+    if _same_or_inside(path, claude_dir) or _same_or_contains(path, claude_dir):
+        return f"sandbox path {path} is ~/.claude, inside it, or contains it (same inode)"
+    return None
+
+
 def _allow_path_scope_error(path: Path, home: Path) -> str | None:
     """Why a resolved sandbox path is too broad, or None.
 
@@ -253,7 +296,8 @@ def _allow_path_scope_error(path: Path, home: Path) -> str | None:
     that is, contains, or sits inside one of them would make the two
     rules contradict each other (review F5). `~/.claude` is checked both
     as written and resolved, because it is often a symlink into a
-    dotfiles repo (review N4).
+    dotfiles repo (review N4). String rules come first; the last check
+    compares inodes, which also catches firmlinks (review N4-F).
     """
     claude_dirs = (home / ".claude", (home / ".claude").resolve())
     if path == Path("/"):
@@ -264,7 +308,7 @@ def _allow_path_scope_error(path: Path, home: Path) -> str | None:
         return f"sandbox path {path} must not be ~/.claude, inside it, or contain it"
     if len(path.parts) <= 2:
         return f"sandbox path {path} must not be a top-level directory"
-    return None
+    return _inode_scope_error(path, home, claude_dirs[1])
 
 
 def validate_allow_paths(

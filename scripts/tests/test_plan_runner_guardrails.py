@@ -348,6 +348,51 @@ class AllowPathScopeTests(unittest.TestCase):
         ok, error = gr.validate_allow_paths([str(root / "dotfiles" / "other")], home, home=home)
         self.assertIsNone(error)
 
+    def _alias(self, alias: Path, target: Path):
+        """Make `alias` stat as `target`: what a macOS firmlink looks like
+        after resolve() — a different string for the very same inode."""
+        real_identity = gr._identity
+
+        def identity(path):
+            path = Path(path)
+            if path == alias or alias in path.parents:
+                return real_identity(target / path.relative_to(alias))
+            return real_identity(path)
+        return mock.patch.object(gr, "_identity", side_effect=identity)
+
+    def test_alias_of_home_or_claude_dir_is_rejected_by_inode(self):
+        """Review N4-F: same inode, different path string."""
+        alias_root = self.home.parent / "firm"
+        alias_home = alias_root / "home"
+        with self._alias(alias_home, self.home):
+            for raw in (str(alias_home), str(alias_home / ".claude"),
+                        str(alias_home / ".claude" / "skills"),
+                        str(alias_home / ".claude" / "not-yet" / "x")):
+                paths, error = self._check(raw)
+                self.assertEqual(paths, (), raw)
+                self.assertIsNotNone(error, raw)
+            ok, error = self._check(str(alias_home / "proj" / "out"))
+            self.assertIsNone(error)
+        with self._alias(alias_root, self.home.parent):
+            paths, error = self._check(str(alias_root))
+            self.assertEqual(paths, ())
+            self.assertIn("$HOME", error)
+
+    @unittest.skipUnless(
+        Path("/System/Volumes/Data").is_dir()
+        and str(Path.home().resolve()).startswith("/Users/")
+        and (Path.home() / ".claude").exists(),
+        "needs a macOS data-volume firmlink and a real ~/.claude",
+    )
+    def test_real_macos_firmlink_is_rejected(self):
+        """Review N4-F live: `/System/Volumes/Data$HOME/.claude` is the same
+        directory as `~/.claude`; validate_allow_paths only reads."""
+        home = Path.home().resolve()
+        for raw in (f"/System/Volumes/Data{home}/.claude", f"/System/Volumes/Data{home}"):
+            paths, error = gr.validate_allow_paths([raw], self.base, home=home)
+            self.assertEqual(paths, (), raw)
+            self.assertIsNotNone(error, raw)
+
     def test_paths_inside_home_are_still_fine(self):
         paths, error = gr.validate_allow_paths(
             ["~/work/out", "sub", str(self.home / ".claude-notes")], self.base, home=self.home,

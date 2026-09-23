@@ -971,20 +971,23 @@ def _awaiting_approval_lines(awaiting: list[str]) -> list[str]:
     ]
 
 
-def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
-    """Markdown rendering. Skips empty sections to save tokens.
-    Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
+def _state_view_header_lines(data: dict[str, Any]) -> list[str]:
+    """Progress, parent task and per-status counts (empty parts skipped)."""
     s = data["summary"]
-    lines: list[str] = []
-    progress = s["progress"]
-    lines.append(f"Progress: {progress}" + (" — ALL DONE" if s["all_done"] else ""))
+    lines = [f"Progress: {s['progress']}" + (" — ALL DONE" if s["all_done"] else "")]
     parent = data.get("parent_task_id")
     if parent:
         lines.append(f"Parent task: {parent}")
-    counts = s["by_status"]
-    counts_str = " | ".join(f"{k}:{v}" for k, v in counts.items() if v)
+    counts_str = " | ".join(f"{k}:{v}" for k, v in s["by_status"].items() if v)
     if counts_str:
         lines.append(counts_str)
+    return lines
+
+
+def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
+    """Markdown rendering. Skips empty sections to save tokens.
+    Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
+    lines = _state_view_header_lines(data)
 
     new_ready = data.get("ready_steps_new", [])
     still_ready = data.get("ready_steps_still", [])
@@ -3456,6 +3459,28 @@ def _split_ready_for_cli(state: dict[str, Any]) -> tuple[list[str], list[str]]:
     return list(assignable), list(gated)
 
 
+def _in_progress_entries(state: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = state["steps"]
+    return [
+        {"id": sid, "title": steps[sid]["title"], "task_id": steps[sid]["task_id"]}
+        for sid in sorted(sid for sid, s in steps.items() if s["status"] == IN_PROGRESS)
+    ]
+
+
+def _blocked_entries(state: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = state["steps"]
+    return [
+        {
+            "id": sid,
+            "title": steps[sid]["title"],
+            "failed_deps": [
+                d for d in steps[sid]["deps"] if steps.get(d, {}).get("status") == FAILED
+            ],
+        }
+        for sid in compute_blocked_steps(state)
+    ]
+
+
 def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, Any]:
     """Shared state-view payload — embed in transition outputs so callers
     don't need a follow-up `next` call.
@@ -3470,10 +3495,6 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
     ready set so the next call's delta is computed correctly.
     """
     current_ready, awaiting = _split_ready_for_cli(state)
-    in_progress = sorted(
-        sid for sid, s in state["steps"].items() if s["status"] == IN_PROGRESS
-    )
-    blocked = compute_blocked_steps(state)
 
     if mode == "full":
         prev_reported: set[str] = set()
@@ -3492,25 +3513,8 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
         "ready_steps_new": [step_to_instruction(state, sid) for sid in newly],
         "ready_steps_still": still,  # IDs only — Claude already saw these
         "awaiting_approval_steps": awaiting,
-        "in_progress_steps": [
-            {
-                "id": sid,
-                "title": state["steps"][sid]["title"],
-                "task_id": state["steps"][sid]["task_id"],
-            }
-            for sid in in_progress
-        ],
-        "blocked_steps": [
-            {
-                "id": sid,
-                "title": state["steps"][sid]["title"],
-                "failed_deps": [
-                    d for d in state["steps"][sid]["deps"]
-                    if state["steps"].get(d, {}).get("status") == FAILED
-                ],
-            }
-            for sid in blocked
-        ],
+        "in_progress_steps": _in_progress_entries(state),
+        "blocked_steps": _blocked_entries(state),
     }
 
 
@@ -3720,6 +3724,30 @@ def cmd_start(args: argparse.Namespace) -> int:
     return _run_locked(args, _cmd_start_locked)
 
 
+def _start_refusal(
+    state: dict[str, Any], sid: str, plan_path: Path,
+) -> dict[str, Any] | None:
+    """Error payload when `start sid` must be refused before any transition:
+    unknown step, waiting on human approval, or deps not satisfied."""
+    if sid not in state["steps"]:
+        return {"error": f"Unknown step: {sid}"}
+    if _import_sibling("plan_runner_guardrails").awaiting_approval(state["steps"][sid]):
+        return {
+            "error": f"{sid} is marked Requires-Approval and has not been approved",
+            "hint": (
+                f"Stop and ask the user. Only a human may run: "
+                f"plan_runner.py approve {plan_path} {sid}"
+            ),
+        }
+    if not deps_all_completed(state, sid):
+        unmet = [
+            d for d in state["steps"][sid]["deps"]
+            if state["steps"][d]["status"] not in (COMPLETED, SKIPPED)
+        ]
+        return {"error": "Deps not satisfied", "unmet": unmet}
+    return None
+
+
 def _cmd_start_locked(args: argparse.Namespace) -> int:
     """`start` under the state lock, so the read of `pending` and the write
     of `in_progress` cannot interleave with another session's. Without it
@@ -3729,24 +3757,9 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
     sid = args.step
-    if sid not in state["steps"]:
-        emit({"error": f"Unknown step: {sid}"})
-        return 1
-    if _import_sibling("plan_runner_guardrails").awaiting_approval(state["steps"][sid]):
-        emit({
-            "error": f"{sid} is marked Requires-Approval and has not been approved",
-            "hint": (
-                f"Stop and ask the user. Only a human may run: "
-                f"plan_runner.py approve {plan_path} {sid}"
-            ),
-        })
-        return 1
-    if not deps_all_completed(state, sid):
-        unmet = [
-            d for d in state["steps"][sid]["deps"]
-            if state["steps"][d]["status"] not in (COMPLETED, SKIPPED)
-        ]
-        emit({"error": "Deps not satisfied", "unmet": unmet})
+    refusal = _start_refusal(state, sid, plan_path)
+    if refusal is not None:
+        emit(refusal)
         return 1
     try:
         transition_step(

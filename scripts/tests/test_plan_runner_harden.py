@@ -130,6 +130,31 @@ class ReadyStuckTests(unittest.TestCase):
         self.assertIsNone(decision.pointer_updates["stuck_step_id"])
 
 
+    def test_a_start_since_the_last_assignment_restarts_the_count(self):
+        """Review F2: start -> fail -> reset in one turn leaves the step
+        pending again; the start *was* run, so it is progress, not a stall."""
+        _, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT - 1)
+        self.assertEqual(pointer["assign_repeat_count"], pr.HOOK_STUCK_AT - 1)
+        retried = two_pending()
+        retried["steps"]["S1.1"]["start_count"] = 1
+        decisions, pointer = run_n(pointer, retried, pr.HOOK_STUCK_AT)
+        self.assertEqual(
+            [d.decision for d in decisions],
+            [pr.HOOK_BLOCK] * (pr.HOOK_STUCK_AT - 1) + [pr.HOOK_ALLOW],
+        )
+        self.assertEqual(decisions[0].pointer_updates["assign_repeat_count"], 1)
+        self.assertIn("STUCK", decisions[-1].system_message)
+
+    def test_pointer_without_start_record_keeps_counting(self):
+        """A pointer from before `assigned_start_count` existed must not lose
+        its streak just because the field is missing."""
+        _, pointer = run_n(make_pointer(), two_pending(), pr.HOOK_STUCK_AT - 1)
+        legacy = {k: v for k, v in pointer.items() if k != "assigned_start_count"}
+        decision = advance(legacy, two_pending())
+        self.assertEqual(decision.decision, pr.HOOK_ALLOW)
+        self.assertIn("STUCK", decision.system_message)
+
+
 class InProgressStuckTests(unittest.TestCase):
     def _state(self):
         return make_state({"S1.1": make_step(
@@ -288,6 +313,41 @@ class PreflightCliTests(CliTestCase):
         outs = [self.hook() for _ in range(2)]
         self.assertTrue(all(o.get("decision") != "block" for o in outs))
         self.assertIn("pra-nope-tool", outs[0]["systemMessage"])
+
+
+class StuckRetryCliTests(CliTestCase):
+    """Review F2 (R2): a flaky step retried via start -> fail -> reset must
+    never be reported STUCK, because `start` ran every single cycle."""
+
+    def test_start_fail_reset_cycles_are_not_stuck(self):
+        self.init()
+        for cycle in range(1, pr.HOOK_STUCK_AT + 2):
+            out = self.hook()
+            self.assertEqual(out.get("decision"), "block", (cycle, out))
+            self.assertNotIn("STUCK", out.get("systemMessage", ""), cycle)
+            self.assertEqual(self.cli("start", str(self.plan), "S1").returncode, 0)
+            self.cli("fail", str(self.plan), "S1", "--reason", f"flaky #{cycle}")
+            self.assertEqual(self.cli("reset", str(self.plan), "--step=S1").returncode, 0)
+
+    def test_no_start_after_the_last_retry_is_still_stuck(self):
+        self.init()
+        self.hook()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("fail", str(self.plan), "S1", "--reason", "flaky")
+        self.cli("reset", str(self.plan), "--step=S1")
+        outs = [self.hook() for _ in range(pr.HOOK_STUCK_AT)]
+        self.assertEqual([o.get("decision") for o in outs[:-1]], ["block"] * (pr.HOOK_STUCK_AT - 1))
+        self.assertNotEqual(outs[-1].get("decision"), "block")
+        self.assertIn("STUCK", outs[-1].get("systemMessage", ""))
+
+    def test_reset_keeps_the_start_count(self):
+        self.init()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("fail", str(self.plan), "S1", "--reason", "x")
+        self.cli("reset", str(self.plan), "--step=S1")
+        state = json.loads((self.proj / ".plan-state" / "harden.state.json").read_text())
+        self.assertEqual(state["steps"]["S1"]["status"], "pending")
+        self.assertEqual(state["steps"]["S1"]["start_count"], 1)
 
 
 class CheckpointCliTests(CliTestCase):

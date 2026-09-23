@@ -128,7 +128,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
 
 ## Step 3.5（模式 B）: STUCK —— 同一個 step 沒有進展
 
-hook 對同一個 step 第 3 次沒有進展時（ready 一直沒被 `start`，或 in_progress 一直沒回報 `complete`／`fail`），**不再 block**，改發 `[plan-run] STUCK：...` systemMessage，列出 step、次數、首次與本次時間、建議動作，之後這個 step 有進展前 hook 都不會再 block。看到 STUCK 不要重跑同一道指令：先查為什麼 `start`／`complete` 沒被執行（指令跑不起來就 `preflight`、做不了就 `skip`、結果不明就 `fail`）。ready 的次數不隨使用者開口歸零；in_progress 的次數在使用者開口時歸零，跨 turn 的長 step 不會被誤判。
+hook 對同一個 step 第 3 次沒有進展時（ready 一直沒被 `start`，或 in_progress 一直沒回報 `complete`／`fail`），**不再 block**，改發 `[plan-run] STUCK：...` systemMessage，列出 step、次數、首次與本次時間、建議動作，之後這個 step 有進展前 hook 都不會再 block。看到 STUCK 不要重跑同一道指令：先查為什麼 `start`／`complete` 沒被執行（指令跑不起來就 `preflight`、做不了就 `skip`、結果不明就 `fail`）。ready 的次數不隨使用者開口歸零，但兩次指派之間只要 `start` 過（即使之後 `fail`＋`reset` 回到 pending）就從 1 重算，重試 flaky step 不會被誤判；in_progress 的次數在使用者開口時歸零，跨 turn 的長 step 不會被誤判。
 
 ## Step 4: 完成驗證
 

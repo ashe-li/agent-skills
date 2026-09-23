@@ -350,6 +350,55 @@ class StuckRetryCliTests(CliTestCase):
         self.assertEqual(state["steps"]["S1"]["start_count"], 1)
 
 
+class CheckpointRefreshCliTests(CliTestCase):
+    """Review F3 (R3): after `reset` / `init --force` the checkpoint used to
+    keep saying `done S1: ...` while the live state said S1 was pending."""
+
+    def _complete_s1(self):
+        self.init()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("complete", str(self.plan), "S1", "--summary", "deployed S1 to prod")
+
+    def _resume_lines(self):
+        r = self.cli("next", str(self.plan), "--resume")
+        lines = [ln for ln in r.stdout.splitlines() if ln.startswith(("done ", "next_at"))]
+        return r.returncode, lines
+
+    def test_reset_step_rewrites_checkpoint(self):
+        self._complete_s1()
+        self.assertEqual(self.cli("reset", str(self.plan), "--step=S1").returncode, 0)
+        data = json.loads(self.checkpoint_file.read_text())
+        self.assertEqual(data["completed_steps"], [])
+        self.assertEqual(data["next_ready_step"], "S1")
+        rc, lines = self._resume_lines()
+        self.assertEqual(rc, 0)
+        self.assertFalse(any("deployed S1" in ln for ln in lines), lines)
+        self.assertIn("next_at_checkpoint: S1", lines)
+
+    def test_reset_all_rewrites_checkpoint(self):
+        self._complete_s1()
+        self.cli("reset", str(self.plan), "--all")
+        self.assertEqual(json.loads(self.checkpoint_file.read_text())["completed_steps"], [])
+
+    def test_init_force_rewrites_checkpoint(self):
+        self._complete_s1()
+        self.assertEqual(self.cli("init", str(self.plan), "--force", "--no-attach").returncode, 0)
+        data = json.loads(self.checkpoint_file.read_text())
+        self.assertEqual(data["completed_steps"], [])
+        self.assertEqual(data["next_ready_step"], "S1")
+        rc, lines = self._resume_lines()
+        self.assertEqual(rc, 0)
+        self.assertFalse(any("deployed S1" in ln for ln in lines), lines)
+
+    def test_reset_without_checkpoint_does_not_create_one(self):
+        """Keep the contract: no checkpoint until the first complete/fail/skip."""
+        self.init()
+        self.cli("start", str(self.plan), "S1")
+        self.cli("reset", str(self.plan), "--step=S1")
+        self.assertFalse(self.checkpoint_file.exists())
+        self.assertEqual(self.cli("next", str(self.plan), "--resume").returncode, 1)
+
+
 class CheckpointCliTests(CliTestCase):
     def test_complete_fail_skip_write_checkpoint(self):
         self.init()

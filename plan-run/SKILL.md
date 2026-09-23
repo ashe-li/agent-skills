@@ -192,7 +192,7 @@ parser 只認 step／phase／field 的樣式，不看 checkbox 打勾、也不�
 
 transition 由 Python 強制驗證，不允許 `completed → pending` 等非法轉移（避免覆寫已完成工作）。
 
-每次 `complete`／`fail`／`skip` 成功後，runner 另外原子寫入 `.plan-state/<slug>.checkpoint.json`：已完成 steps（含摘要與 evidence）、artifacts、open questions（失敗原因與仍有效的 STUCK）、下一個 ready step、STUCK 與 preflight 狀態。它是給新 session 接手看的摘要，推進順序仍以 state 為準；寫不出來不影響該次轉換的 rc。
+每次 `complete`／`fail`／`skip` 成功後，runner 另外原子寫入 `.plan-state/<slug>.checkpoint.json`：已完成 steps（含摘要與 evidence）、artifacts、open questions（失敗原因與仍有效的 STUCK）、下一個 ready step、STUCK 與 preflight 狀態。`reset` 與 `init --force` 之後，已存在的 checkpoint 也會依新的 state 重寫（還沒有就不建立）。它是給新 session 接手看的摘要，推進順序仍以 state 為準；寫不出來不影響該次轉換的 rc。
 
 每個 step 的 state 可能帶 `summary`／`evidence` 欄位（由 `complete --summary`／`--evidence` 寫入，`report` 讀取彙整）；舊 state 沒有這兩個欄位一樣能被 `status`／`next`／`report` 正常讀取，不會 raise。
 

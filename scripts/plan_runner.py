@@ -3192,6 +3192,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     state = init_state(plan_path, parsed, getattr(args, "require_summary", False))
     save_state(plan_path, state)
+    _refresh_checkpoint_if_present(plan_path, state)
     payload = {
         "status": "initialized",
         "slug": state["slug"],
@@ -3371,6 +3372,15 @@ def _write_checkpoint_best_effort(plan_path: Path, state: dict[str, Any]) -> Non
     except Exception:
         return None
     return None
+
+
+def _refresh_checkpoint_if_present(plan_path: Path, state: dict[str, Any]) -> None:
+    """`reset` / `init --force` rewrite history, so an existing checkpoint
+    must be rebuilt from the new state; otherwise `next --resume` would keep
+    reporting `done` for steps that are pending again (review F3). No file
+    means no complete/fail/skip yet, and that stays true: none is created."""
+    if _checkpoint_file(plan_path).exists():
+        _write_checkpoint_best_effort(plan_path, state)
 
 
 def _load_resume_checkpoint(plan_path: Path) -> dict[str, Any] | None:
@@ -3830,6 +3840,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
     recompute_blocked_status(state)
     save_state(plan_path, state)
+    _refresh_checkpoint_if_present(plan_path, state)
     emit({"status": "reset", "summary": summary(state)})
     return 0
 

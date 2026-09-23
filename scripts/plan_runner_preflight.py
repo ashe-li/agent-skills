@@ -157,18 +157,22 @@ def _strip_comments(command: str) -> str:
     """
     out: list[str] = []
     quote: str | None = None
+    word_start = True
     i = 0
     while i < len(command):
         ch = command[i]
-        escapes = ch == "\\" and quote != "'"
-        at_word_start = i == 0 or command[i - 1] in _COMMENT_MAY_FOLLOW
-        if quote is None and ch == "#" and at_word_start:
+        if quote is None and ch == "#" and word_start:
             end = command.find("\n", i)
             i = len(command) if end < 0 else end
             continue
-        out.append(command[i:i + 2] if escapes else ch)
+        escapes = ch == "\\" and quote != "'"
+        step = 2 if escapes else 1
+        out.append(command[i:i + step])
         quote = quote if escapes else _quote_state(quote, ch)
-        i += 2 if escapes else 1
+        # An escaped `;` or space is part of the word, so it never opens a
+        # comment (review N1-R); neither does a separator inside quotes.
+        word_start = not escapes and quote is None and ch in _COMMENT_MAY_FOLLOW
+        i += step
     return "".join(out)
 
 

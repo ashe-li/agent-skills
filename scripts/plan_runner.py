@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -66,6 +67,22 @@ FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why", "Input", "Output",
 )
+
+
+def _import_sibling(name: str) -> Any:
+    """Import a module that lives next to this file (plan_runner_preflight,
+    plan_runner_checkpoint).
+
+    Run as a script, `sys.path[0]` is already this directory; loaded through
+    importlib.util.spec_from_file_location (the test suite, or any caller
+    using `python3 -I`) it is not, and a bare import fails. Callers on the
+    hook path must still catch ImportError: a runner copied without its
+    siblings has to degrade, not crash every Stop event.
+    """
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return importlib.import_module(name)
 
 
 def now_iso() -> str:
@@ -683,6 +700,15 @@ def recompute_blocked_status(state: dict[str, Any]) -> None:
             step["status"] = PENDING
 
 
+def step_start_count(step: dict[str, Any]) -> int:
+    """How many times `start` has moved this step to in_progress. State is
+    user-writable, so anything but a non-negative int reads as 0."""
+    value = step.get("start_count")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def transition_step(
     state: dict[str, Any],
     step_id: str,
@@ -699,6 +725,9 @@ def transition_step(
     step["status"] = new_status
     if new_status == IN_PROGRESS:
         step["started_at"] = now_iso()
+        # Survives `reset` on purpose: the hook's STUCK count compares it
+        # to tell "start was never run" from "start ran, then fail + reset".
+        step["start_count"] = step_start_count(step) + 1
         if kwargs.get("task_id"):
             step["task_id"] = kwargs["task_id"]
         if kwargs.get("session_id"):
@@ -798,11 +827,19 @@ def _runner_invocation(plan_path: str | None) -> str:
     runner override has a seam. Falls back to the bare name only if this
     module has no resolvable file path (frozen/exec'd from memory).
     """
-    try:
-        here = Path(__file__).resolve()
-    except (OSError, NameError):
+    here = _runner_script_path()
+    if here is None:
         return "plan_runner.py"
     return f"python3 {_quote_plan_path(str(here))}"
+
+
+def _runner_script_path() -> Path | None:
+    """The file _runner_invocation() prints — and therefore the one
+    `preflight` must prove exists and is readable."""
+    try:
+        return Path(__file__).resolve()
+    except (OSError, NameError):
+        return None
 
 
 def _format_step_action_block(
@@ -1144,6 +1181,10 @@ _POINTER_REQUIRED_STR_FIELDS = ("repo_root", "cwd", "created_at", "last_seen_at"
 _POINTER_OPTIONAL_STR_FIELDS = (
     "created_by_session", "driver_session_id", "driver_transcript_path",
     "last_advance_at", "warned_at", "last_assigned_step_id",
+    # PR-A STUCK record: when the current same-step streak began, and which
+    # step (and branch kind) was declared stuck, when. All optional so older
+    # pointers stay VALID.
+    "attempt_first_at", "stuck_step_id", "stuck_kind", "stuck_at",
 )
 _POINTER_BOOL_FIELDS = ("paused", "checkpoint_pending", "completion_announced")
 _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
@@ -1152,7 +1193,11 @@ _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
 # by an older build stays VALID instead of being condemned as malformed —
 # validate_pointer() failing would disable auto-advance for that cwd, which
 # is a far worse outcome than a missing nag counter.
-_POINTER_OPTIONAL_COUNTER_FIELDS = ("assign_repeat_count", "turn_start_completed")
+_POINTER_OPTIONAL_COUNTER_FIELDS = (
+    "assign_repeat_count", "turn_start_completed",
+    # The step's start_count when it was last handed out (review F2).
+    "assigned_start_count",
+)
 
 
 class ResolvedPointer(NamedTuple):
@@ -2149,6 +2194,15 @@ HOOK_NAG_ESCALATE_AT = 2
 # From this consecutive assignment of the SAME ready step onward, the reason
 # says outright that the previous turn's `start` was never run.
 HOOK_ASSIGN_REPEAT_ESCALATE_AT = 2
+# Monotonic-progress assertion: the Nth time the hook would hand out the same
+# step with no progress, it stops blocking and reports STUCK instead. At 3 the
+# model has had two explicit instructions (the second one already carrying
+# _ASSIGN_REPEAT_NOTE); a third identical block is the E2E failure where the
+# hook re-sent the same `start` for six turns at 0/20.
+HOOK_STUCK_AT = 3
+STUCK_KIND_READY = "ready"
+STUCK_KIND_IN_PROGRESS = "in_progress"
+_STUCK_POINTER_FIELDS = ("stuck_step_id", "stuck_kind", "stuck_at")
 
 HOOK_ALLOW = "allow"
 HOOK_BLOCK = "block"
@@ -2200,6 +2254,37 @@ _ASSIGN_REPEAT_NOTE = (
     "state 沒有收到對應的 start。可能是指令沒被執行，也可能是執行了但失敗；"
     "若是後者，請回報錯誤或改用 fail，不要重覆同一道指令。"
     "請先實際執行上面第 1 行的 start 指令，再繼續後面的動作。"
+)
+
+
+# Printed to the *user* when HOOK_STUCK_AT is reached. Allow, not block: a
+# block would only repeat the instruction that has already failed twice.
+_STUCK_REPORT_MESSAGE = (
+    "[plan-run] STUCK：`{step}`（{kind_label}）已連續 {count} 次被 hook 指派仍沒有進展"
+    "（首次 {first_at}，本次 {now}）。自動推進已停止，這個 step 有進展前不會再 block。"
+    "建議動作：{actions}"
+)
+_STUCK_ACTIONS = {
+    STUCK_KIND_READY: (
+        "確認指令能跑後執行 `{runner} start {plan} {step}`；做不了就 "
+        "`{runner} skip {plan} {step}`；環境問題先跑 `{runner} preflight {plan}`。"
+    ),
+    STUCK_KIND_IN_PROGRESS: (
+        "確認結果後執行 `{runner} complete {plan} {step} --summary=...`，"
+        "或 `{runner} fail {plan} {step} --reason=...`。"
+    ),
+}
+_STUCK_KIND_LABELS = {
+    STUCK_KIND_READY: "pending，start 一直沒被執行",
+    STUCK_KIND_IN_PROGRESS: "in_progress，complete/fail 一直沒被回報",
+}
+
+# Printed to the *user* before any step has started when preflight fails.
+# Allow, not block: every block would hand out a step that cannot run.
+_PREFLIGHT_FAILED_MESSAGE = (
+    "[plan-run] PREFLIGHT 失敗：plan `{slug}` 的執行環境缺東西，本輪不自動推進"
+    "（修好前每輪都會提醒，但不會 block）。\n{items}\n"
+    "修好後執行 `{runner} preflight {plan}` 確認。"
 )
 
 
@@ -2345,11 +2430,13 @@ class _HookContext:
         pointer: dict[str, Any],
         state: Any,
         mtime_lookup: Callable[[str], float | None],
+        preflight: Any = None,
     ) -> None:
         self.hook_input = hook_input
         self.pointer = dict(pointer)
         self.state = state
         self.mtime_lookup = mtime_lookup
+        self.preflight = preflight
         self.dirty = False
 
     def update(self, **fields: Any) -> None:
@@ -2398,6 +2485,7 @@ def _hook_block(
     )
     if suffix:
         reason = f"{reason}\n\n{suffix}"
+    _clear_stuck_record(ctx)
     ctx.update(consecutive_blocks=ctx.counter("consecutive_blocks") + 1)
     return HookDecision(
         decision=HOOK_BLOCK,
@@ -2614,6 +2702,9 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
     # so its repeat counter has served its purpose and starts over.
     if ctx.pointer.get("last_assigned_step_id") is not None:
         ctx.update(last_assigned_step_id=None, assign_repeat_count=0)
+    if nags >= HOOK_STUCK_AT:
+        started_at = ctx.state["steps"][in_progress[0]].get("started_at")
+        return _stuck_decision(ctx, STUCK_KIND_IN_PROGRESS, in_progress[0], nags, started_at)
     suffix = None
     if nags >= HOOK_NAG_ESCALATE_AT:
         suffix = _NAG_ESCALATION_NOTE.format(
@@ -2625,17 +2716,65 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
 
 
 def _record_assignment(ctx: _HookContext, step_id: str) -> int:
-    """Count how many times in a row we have handed out this same step.
+    """Count how many times in a row we have handed out this same step
+    without a `start` of it in between.
 
     Reset by the assignment changing, not by the turn changing — see the
-    note on _HOOK_TURN_COUNTERS. Branch (9) clears it as soon as a step is
-    actually in progress, which is the only proof that a `start` we asked
-    for was really run.
+    note on _HOOK_TURN_COUNTERS. Proof that a `start` we asked for was
+    really run resets it too: branch (9) seeing the step in progress, or
+    the step's `start_count` having moved since the last assignment — the
+    latter catches start -> fail -> reset inside one turn, which leaves the
+    step pending again and is invisible to (9) (review F2).
     """
+    starts = step_start_count(ctx.state["steps"][step_id])
+    recorded = ctx.pointer.get("assigned_start_count")
+    # A pointer from before the field existed has no record: keep its streak.
+    same_attempt = recorded is None or recorded == starts
     previous = _hook_str(ctx.pointer.get("last_assigned_step_id"))
-    count = ctx.counter("assign_repeat_count") + 1 if previous == step_id else 1
-    ctx.update(last_assigned_step_id=step_id, assign_repeat_count=count)
+    repeat = previous == step_id and same_attempt
+    count = ctx.counter("assign_repeat_count") + 1 if repeat else 1
+    ctx.update(
+        last_assigned_step_id=step_id, assign_repeat_count=count,
+        assigned_start_count=starts,
+    )
+    if count == 1:
+        ctx.update(attempt_first_at=now_iso())
     return count
+
+
+def _clear_stuck_record(ctx: _HookContext) -> None:
+    """Any ordinary block means the plan is moving again (a new step, a step
+    now in progress, or a fresh turn's first nag), so a stale STUCK record
+    must not outlive it — the checkpoint would report a stall that ended."""
+    if any(ctx.pointer.get(key) is not None for key in _STUCK_POINTER_FIELDS):
+        ctx.update(**{key: None for key in _STUCK_POINTER_FIELDS})
+
+
+def _stuck_decision(
+    ctx: _HookContext, kind: str, step_id: str, count: int, first_at: Any,
+) -> HookDecision:
+    """(9)/(10) past HOOK_STUCK_AT: report once, then stay out of the way.
+
+    Only the crossing itself (count == HOOK_STUCK_AT) speaks; every later
+    turn with the same stall allows silently. Blocking again would re-send
+    the instruction that has already failed, which is the loop this exists
+    to end. Progress (a new step, or the step moving on) resets `count`.
+    """
+    if count != HOOK_STUCK_AT:
+        return _hook_allow(ctx)
+    now = now_iso()
+    ctx.update(stuck_step_id=step_id, stuck_kind=kind, stuck_at=now)
+    safe_step = _sanitize_step_id(step_id)
+    actions = _STUCK_ACTIONS[kind].format(
+        runner=_runner_invocation(ctx.pointer.get("plan_path")),
+        plan=_quote_plan_path(ctx.pointer.get("plan_path")),
+        step=safe_step,
+    )
+    message = _STUCK_REPORT_MESSAGE.format(
+        step=safe_step, kind_label=_STUCK_KIND_LABELS[kind], count=count,
+        first_at=_sanitize_plan_field(first_at) or "?", now=now, actions=actions,
+    )
+    return _hook_allow(ctx, system_message=message)
 
 
 def _budget_exhausted_message(
@@ -2677,6 +2816,9 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
     if budget.decision != HOOK_BLOCK:
         return _hook_allow(ctx, system_message=_budget_exhausted_message(ctx, budget, step_id))
     repeats = _record_assignment(ctx, step_id)
+    if repeats >= HOOK_STUCK_AT:
+        first_at = ctx.pointer.get("attempt_first_at")
+        return _stuck_decision(ctx, STUCK_KIND_READY, step_id, repeats, first_at)
     if bool(ctx.pointer.get("checkpoint_pending")) != budget.checkpoint_pending:
         ctx.update(checkpoint_pending=budget.checkpoint_pending)
     suffix = None
@@ -2687,6 +2829,37 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
             step=_sanitize_step_id(step_id),
         )
     return _hook_block(ctx, "next_step", step_id, budget, suffix)
+
+
+def _hook_nothing_started(state: dict[str, Any]) -> bool:
+    return all(
+        step.get("status") in (PENDING, BLOCKED) for step in state["steps"].values()
+    )
+
+
+def _branch_preflight(ctx: _HookContext) -> HookDecision | None:
+    """(8.5) Before the first step starts, a failed preflight means every
+    step we could hand out would fail to run. Allow and say what is missing,
+    one line per item, instead of blocking on a step that cannot start.
+
+    `ctx.preflight` is computed by the I/O layer (_hook_preflight) — this
+    branch only reads `.ok` / `.failures`, keeping decide_hook_action pure.
+    """
+    result = ctx.preflight
+    if result is None or result.ok or not _hook_nothing_started(ctx.state):
+        return None
+    items = "\n".join(
+        f"- {_sanitize_plan_field(c.kind)} {_sanitize_plan_field(c.name)}："
+        f"{_sanitize_plan_field(c.hint)}"
+        for c in result.failures
+    )
+    message = _PREFLIGHT_FAILED_MESSAGE.format(
+        slug=_sanitize_plan_field(ctx.state.get("slug")) or "?",
+        items=items,
+        runner=_runner_invocation(ctx.pointer.get("plan_path")),
+        plan=_quote_plan_path(ctx.pointer.get("plan_path")),
+    )
+    return _hook_allow(ctx, system_message=message)
 
 
 def _branch_stuck(ctx: _HookContext) -> HookDecision:
@@ -2711,6 +2884,7 @@ _HOOK_BRANCHES: tuple[Callable[[_HookContext], HookDecision | None], ...] = (
     _branch_all_done,
     _branch_failed_step,
     _branch_background_tasks,
+    _branch_preflight,
     _branch_in_progress,
     _branch_ready_step,
 )
@@ -2721,8 +2895,12 @@ def decide_hook_action(
     pointer: dict[str, Any] | None,
     state: dict[str, Any] | None,
     mtime_lookup: Callable[[str], float | None] = _default_mtime_lookup,
+    preflight: Any = None,
 ) -> HookDecision:
     """Decide block/allow for one Stop hook invocation. Pure — no I/O.
+
+    `preflight` is a plan_runner_preflight.PreflightResult the caller has
+    already computed (or None when it was not run / not applicable).
 
     Branches are evaluated in order, first match wins; only lease
     arbitration (4) can handle its case and still fall through. The caller
@@ -2736,7 +2914,7 @@ def decide_hook_action(
     if not isinstance(pointer, dict):                        # (1) not our cwd
         return HookDecision(decision=HOOK_ALLOW, silent=True)
 
-    ctx = _HookContext(hook_input, pointer, state, mtime_lookup)
+    ctx = _HookContext(hook_input, pointer, state, mtime_lookup, preflight)
     _reset_turn_counters(ctx)
     for branch in _HOOK_BRANCHES:
         decision = branch(ctx)
@@ -2806,6 +2984,49 @@ def _load_hook_state(pointer_data: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+def _plan_commands(plan_path: Path) -> list[str | None]:
+    """Every step's `Command:` value, or [] when the plan cannot be read —
+    preflight reports the unreadable plan itself."""
+    try:
+        steps = parse_plan(plan_path)["steps"]
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    return [step.get("command") for step in steps.values()]
+
+
+def _run_plan_preflight(plan_path: Path, base_dir: Path) -> Any:
+    """The one preflight both `preflight` and the hook run. Raises
+    ImportError when plan_runner_preflight is not next to this file."""
+    pf = _import_sibling("plan_runner_preflight")
+    runner = _runner_script_path() or Path("plan_runner.py")
+    return pf.run_preflight(
+        runner_path=runner,
+        plan_path=plan_path,
+        state_path=state_path_for(plan_path),
+        commands=_plan_commands(plan_path),
+        base_dir=base_dir,
+    )
+
+
+def _hook_preflight(pointer: Any, state: Any, cwd: str | None) -> Any:
+    """Preflight for the hook, or None when it does not apply or cannot run.
+
+    Only before the first step starts: once work is under way, a tool that
+    went missing shows up as that step failing, and re-checking every tool
+    on every Stop event would tax every turn for nothing. Never raises —
+    a broken preflight must degrade to "no preflight", not to a hook crash.
+    """
+    if not isinstance(pointer, dict) or not _hook_state_shape_ok(state):
+        return None
+    plan_raw = pointer.get("plan_path")
+    if not isinstance(plan_raw, str) or not plan_raw or not _hook_nothing_started(state):
+        return None
+    try:
+        return _run_plan_preflight(Path(plan_raw), Path(cwd or Path(plan_raw).parent))
+    except Exception:
+        return None
+
+
 def _hook_output_payload(decision: HookDecision) -> dict[str, Any] | None:
     """Map a HookDecision to the JSON dict to print, or None to print
     nothing at all. Output shape is centralized here so the wire format
@@ -2866,7 +3087,8 @@ def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDeci
     resolved = resolve_pointer_for_hook(cwd) if cwd else None
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
-    decision = decide_hook_action(hook_input, pointer, state)
+    preflight = _hook_preflight(pointer, state, cwd) if pointer is not None else None
+    decision = decide_hook_action(hook_input, pointer, state, preflight=preflight)
     _apply_hook_side_effects(decision, resolved)
     return decision
 
@@ -2940,6 +3162,41 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
 # CLI commands
 # ---------------------------------------------------------------------------
 
+def _dag_error_payload(
+    plan_path: Path, parsed: dict[str, Any], errors: list[str],
+) -> dict[str, Any]:
+    """`init`'s error payload for a plan whose DAG does not validate."""
+    payload: dict[str, Any] = {
+        "error": "DAG validation failed",
+        "details": errors,
+        "warnings": parsed["warnings"],
+    }
+    if any("No steps found" in e for e in errors):
+        payload["hint"] = (
+            "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
+            f"Try: plan_runner.py normalize {plan_path} --diff "
+            f"→ if diff looks reasonable: --write → re-run init."
+        )
+    return payload
+
+
+def _attach_after_init(plan_path: Path, fmt: str) -> None:
+    """Attach the cwd pointer after a successful `init`.
+
+    attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
+    JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
+    文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
+    """
+    attach_stream = sys.stderr if fmt == "json" else sys.stdout
+    pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
+    if error is not None:
+        print(error, file=attach_stream)
+        return
+    _print_attach_result(
+        plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
+    )
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     if not plan_path.exists():
@@ -2948,18 +3205,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     parsed = parse_plan(plan_path)
     errors = validate_dag(parsed)
     if errors:
-        payload: dict[str, Any] = {
-            "error": "DAG validation failed",
-            "details": errors,
-            "warnings": parsed["warnings"],
-        }
-        if any("No steps found" in e for e in errors):
-            payload["hint"] = (
-                "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
-                f"Try: plan_runner.py normalize {plan_path} --diff "
-                f"→ if diff looks reasonable: --write → re-run init."
-            )
-        emit(payload)
+        emit(_dag_error_payload(plan_path, parsed, errors))
         return 1
     existing = load_state(plan_path)
     if existing and not args.force:
@@ -2970,6 +3216,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return 1
     state = init_state(plan_path, parsed, getattr(args, "require_summary", False))
     save_state(plan_path, state)
+    _refresh_checkpoint_if_present(plan_path, state)
     payload = {
         "status": "initialized",
         "slug": state["slug"],
@@ -2982,17 +3229,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
-        # attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
-        # JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
-        # 文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
-        attach_stream = sys.stderr if args.format == "json" else sys.stdout
-        pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
-        if error is not None:
-            print(error, file=attach_stream)
-        else:
-            _print_attach_result(
-                plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
-            )
+        _attach_after_init(plan_path, args.format)
     return 0
 
 
@@ -3072,10 +3309,156 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
 def cmd_next(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
+    checkpoint = None
+    if getattr(args, "resume", False):
+        checkpoint = _load_resume_checkpoint(plan_path)
+        if checkpoint is None:
+            return 1
     payload = _build_state_view(state, mode="full")
     save_state(plan_path, state)  # persist previously_reported_ready update
-    emit_formatted(payload, args.format, format_next_md)
+    if checkpoint is None:
+        emit_formatted(payload, args.format, format_next_md)
+        return 0
+    _emit_resume(args.format, plan_path, checkpoint, payload)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Resumable checkpoint (PR-A) — written after complete/fail/skip, read by
+# `next <plan> --resume`. `resume` itself is taken (pointer pause/resume, no
+# plan argument), so resuming a *plan* is a flag on `next`: it prints the
+# checkpoint and then the ordinary, live `next` view — the checkpoint says
+# what happened, the live state says what to do now.
+# ---------------------------------------------------------------------------
+
+def _checkpoint_file(plan_path: Path) -> Path:
+    return state_dir_for(plan_path) / f"{plan_path.stem}.checkpoint.json"
+
+
+def _checkpoint_stuck(plan_path: Path, state: dict[str, Any]) -> dict[str, Any] | None:
+    """The cwd pointer's STUCK record, if it is about this plan and that
+    step has still not moved; None otherwise (including any lookup error)."""
+    try:
+        resolved = resolve_pointer(Path.cwd())
+    except (OSError, ValueError):
+        return None
+    if resolved is None or Path(str(resolved.data.get("plan_path"))).resolve() != plan_path:
+        return None
+    data = resolved.data
+    step = state["steps"].get(data.get("stuck_step_id") or "")
+    kind = data.get("stuck_kind")
+    expected = PENDING if kind == STUCK_KIND_READY else IN_PROGRESS
+    if step is None or step.get("status") != expected:
+        return None
+    counter = "assign_repeat_count" if kind == STUCK_KIND_READY else "nag_counts"
+    return {
+        "step_id": data["stuck_step_id"], "kind": kind,
+        "count": _hook_counter(data, counter), "stuck_at": data.get("stuck_at"),
+    }
+
+
+def _checkpoint_preflight(plan_path: Path) -> dict[str, Any] | None:
+    try:
+        result = _run_plan_preflight(plan_path, Path.cwd())
+    except Exception:
+        return None
+    return {"ok": result.ok, "failed": [c.name for c in result.failures]}
+
+
+def _build_checkpoint(plan_path: Path, state: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    ck = _import_sibling("plan_runner_checkpoint")
+    data = ck.build_checkpoint(
+        state,
+        ready_steps=sorted(compute_ready_steps(state)),
+        stuck=_checkpoint_stuck(plan_path, state),
+        preflight=_checkpoint_preflight(plan_path),
+        now=now_iso(),
+    )
+    return ck, data
+
+
+def _write_checkpoint_best_effort(plan_path: Path, state: dict[str, Any]) -> None:
+    """The state transition already succeeded and was saved; a checkpoint
+    that cannot be written must not turn it into a reported failure."""
+    try:
+        ck, data = _build_checkpoint(plan_path, state)
+        ck.write_checkpoint_atomic(_checkpoint_file(plan_path), data)
+    except Exception:
+        return None
+    return None
+
+
+def _refresh_checkpoint_if_present(plan_path: Path, state: dict[str, Any]) -> None:
+    """`reset` / `init --force` rewrite history, so an existing checkpoint
+    must be rebuilt from the new state; otherwise `next --resume` would keep
+    reporting `done` for steps that are pending again (review F3). No file
+    means no complete/fail/skip yet, and that stays true: none is created."""
+    if _checkpoint_file(plan_path).exists():
+        _write_checkpoint_best_effort(plan_path, state)
+
+
+def _load_resume_checkpoint(plan_path: Path) -> dict[str, Any] | None:
+    """Checkpoint for `--resume`, or None after emitting why there is none."""
+    path = _checkpoint_file(plan_path)
+    try:
+        data = _import_sibling("plan_runner_checkpoint").load_checkpoint(path)
+    except (ImportError, OSError, ValueError) as exc:
+        emit({"error": f"checkpoint 無法讀取：{path}（{exc}）"})
+        return None
+    if data is None:
+        emit({"error": (
+            f"沒有 checkpoint：{path}。checkpoint 在第一次 complete/fail/skip 後才會產生；"
+            f"請改用 `next {plan_path}`（不帶 --resume）。"
+        )})
+    return data
+
+
+_FENCE_MARKER_RE = re.compile(
+    "|".join(re.escape(m) for m in (PLAN_FENCE_START, PLAN_FENCE_END)), re.IGNORECASE,
+)
+
+
+def _sanitize_checkpoint_value(raw: Any) -> str:
+    """One checkpoint value, made safe for the `--resume` data fence.
+
+    Same pipeline as hook-reason plan fields, folded to one line and
+    summary-sized. Folding turns an injected fence line into mid-line text,
+    which _neutralize_fence_lookalikes() (line-based) no longer sees, so any
+    fence marker left anywhere in the value is defused here as well.
+    """
+    text = _sanitize_plan_text(raw, STEP_SUMMARY_MAX_CHARS, collapse_newlines=True)
+    return _FENCE_MARKER_RE.sub(lambda m: m.group(0).replace("-", _FENCE_LOOKALIKE_CHAR), text)
+
+
+def _emit_resume(
+    fmt: str, plan_path: Path, checkpoint: dict[str, Any], payload: dict[str, Any],
+) -> None:
+    path = _checkpoint_file(plan_path)
+    if fmt == "json":
+        emit({"checkpoint": checkpoint, "checkpoint_path": str(path), **payload})
+        return
+    ck = _import_sibling("plan_runner_checkpoint")
+    print(ck.format_resume_md(
+        checkpoint, path, clean=_sanitize_checkpoint_value,
+        fence=(PLAN_FENCE_START, PLAN_FENCE_END),
+    ))
+    print()
+    print(format_next_md(payload))
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).resolve()
+    try:
+        pf = _import_sibling("plan_runner_preflight")
+        result = _run_plan_preflight(plan_path, Path.cwd())
+    except ImportError as exc:
+        emit({"error": f"plan_runner_preflight 無法載入：{exc}"})
+        return 1
+    if args.format == "json":
+        emit(pf.result_to_dict(result))
+    else:
+        print(pf.format_md(result))
+    return 0 if result.ok else 1
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -3248,6 +3631,7 @@ def _transition_and_emit(
     task_id = state["steps"][sid].get("task_id")
     view = _build_state_view(state)
     save_state(plan_path, state)
+    _write_checkpoint_best_effort(plan_path, state)
     payload = {"status": verb, "step": sid, "task_id": task_id}
     if extra_payload:
         payload.update(extra_payload)
@@ -3470,6 +3854,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
     recompute_blocked_status(state)
     save_state(plan_path, state)
+    _refresh_checkpoint_if_present(plan_path, state)
     emit({"status": "reset", "summary": summary(state)})
     return 0
 
@@ -3992,6 +4377,10 @@ def main() -> None:
 
     p_next = sub.add_parser("next", help="Show ready steps")
     p_next.add_argument("plan")
+    p_next.add_argument(
+        "--resume", action="store_true",
+        help="Print the last checkpoint (done steps, artifacts, open questions) before the live next view",
+    )
     add_format_flag(p_next)
     p_next.set_defaults(func=cmd_next)
 
@@ -4037,6 +4426,13 @@ def main() -> None:
     p_skip.add_argument("step")
     add_format_flag(p_skip)
     p_skip.set_defaults(func=cmd_skip)
+
+    p_preflight = sub.add_parser(
+        "preflight", help="Check runner, plan, state and every Command: tool exist (exit 1 on any failure)",
+    )
+    p_preflight.add_argument("plan")
+    add_format_flag(p_preflight)
+    p_preflight.set_defaults(func=cmd_preflight)
 
     p_status = sub.add_parser("status", help="Show all steps and statuses")
     p_status.add_argument("plan")

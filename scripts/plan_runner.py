@@ -66,6 +66,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why", "Input", "Output",
+    "Requires-Approval", "Requires_Approval",
 )
 
 
@@ -83,6 +84,20 @@ def _import_sibling(name: str) -> Any:
     if here not in sys.path:
         sys.path.insert(0, here)
     return importlib.import_module(name)
+
+
+def _try_import_sibling(name: str) -> Any:
+    try:
+        return _import_sibling(name)
+    except ImportError:
+        return None
+
+
+# Loaded once, at import, so decide_hook_action() never imports (no sys.path
+# change, no file read inside the pure core). None when the runner was copied
+# without its sibling; the hook then stops advancing and says so once.
+_GUARDRAILS = _try_import_sibling("plan_runner_guardrails")
+_GUARDRAILS_FROM_IMPORT = object()
 
 
 def now_iso() -> str:
@@ -148,6 +163,40 @@ def expand_deps(
     return expanded
 
 
+def _approval_field(
+    raw: str, step_id: str, known_field: bool,
+) -> tuple[bool | None, str | None] | None:
+    """(gated, init warning) when `raw` bears on the Requires-Approval gate.
+
+    Key matched leniently, value fail-closed, and a line whose key spells
+    approval gates too — see plan_runner_guardrails.approval_line (reviews
+    F4, N2, N2-R). There is deliberately no pre-filter here: a cheaper
+    check of its own would be a second definition of "mentions approval"
+    that can drift narrower than the real one (it did: `"prov"` missed
+    `Apprval`).
+    """
+    gr = _import_sibling("plan_runner_guardrails")
+    return gr.approval_line(step_id, raw, known_field=known_field)
+
+
+def _record_approval(
+    step: dict[str, Any], step_id: str, approval: tuple[bool | None, str | None],
+    warnings: list[str],
+) -> None:
+    """Fold one approval line into the step: any gated line wins, so a later
+    `false` never reopens a gate an earlier line closed (review N3). A
+    warning-only line (gated None) carries no verdict and is not folded."""
+    gated, warning = approval
+    warnings.extend([warning] if warning else [])
+    if gated is None:
+        return
+    earlier = step.setdefault("_approval_lines", [])
+    if earlier and gated not in earlier:
+        warnings.append(_import_sibling("plan_runner_guardrails").approval_conflict_warning(step_id))
+    earlier.append(gated)
+    step["requires_approval"] = any(earlier)
+
+
 def parse_plan(plan_path: Path) -> dict[str, Any]:
     """Parse plan.md into step graph."""
     text = plan_path.read_text(encoding="utf-8")
@@ -197,6 +246,10 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 current_phase = phase_name
                 if phase_name not in phase_order:
                     phase_order.append(phase_name)
+            # Any `###` heading ends the current step's fields, the same as
+            # `##` below: a `### Notes` after the last step is not part of
+            # it (review N2-FP).
+            current_step_id = None
             continue
 
         m_step = step_re.match(raw)
@@ -218,12 +271,18 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                 "skill": None,
                 "command": None,
                 "risk": None,
+                "requires_approval": False,
             }
             current_step_id = step_id
             continue
 
         if current_step_id:
             m_field = field_re.match(raw)
+            approval = _approval_field(raw, current_step_id, m_field is not None)
+            if approval is not None:
+                _record_approval(steps[current_step_id], current_step_id, approval, parse_warnings)
+                in_action_block = False
+                continue
             if m_field:
                 key = m_field.group("key").lower()
                 val = m_field.group("val").strip()
@@ -265,6 +324,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 
     step_order = list(steps.keys())
     for sid, step in steps.items():
+        step.pop("_approval_lines", None)
         raw = step.pop("_deps_raw", None)
         if raw:
             step["deps"] = expand_deps(raw, step_order, sid, parse_warnings)
@@ -285,7 +345,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 _NORMALIZE_FIELD_KEYS = (
     "Files", "Action", "Agent", "Skill", "Command",
     "Agent/Skill", "Dependencies", "Risk", "Why",
-    "Input", "Output", "Test",
+    "Input", "Output", "Test", "Requires-Approval", "Requires_Approval",
 )
 
 
@@ -591,6 +651,7 @@ def init_state(
     plan_path: Path,
     parsed: dict[str, Any],
     require_summary: bool = False,
+    allowed_paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     steps_state = {}
     for sid, step in parsed["steps"].items():
@@ -612,6 +673,8 @@ def init_state(
             "failure_reason": None,
             "summary": None,
             "evidence": [],
+            "requires_approval": bool(step.get("requires_approval")),
+            "approved_at": None,
         }
 
     return {
@@ -624,6 +687,8 @@ def init_state(
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "steps": steps_state,
+        "allowed_paths": list(allowed_paths),
+        "out_of_scope_log": [],
     }
 
 
@@ -917,20 +982,33 @@ def _format_full_step_block(step: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
-    """Markdown rendering. Skips empty sections to save tokens.
-    Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
+def _awaiting_approval_lines(awaiting: list[str]) -> list[str]:
+    if not awaiting:
+        return []
+    return [
+        "",
+        f"## 需核准 ({len(awaiting)}): {', '.join(awaiting)} — 標了 Requires-Approval "
+        "尚未核准，還不能開始；停下來問使用者，由人執行 `approve <plan> <step>` 核准後才會出現在 ready",
+    ]
+
+
+def _state_view_header_lines(data: dict[str, Any]) -> list[str]:
+    """Progress, parent task and per-status counts (empty parts skipped)."""
     s = data["summary"]
-    lines: list[str] = []
-    progress = s["progress"]
-    lines.append(f"Progress: {progress}" + (" — ALL DONE" if s["all_done"] else ""))
+    lines = [f"Progress: {s['progress']}" + (" — ALL DONE" if s["all_done"] else "")]
     parent = data.get("parent_task_id")
     if parent:
         lines.append(f"Parent task: {parent}")
-    counts = s["by_status"]
-    counts_str = " | ".join(f"{k}:{v}" for k, v in counts.items() if v)
+    counts_str = " | ".join(f"{k}:{v}" for k, v in s["by_status"].items() if v)
     if counts_str:
         lines.append(counts_str)
+    return lines
+
+
+def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
+    """Markdown rendering. Skips empty sections to save tokens.
+    Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
+    lines = _state_view_header_lines(data)
 
     new_ready = data.get("ready_steps_new", [])
     still_ready = data.get("ready_steps_still", [])
@@ -961,6 +1039,8 @@ def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
         for s_ in blocked:
             failed = ",".join(s_["failed_deps"])
             lines.append(f"- {s_['id']} {s_['title']} (failed deps: {failed})")
+
+    lines.extend(_awaiting_approval_lines(data.get("awaiting_approval_steps") or []))
 
     if not (new_ready or still_ready or ip or blocked):
         lines.append("")
@@ -1053,6 +1133,7 @@ def format_init_md(data: dict[str, Any]) -> str:
         lines.append(f"  - {ph}")
     lines.append("")
     lines.append(f"Ready now: {', '.join(data['ready_steps']) or '(none)'}")
+    lines.extend(_awaiting_approval_lines(data.get("awaiting_approval_steps") or []))
     if data.get("warnings"):
         lines.append("")
         lines.append("Warnings:")
@@ -1185,6 +1266,9 @@ _POINTER_OPTIONAL_STR_FIELDS = (
     # step (and branch kind) was declared stuck, when. All optional so older
     # pointers stay VALID.
     "attempt_first_at", "stuck_step_id", "stuck_kind", "stuck_at",
+    # PR-B: when the hook last announced a missing plan_runner_guardrails
+    # module, so it says so once instead of every turn.
+    "guardrails_missing_warned_at",
 )
 _POINTER_BOOL_FIELDS = ("paused", "checkpoint_pending", "completion_announced")
 _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
@@ -1998,9 +2082,14 @@ def _budget_hint_line(budget_info: BudgetDecision) -> str:
 
 
 def _other_ready_steps_line(state: dict[str, Any], step_id: str) -> str | None:
+    ready_now = compute_ready_steps(state)
+    assignable = (
+        _GUARDRAILS.split_by_approval(ready_now, state["steps"])[0]
+        if _GUARDRAILS is not None else ready_now
+    )
     ready = [
         safe
-        for sid in compute_ready_steps(state)
+        for sid in assignable
         if sid != step_id and (safe := _sanitize_step_id(sid))
     ]
     if not ready:
@@ -2431,12 +2520,14 @@ class _HookContext:
         state: Any,
         mtime_lookup: Callable[[str], float | None],
         preflight: Any = None,
+        guardrails: Any = None,
     ) -> None:
         self.hook_input = hook_input
         self.pointer = dict(pointer)
         self.state = state
         self.mtime_lookup = mtime_lookup
         self.preflight = preflight
+        self.guardrails = guardrails
         self.dirty = False
 
     def update(self, **fields: Any) -> None:
@@ -2485,6 +2576,7 @@ def _hook_block(
     )
     if suffix:
         reason = f"{reason}\n\n{suffix}"
+    reason = f"{reason}\n\n" + "\n".join(_guardrail_reason_lines(ctx))
     _clear_stuck_record(ctx)
     ctx.update(consecutive_blocks=ctx.counter("consecutive_blocks") + 1)
     return HookDecision(
@@ -2492,6 +2584,28 @@ def _hook_block(
         reason=reason,
         pointer_updates=ctx.updates(),
     )
+
+
+def _guardrail_reason_lines(ctx: _HookContext) -> list[str]:
+    """Sandbox + scope rules appended to every blocking reason (PR-B).
+
+    Prompt text only: nothing intercepts tool calls. The rule sentences are
+    the hook's own words and sit outside the fence; the path values come
+    from user-writable pointer/state files, so they go inside the same data
+    fence, through the same sanitizer, that `next --resume` uses.
+    """
+    gr = ctx.guardrails
+    plan_path = ctx.pointer.get("plan_path")
+    paths = [
+        clean for clean in (
+            _sanitize_checkpoint_value(p) for p in gr.collect_allowed_paths(ctx.pointer, ctx.state)
+        ) if clean
+    ]
+    log_command = (
+        f"{_runner_invocation(plan_path)} log-out-of-scope {_quote_plan_path(plan_path)} "
+        '--text="<指令原文>" --source="<來源>"'
+    )
+    return gr.guardrail_lines(paths, log_command, fence=(PLAN_FENCE_START, PLAN_FENCE_END))
 
 
 def _hook_plain_budget(ctx: _HookContext) -> BudgetDecision:
@@ -2806,12 +2920,49 @@ def _budget_exhausted_message(
     )
 
 
+def _approval_gate(ctx: _HookContext, gated: tuple[str, ...]) -> HookDecision:
+    """Every ready step waits on a human: allow, and say what to decide.
+
+    Like a failed step this is a HITL stop, so the block counter is cleared
+    and the next real advance starts from a full budget. Waiting on a human
+    is not a stall either: the assignment streak and any STUCK record are
+    cleared, so a gated step can never be reported STUCK and the first
+    assignment after `approve` counts from one.
+    """
+    step_id = gated[0]
+    plan_path = ctx.pointer.get("plan_path")
+    runner = _runner_invocation(plan_path)
+    plan = _quote_plan_path(plan_path)
+    sid = _sanitize_step_id(step_id)
+    if ctx.counter("consecutive_blocks") != 0:
+        ctx.update(consecutive_blocks=0)
+    if ctx.pointer.get("last_assigned_step_id") is not None or ctx.counter("assign_repeat_count"):
+        ctx.update(last_assigned_step_id=None, assign_repeat_count=0)
+    _clear_stuck_record(ctx)
+    lines = ctx.guardrails.approval_gate_lines(
+        sid,
+        _plan_data_lines(ctx.state, ctx.state["steps"][step_id]),
+        approve_command=f"{runner} approve {plan} {sid}",
+        skip_command=f"{runner} skip {plan} {sid}",
+        others=[safe for s in gated[1:] if (safe := _sanitize_step_id(s))],
+    )
+    return _hook_allow(ctx, system_message="\n".join(lines))
+
+
 def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
-    """(10) Normal advance — S1.6 decides whether we still have budget."""
+    """(10) Normal advance — S1.6 decides whether we still have budget.
+
+    Steps marked Requires-Approval and not yet approved are never assigned;
+    an assignable sibling goes first, and only when every ready step is
+    gated does the hook stop and ask (PR-B).
+    """
     ready = sorted(compute_ready_steps(ctx.state))
     if not ready:
         return None
-    step_id = ready[0]
+    assignable, gated = ctx.guardrails.split_by_approval(ready, ctx.state["steps"])
+    if not assignable:
+        return _approval_gate(ctx, gated)
+    step_id = assignable[0]
     budget = decide_budget(ctx.pointer, ctx.state, step_id)
     if budget.decision != HOOK_BLOCK:
         return _hook_allow(ctx, system_message=_budget_exhausted_message(ctx, budget, step_id))
@@ -2829,6 +2980,34 @@ def _branch_ready_step(ctx: _HookContext) -> HookDecision | None:
             step=_sanitize_step_id(step_id),
         )
     return _hook_block(ctx, "next_step", step_id, budget, suffix)
+
+
+_GUARDRAILS_MISSING_MESSAGE = (
+    "[plan-run] 找不到 plan_runner_guardrails.py：自動推進已停用（hook 不再指派 step，"
+    "也不會 block）。沒有這個模組就沒辦法附上 sandbox／授權範圍規則與核准關卡，"
+    "所以寧可停下。修法：讓 AGENT_SKILLS_DIR 指向完整的 checkout（scripts/ 底下要有 "
+    "plan_runner_guardrails.py），再跑 `{runner} doctor` 確認。這則訊息只提醒一次。"
+)
+
+
+def _branch_guardrails_missing(ctx: _HookContext) -> HookDecision | None:
+    """(4.5) Runner copied without plan_runner_guardrails: stop advancing.
+
+    Blocking without the sandbox and scope rules, or without the approval
+    gate, would be worse than not advancing, so this allows. It speaks once
+    per pointer (like STUCK) and clears its latch when the module is back.
+    """
+    if ctx.guardrails is not None:
+        if ctx.pointer.get("guardrails_missing_warned_at") is not None:
+            ctx.update(guardrails_missing_warned_at=None)
+        return None
+    if _hook_str(ctx.pointer.get("guardrails_missing_warned_at")):
+        return _hook_allow(ctx)
+    ctx.update(guardrails_missing_warned_at=now_iso())
+    message = _GUARDRAILS_MISSING_MESSAGE.format(
+        runner=_runner_invocation(ctx.pointer.get("plan_path")),
+    )
+    return _hook_allow(ctx, system_message=message)
 
 
 def _hook_nothing_started(state: dict[str, Any]) -> bool:
@@ -2880,6 +3059,7 @@ _HOOK_BRANCHES: tuple[Callable[[_HookContext], HookDecision | None], ...] = (
     _branch_paused,
     _branch_invalid,
     _branch_lease,
+    _branch_guardrails_missing,
     _branch_state_abandoned,
     _branch_all_done,
     _branch_failed_step,
@@ -2896,11 +3076,14 @@ def decide_hook_action(
     state: dict[str, Any] | None,
     mtime_lookup: Callable[[str], float | None] = _default_mtime_lookup,
     preflight: Any = None,
+    guardrails: Any = _GUARDRAILS_FROM_IMPORT,
 ) -> HookDecision:
     """Decide block/allow for one Stop hook invocation. Pure — no I/O.
 
     `preflight` is a plan_runner_preflight.PreflightResult the caller has
     already computed (or None when it was not run / not applicable).
+    `guardrails` is the already-loaded plan_runner_guardrails module, or
+    None when it is missing; omitted, the import-time load is used.
 
     Branches are evaluated in order, first match wins; only lease
     arbitration (4) can handle its case and still fall through. The caller
@@ -2914,7 +3097,9 @@ def decide_hook_action(
     if not isinstance(pointer, dict):                        # (1) not our cwd
         return HookDecision(decision=HOOK_ALLOW, silent=True)
 
-    ctx = _HookContext(hook_input, pointer, state, mtime_lookup, preflight)
+    if guardrails is _GUARDRAILS_FROM_IMPORT:
+        guardrails = _GUARDRAILS
+    ctx = _HookContext(hook_input, pointer, state, mtime_lookup, preflight, guardrails)
     _reset_turn_counters(ctx)
     for branch in _HOOK_BRANCHES:
         decision = branch(ctx)
@@ -3088,7 +3273,9 @@ def _decide_and_persist(hook_input: dict[str, Any], cwd: str | None) -> HookDeci
     pointer = resolved.data if resolved is not None else None
     state = _load_hook_state(resolved.data) if resolved is not None else None
     preflight = _hook_preflight(pointer, state, cwd) if pointer is not None else None
-    decision = decide_hook_action(hook_input, pointer, state, preflight=preflight)
+    decision = decide_hook_action(
+        hook_input, pointer, state, preflight=preflight, guardrails=_GUARDRAILS,
+    )
     _apply_hook_side_effects(decision, resolved)
     return decision
 
@@ -3162,6 +3349,26 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
 # CLI commands
 # ---------------------------------------------------------------------------
 
+def _init_allowed_paths(
+    args: argparse.Namespace,
+) -> tuple[tuple[str, ...], str | None, list[str]]:
+    """`init --allow-path` values plus $PLAN_SANDBOX_ROOT: (paths, error, warnings).
+
+    Read once here and stored in state, so the hook never depends on the
+    environment of whichever process happens to run it. A bad flag is the
+    caller's own typo and fails init; a bad environment variable is ambient
+    (often a leftover export), so it is only warned about and skipped.
+    """
+    gr = _import_sibling("plan_runner_guardrails")
+    flags, error = gr.validate_allow_paths(getattr(args, "allow_path", None) or [], Path.cwd())
+    if error:
+        return (), f"--allow-path: {error}", []
+    env_root = os.environ.get(gr.SANDBOX_ENV_VAR)
+    env_paths, env_error = gr.validate_allow_paths([env_root] if env_root else [], Path.cwd())
+    warnings = [f"${gr.SANDBOX_ENV_VAR} ignored: {env_error}"] if env_error else []
+    return tuple(dict.fromkeys((*flags, *env_paths))), None, warnings
+
+
 def _dag_error_payload(
     plan_path: Path, parsed: dict[str, Any], errors: list[str],
 ) -> dict[str, Any]:
@@ -3202,6 +3409,10 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not plan_path.exists():
         emit({"error": f"Plan not found: {plan_path}"})
         return 1
+    allowed_paths, path_error, path_warnings = _init_allowed_paths(args)
+    if path_error:
+        emit({"error": path_error})
+        return 1
     parsed = parse_plan(plan_path)
     errors = validate_dag(parsed)
     if errors:
@@ -3214,9 +3425,13 @@ def cmd_init(args: argparse.Namespace) -> int:
             "state_path": str(state_path_for(plan_path)),
         })
         return 1
-    state = init_state(plan_path, parsed, getattr(args, "require_summary", False))
+    state = init_state(
+        plan_path, parsed, getattr(args, "require_summary", False), allowed_paths,
+    )
     save_state(plan_path, state)
     _refresh_checkpoint_if_present(plan_path, state)
+    risky = _import_sibling("plan_runner_guardrails").risky_step_warnings(state["steps"])
+    ready_now, awaiting = _split_ready_for_cli(state)
     payload = {
         "status": "initialized",
         "slug": state["slug"],
@@ -3224,8 +3439,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         "state_path": str(state_path_for(plan_path)),
         "total_steps": len(state["steps"]),
         "phase_order": state["phase_order"],
-        "ready_steps": compute_ready_steps(state),
-        "warnings": parsed["warnings"],
+        "ready_steps": ready_now,
+        "awaiting_approval_steps": awaiting,
+        "warnings": [*parsed["warnings"], *path_warnings, *risky],
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
@@ -3249,6 +3465,43 @@ def _require_state(plan_path: Path) -> dict[str, Any]:
     return state
 
 
+def _split_ready_for_cli(state: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """(ready to hand out, waiting on approval) for the CLI views.
+
+    A Requires-Approval step that has not been approved is not "ready" in
+    any CLI output: it never gets a start template, only a line saying a
+    human has to approve it. After `approve` it rejoins the ready list and,
+    because `previously_reported_ready` never held it, shows up as newly
+    unlocked with its full instructions.
+    """
+    assignable, gated = _import_sibling("plan_runner_guardrails").split_by_approval(
+        compute_ready_steps(state), state["steps"],
+    )
+    return list(assignable), list(gated)
+
+
+def _in_progress_entries(state: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = state["steps"]
+    return [
+        {"id": sid, "title": steps[sid]["title"], "task_id": steps[sid]["task_id"]}
+        for sid in sorted(sid for sid, s in steps.items() if s["status"] == IN_PROGRESS)
+    ]
+
+
+def _blocked_entries(state: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = state["steps"]
+    return [
+        {
+            "id": sid,
+            "title": steps[sid]["title"],
+            "failed_deps": [
+                d for d in steps[sid]["deps"] if steps.get(d, {}).get("status") == FAILED
+            ],
+        }
+        for sid in compute_blocked_steps(state)
+    ]
+
+
 def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, Any]:
     """Shared state-view payload — embed in transition outputs so callers
     don't need a follow-up `next` call.
@@ -3262,11 +3515,7 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
     Side effect: updates `state["previously_reported_ready"]` to current
     ready set so the next call's delta is computed correctly.
     """
-    current_ready = compute_ready_steps(state)
-    in_progress = sorted(
-        sid for sid, s in state["steps"].items() if s["status"] == IN_PROGRESS
-    )
-    blocked = compute_blocked_steps(state)
+    current_ready, awaiting = _split_ready_for_cli(state)
 
     if mode == "full":
         prev_reported: set[str] = set()
@@ -3284,25 +3533,9 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
         "parent_task_id": state.get("parent_task_id"),
         "ready_steps_new": [step_to_instruction(state, sid) for sid in newly],
         "ready_steps_still": still,  # IDs only — Claude already saw these
-        "in_progress_steps": [
-            {
-                "id": sid,
-                "title": state["steps"][sid]["title"],
-                "task_id": state["steps"][sid]["task_id"],
-            }
-            for sid in in_progress
-        ],
-        "blocked_steps": [
-            {
-                "id": sid,
-                "title": state["steps"][sid]["title"],
-                "failed_deps": [
-                    d for d in state["steps"][sid]["deps"]
-                    if state["steps"].get(d, {}).get("status") == FAILED
-                ],
-            }
-            for sid in blocked
-        ],
+        "awaiting_approval_steps": awaiting,
+        "in_progress_steps": _in_progress_entries(state),
+        "blocked_steps": _blocked_entries(state),
     }
 
 
@@ -3369,7 +3602,7 @@ def _build_checkpoint(plan_path: Path, state: dict[str, Any]) -> tuple[Any, dict
     ck = _import_sibling("plan_runner_checkpoint")
     data = ck.build_checkpoint(
         state,
-        ready_steps=sorted(compute_ready_steps(state)),
+        ready_steps=sorted(_split_ready_for_cli(state)[0]),
         stuck=_checkpoint_stuck(plan_path, state),
         preflight=_checkpoint_preflight(plan_path),
         now=now_iso(),
@@ -3512,6 +3745,30 @@ def cmd_start(args: argparse.Namespace) -> int:
     return _run_locked(args, _cmd_start_locked)
 
 
+def _start_refusal(
+    state: dict[str, Any], sid: str, plan_path: Path,
+) -> dict[str, Any] | None:
+    """Error payload when `start sid` must be refused before any transition:
+    unknown step, waiting on human approval, or deps not satisfied."""
+    if sid not in state["steps"]:
+        return {"error": f"Unknown step: {sid}"}
+    if _import_sibling("plan_runner_guardrails").awaiting_approval(state["steps"][sid]):
+        return {
+            "error": f"{sid} is marked Requires-Approval and has not been approved",
+            "hint": (
+                f"Stop and ask the user. Only a human may run: "
+                f"plan_runner.py approve {plan_path} {sid}"
+            ),
+        }
+    if not deps_all_completed(state, sid):
+        unmet = [
+            d for d in state["steps"][sid]["deps"]
+            if state["steps"][d]["status"] not in (COMPLETED, SKIPPED)
+        ]
+        return {"error": "Deps not satisfied", "unmet": unmet}
+    return None
+
+
 def _cmd_start_locked(args: argparse.Namespace) -> int:
     """`start` under the state lock, so the read of `pending` and the write
     of `in_progress` cannot interleave with another session's. Without it
@@ -3521,15 +3778,9 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
     sid = args.step
-    if sid not in state["steps"]:
-        emit({"error": f"Unknown step: {sid}"})
-        return 1
-    if not deps_all_completed(state, sid):
-        unmet = [
-            d for d in state["steps"][sid]["deps"]
-            if state["steps"][d]["status"] not in (COMPLETED, SKIPPED)
-        ]
-        emit({"error": "Deps not satisfied", "unmet": unmet})
+    refusal = _start_refusal(state, sid, plan_path)
+    if refusal is not None:
+        emit(refusal)
         return 1
     try:
         transition_step(
@@ -3540,9 +3791,11 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
         emit({"error": str(e)})
         return 1
     save_state(plan_path, state)
+    gr = _import_sibling("plan_runner_guardrails")
     next_hints = [
         step_to_instruction(state, nid)
         for nid in compute_next_after_completion(state, sid)
+        if not gr.awaiting_approval(state["steps"][nid])
     ]
     payload = {
         "status": "started",
@@ -3839,6 +4092,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
         s["failure_reason"] = None
         s["summary"] = None
         s["evidence"] = []
+        s["approved_at"] = None
 
     if args.all:
         for s in state["steps"].values():
@@ -3856,6 +4110,61 @@ def cmd_reset(args: argparse.Namespace) -> int:
     save_state(plan_path, state)
     _refresh_checkpoint_if_present(plan_path, state)
     emit({"status": "reset", "summary": summary(state)})
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_approve_locked)
+
+
+def _cmd_approve_locked(args: argparse.Namespace) -> int:
+    """Human sign-off for a Requires-Approval step. Re-approving keeps the
+    first timestamp so the record shows when the decision was actually made.
+    """
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    step = state["steps"].get(args.step)
+    if step is None:
+        emit({"error": f"Unknown step: {args.step}"})
+        return 1
+    if not step.get("requires_approval"):
+        emit({"error": f"{args.step} is not marked Requires-Approval; nothing to approve"})
+        return 1
+    if not step.get("approved_at"):
+        step["approved_at"] = now_iso()
+        save_state(plan_path, state)
+        _write_checkpoint_best_effort(plan_path, state)
+    payload = {"status": "approved", "step": args.step, "approved_at": step["approved_at"]}
+    emit_formatted(payload, args.format, lambda d: f"Approved: {d['step']} at {d['approved_at']}")
+    return 0
+
+
+def cmd_log_out_of_scope(args: argparse.Namespace) -> int:
+    return _run_locked(args, _cmd_log_out_of_scope_locked)
+
+
+def _cmd_log_out_of_scope_locked(args: argparse.Namespace) -> int:
+    """Record an instruction that arrived from outside the plan. The text is
+    stored, never echoed back, so logging it cannot re-inject it.
+    """
+    gr = _import_sibling("plan_runner_guardrails")
+    plan_path = Path(args.plan).resolve()
+    state = _require_state(plan_path)
+    running = [sid for sid, s in state["steps"].items() if s.get("status") == IN_PROGRESS]
+    entry, error = gr.build_out_of_scope_entry(
+        args.text, args.source, step_id=running[0] if running else None,
+        at=now_iso(), strip=_strip_unsafe_bytes,
+    )
+    if error is None:
+        new_log, error = gr.append_out_of_scope(state.get("out_of_scope_log"), entry)
+    if error is not None:
+        emit({"error": error})
+        return 1
+    state["out_of_scope_log"] = list(new_log)
+    save_state(plan_path, state)
+    _write_checkpoint_best_effort(plan_path, state)
+    payload = {"status": "logged", "count": len(new_log)}
+    emit_formatted(payload, args.format, lambda d: f"Logged out-of-scope instruction #{d['count']}")
     return 0
 
 
@@ -4372,6 +4681,14 @@ def main() -> None:
         "--no-attach", dest="attach", action="store_false",
         help="Skip pointer attach after init",
     )
+    p_init.add_argument(
+        "--allow-path", dest="allow_path", action="append", default=None, metavar="PATH",
+        help=(
+            "Extra sandbox path named in every hook reason (repeatable). Defaults "
+            "already cover repo root, cwd and the plan dir; $PLAN_SANDBOX_ROOT is "
+            "added when set. Prompt-level rule only, not enforced."
+        ),
+    )
     add_format_flag(p_init)
     p_init.set_defaults(func=cmd_init)
 
@@ -4420,6 +4737,24 @@ def main() -> None:
     p_fail.add_argument("--reason", default="")
     add_format_flag(p_fail)
     p_fail.set_defaults(func=cmd_fail)
+
+    p_approve = sub.add_parser(
+        "approve", help="Human approval for a Requires-Approval step (records time)",
+    )
+    p_approve.add_argument("plan")
+    p_approve.add_argument("step")
+    add_format_flag(p_approve)
+    p_approve.set_defaults(func=cmd_approve)
+
+    p_oos = sub.add_parser(
+        "log-out-of-scope",
+        help="Record an instruction that came from outside the plan (not followed)",
+    )
+    p_oos.add_argument("plan")
+    p_oos.add_argument("--text", required=True, help="The instruction, max 500 chars")
+    p_oos.add_argument("--source", default="", help="Where it came from, max 200 chars")
+    add_format_flag(p_oos)
+    p_oos.set_defaults(func=cmd_log_out_of_scope)
 
     p_skip = sub.add_parser("skip", help="Mark step skipped")
     p_skip.add_argument("plan")
@@ -4510,7 +4845,17 @@ def main() -> None:
     p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args()
-    sys.exit(args.func(args))
+    try:
+        rc = args.func(args)
+    except ModuleNotFoundError as exc:
+        if not (exc.name or "").startswith("plan_runner_"):
+            raise
+        emit({"error": (
+            f"缺少 {exc.name}.py：plan_runner.py 必須連同同目錄的 plan_runner_*.py 一起安裝"
+            f"（{Path(__file__).resolve().parent}）。請改指向完整的 checkout 後重跑。"
+        )})
+        rc = 1
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 out-of-scope instruction log.
 
 Everything here is pure except validate_allow_paths(), which resolves each
-path (it only runs from `init`, never from the hook). No environment reads, no import of plan_runner (it is loaded
+path (it only runs from `init`, never from the hook) and, when the caller
+passes no `home`, falls back to Path.home(). No other environment reads, no import of plan_runner (it is loaded
 by path in tests, so a back-import would create a second copy of that
 module). Where plan_runner's own sanitizers and fence are needed, the caller
 passes them in.
@@ -150,8 +151,34 @@ def _allow_path_error(raw: str) -> str | None:
     return None
 
 
+def _expand_home(raw: str, home: Path) -> Path:
+    """`~` and `~/x` against the given home; `~user` via the OS."""
+    if raw == "~" or raw.startswith("~/"):
+        return home / raw[2:]
+    return Path(raw).expanduser()
+
+
+def _allow_path_scope_error(path: Path, home: Path) -> str | None:
+    """Why a resolved sandbox path is too broad, or None.
+
+    The hook rule says "never touch ~/.claude or /", so a sandbox entry
+    that is, contains, or sits inside one of them would make the two
+    rules contradict each other (review F5).
+    """
+    claude_dir = home / ".claude"
+    if path == Path("/"):
+        return "sandbox path must not be the filesystem root /"
+    if path == claude_dir or claude_dir in path.parents:
+        return f"sandbox path {path} must not be ~/.claude or inside it"
+    if path == home or path in home.parents:
+        return f"sandbox path {path} must not be $HOME or a directory containing it"
+    if len(path.parts) <= 2:
+        return f"sandbox path {path} must not be a top-level directory"
+    return None
+
+
 def validate_allow_paths(
-    raw_paths: Sequence[str], base: Path,
+    raw_paths: Sequence[str], base: Path, *, home: Path | None = None,
 ) -> tuple[tuple[str, ...], str | None]:
     """Resolve sandbox paths against `base`; reject rather than repair.
 
@@ -159,21 +186,25 @@ def validate_allow_paths(
     be a file: an output directory is often created by the step itself.
     Text that merely looks like a path is not this function's problem --
     the hook prints every value inside the data fence, which is where the
-    injection defence lives. `/` is refused outright: a sandbox rooted at
-    `/` is no sandbox.
+    injection defence lives. Each value is resolved first (`~`, `..`,
+    symlinks), then refused when it is `/`, a top-level directory such as
+    `/private` (what `/tmp/..` becomes on macOS), `$HOME` or any directory
+    containing it, or `~/.claude` or anything inside it.
     """
     if len(raw_paths) > ALLOW_PATHS_MAX_ITEMS:
         return (), f"at most {ALLOW_PATHS_MAX_ITEMS} sandbox paths"
+    home_real = (home if home is not None else Path.home()).resolve()
     resolved: list[str] = []
     for raw in raw_paths:
         problem = _allow_path_error(raw)
         if problem:
             return (), f"sandbox path {raw!r} {problem}"
-        path = str((base / Path(raw).expanduser()).resolve())
-        if path == "/":
-            return (), "sandbox path must not be the filesystem root /"
-        if path not in resolved:
-            resolved.append(path)
+        path = (base / _expand_home(raw, home_real)).resolve()
+        scope_error = _allow_path_scope_error(path, home_real)
+        if scope_error:
+            return (), scope_error
+        if str(path) not in resolved:
+            resolved.append(str(path))
     return tuple(resolved), None
 
 

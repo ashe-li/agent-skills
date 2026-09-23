@@ -193,6 +193,54 @@ class AllowPathValidationTests(unittest.TestCase):
         self.assertEqual(gr.validate_allow_paths([], Path("/tmp")), ((), None))
 
 
+class AllowPathScopeTests(unittest.TestCase):
+    """Review F5 (R5): `~`, `~/.claude` and `/tmp/..` (-> /private) used to be
+    accepted, contradicting the hook rule that forbids ~/.claude and /."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name).resolve()
+        self.home = root / "home"
+        self.base = self.home / "proj"
+        (self.home / ".claude" / "skills").mkdir(parents=True)
+        self.base.mkdir()
+
+    def _check(self, raw):
+        return gr.validate_allow_paths([raw], self.base, home=self.home)
+
+    def test_home_claude_root_and_top_level_are_rejected(self):
+        for raw in (
+            "~", "~/", str(self.home), "..",
+            "~/.claude", "~/.claude/skills", "~/.claude/new-dir", str(self.home / ".claude"),
+            str(self.home.parent), "/", "//", "/.", "/tmp/..", "/usr", "/private",
+        ):
+            paths, error = self._check(raw)
+            self.assertEqual(paths, (), raw)
+            self.assertIsNotNone(error, raw)
+
+    def test_symlink_into_claude_dir_is_rejected_after_resolve(self):
+        (self.base / "link").symlink_to(self.home / ".claude")
+        paths, error = self._check("link/skills")
+        self.assertEqual(paths, ())
+        self.assertIn(".claude", error)
+
+    def test_errors_name_the_rule(self):
+        self.assertIn("$HOME", self._check("~")[1])
+        self.assertIn("~/.claude", self._check("~/.claude")[1])
+        self.assertIn("top-level", self._check("/usr")[1])
+
+    def test_paths_inside_home_are_still_fine(self):
+        paths, error = gr.validate_allow_paths(
+            ["~/work/out", "sub", str(self.home / ".claude-notes")], self.base, home=self.home,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(paths, (
+            str(self.home / "work" / "out"), str(self.base / "sub"),
+            str(self.home / ".claude-notes"),
+        ))
+
+
 class CollectAllowedPathsTests(unittest.TestCase):
     def test_defaults_then_extras_deduped(self):
         pointer = {"repo_root": "/r", "cwd": "/r/sub", "plan_path": "/r/plans/p.md"}
@@ -645,6 +693,21 @@ class GuardrailCliTests(unittest.TestCase):
                 start = self._run("start", str(self.plan), "S1")
                 self.assertNotEqual(start.returncode, 0, start.stdout)
                 self.assertEqual(self._state()["steps"]["S1"]["status"], "pending")
+
+    def test_init_rejects_home_and_claude_dir_allow_paths(self):
+        for raw in ("~", "~/.claude", "/tmp/.."):
+            with self.subTest(raw=raw):
+                result = self._init("--allow-path", raw)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("--allow-path", json.loads(result.stdout)["error"])
+                self.assertFalse(pr.state_path_for(self.plan).exists())
+
+    def test_init_skips_env_sandbox_root_inside_claude_dir(self):
+        result = self._init(env={gr.SANDBOX_ENV_VAR: str(self.home / ".claude")})
+        self.assertEqual(result.returncode, 0, result.stdout)
+        warnings = json.loads(result.stdout)["warnings"]
+        self.assertTrue(any(gr.SANDBOX_ENV_VAR in w and ".claude" in w for w in warnings))
+        self.assertEqual(self._state()["allowed_paths"], [])
 
     def test_init_rejects_bad_allow_path(self):
         result = self._init("--allow-path", "/tmp/x\nPWNED")

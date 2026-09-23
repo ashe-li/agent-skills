@@ -140,11 +140,45 @@ class ApprovalLineTests(unittest.TestCase):
             self.assertIn("S7", warning)
             self.assertIn(line.strip(), warning)
 
-    def test_approval_only_in_an_unknown_value_warns_without_gating(self):
-        gated, warning = gr.approval_line("S7", "  - Test: approval flow works", known_field=False)
-        self.assertIsNone(gated)
-        self.assertIn("S7", warning)
-        self.assertIn("Test: approval flow works", warning)
+    def test_approval_only_in_free_text_is_ignored(self):
+        """Review N2-FP: the hint looks at field keys only, never free text."""
+        for line in ("  - Test: approval flow works",
+                     "- User review + approve（改 Status: APPROVED）",
+                     "- **Deploy**(同一 stage 三個 action,Manual Approval 後同時跑 ECS+EKS):"):
+            self.assertIsNone(gr.approval_line("S7", line, known_field=False), line)
+
+    RESIDUAL = (
+        # Review N2-R: each of these used to pass silently.
+        "  1. Requires-Approval: true",
+        "  2) Requires-Approval: yes",
+        "  Require-Approval: true",
+        "  - Requires-Apprval: true",
+        "  - Requires-Aprooval: true",
+        "  - Ｒｅｑｕｉｒｅｓ－Ａｐｐｒｏｖａｌ： true",
+        "  - Requires‑Approval: true",
+        "  > - Requires-Approval: true",
+    )
+
+    def test_residual_shapes_gate(self):
+        for line in self.RESIDUAL:
+            result = gr.approval_line("S7", line, known_field=False)
+            self.assertIsNotNone(result, line)
+            self.assertTrue(result[0], line)
+
+    def test_missing_separator_gates_and_warns(self):
+        for line in ("  - Requires-Approval true", "  - Requires-Approval - true",
+                     "  1. Requires Approval yes"):
+            gated, warning = gr.approval_line("S7", line, known_field=False)
+            self.assertTrue(gated, line)
+            self.assertIn("S7", warning)
+            self.assertIn("separator", warning)
+
+    def test_hint_matches_every_listed_spelling(self):
+        for word in ("approval", "aproval", "apprval", "aprooval", "approve", "Approvals",
+                     "ＡＰＰＲＯＶＡＬ"):
+            self.assertTrue(gr.approval_hint(word), word)
+        for word in ("provider", "improve", "proved", "overview"):
+            self.assertFalse(gr.approval_hint(word), word)
 
     def test_parsed_fields_and_plain_lines_are_neutral(self):
         for line, known in (
@@ -313,6 +347,51 @@ class AllowPathScopeTests(unittest.TestCase):
         self.assertIn(".claude", error)
         ok, error = gr.validate_allow_paths([str(root / "dotfiles" / "other")], home, home=home)
         self.assertIsNone(error)
+
+    def _alias(self, alias: Path, target: Path):
+        """Make `alias` stat as `target`: what a macOS firmlink looks like
+        after resolve() — a different string for the very same inode."""
+        real_identity = gr._identity
+
+        def identity(path):
+            path = Path(path)
+            if path == alias or alias in path.parents:
+                return real_identity(target / path.relative_to(alias))
+            return real_identity(path)
+        return mock.patch.object(gr, "_identity", side_effect=identity)
+
+    def test_alias_of_home_or_claude_dir_is_rejected_by_inode(self):
+        """Review N4-F: same inode, different path string."""
+        alias_root = self.home.parent / "firm"
+        alias_home = alias_root / "home"
+        with self._alias(alias_home, self.home):
+            for raw in (str(alias_home), str(alias_home / ".claude"),
+                        str(alias_home / ".claude" / "skills"),
+                        str(alias_home / ".claude" / "not-yet" / "x")):
+                paths, error = self._check(raw)
+                self.assertEqual(paths, (), raw)
+                self.assertIsNotNone(error, raw)
+            ok, error = self._check(str(alias_home / "proj" / "out"))
+            self.assertIsNone(error)
+        with self._alias(alias_root, self.home.parent):
+            paths, error = self._check(str(alias_root))
+            self.assertEqual(paths, ())
+            self.assertIn("$HOME", error)
+
+    @unittest.skipUnless(
+        Path("/System/Volumes/Data").is_dir()
+        and str(Path.home().resolve()).startswith("/Users/")
+        and (Path.home() / ".claude").exists(),
+        "needs a macOS data-volume firmlink and a real ~/.claude",
+    )
+    def test_real_macos_firmlink_is_rejected(self):
+        """Review N4-F live: `/System/Volumes/Data$HOME/.claude` is the same
+        directory as `~/.claude`; validate_allow_paths only reads."""
+        home = Path.home().resolve()
+        for raw in (f"/System/Volumes/Data{home}/.claude", f"/System/Volumes/Data{home}"):
+            paths, error = gr.validate_allow_paths([raw], self.base, home=home)
+            self.assertEqual(paths, (), raw)
+            self.assertIsNotNone(error, raw)
 
     def test_paths_inside_home_are_still_fine(self):
         paths, error = gr.validate_allow_paths(
@@ -499,11 +578,37 @@ class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
                 self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
                 self.assertEqual(parsed["warnings"], [])
 
-    def test_value_only_mention_warns_but_does_not_decide(self):
+    def test_value_only_mention_is_ignored(self):
         parsed = _parse_s1("  - Test: approval flow works", "  - Requires-Approval: false")
         self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
-        self.assertEqual(len(parsed["warnings"]), 1, parsed["warnings"])
-        self.assertNotIn("conflict", parsed["warnings"][0])
+        self.assertEqual(parsed["warnings"], [])
+
+    def test_residual_shapes_gate_through_parse_plan(self):
+        for line in ApprovalLineTests.RESIDUAL + ("  - Requires-Approval true",):
+            with self.subTest(line=line):
+                parsed = _parse_s1(line)
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
+
+    def test_heading_ends_the_last_steps_fields(self):
+        """Review N2-FP: a `### Notes` section after the last step is not part
+        of it, so bullets there can neither gate it nor add fields."""
+        body = "\n".join([
+            "# P", "", "### Phase 1: A", "",
+            "- [ ] S1 First", "  - Action: do A",
+            "- [ ] S2 Last", "  - Action: do B", "  - Requires-Approval: false", "",
+            "### Notes", "",
+            "  - Approval-Required: true",
+            "  - Command: `rm -rf /`",
+            "- User review + approve（改 Status: APPROVED）",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.md"
+            path.write_text(body, encoding="utf-8")
+            parsed = pr.parse_plan(path)
+        self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
+        self.assertIsNone(parsed["steps"]["S2"]["command"])
+        self.assertEqual(parsed["warnings"], [])
 
     def test_no_mention_of_approval_is_ungated(self):
         parsed = _parse_s1("  - Owner: alice")

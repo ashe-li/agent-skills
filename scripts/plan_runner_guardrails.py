@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -31,19 +32,36 @@ APPROVAL_TRUE_VALUES = frozenset({"true", "yes", "1"})
 # it cannot read is worse than one that asks a human once too often.
 APPROVAL_FALSE_VALUES = frozenset({"false", "no", "0", "none", ""})
 _APPROVAL_VALUE_STRIP = " \t`'\"*_"
-# `  - Requires-Approval: x` with the tolerance people actually type: any
-# case, `-` / `_` / space / nothing between the words, `**bold**` or
-# `__bold__` around the key (with or without the colon inside), `:` / `：`
-# / `=`, a `-` / `*` / `+` bullet or none, any indentation (review N2).
+# Every line is NFKC-normalised first (full-width letters and `：` become
+# ASCII) and dash look-alikes become `-`, so the patterns below only need
+# to handle ASCII (review N2-R). Look-alikes from other scripts (Cyrillic
+# `а`) are not mapped.
+_DASH_LIKES = str.maketrans({c: "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"})
+# Optional blockquote, then a `-` / `*` / `+` bullet, a `1.` / `1)` number,
+# or nothing; any indentation.
+_LINE_PREFIX = r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s+)?"
+_BOLD = r"(?:\*\*|__)?"
+_REQUIRES_APPROVAL_KEY = _BOLD + r"requires[\s_-]*approval" + _BOLD
+# `Requires-Approval: x` with the tolerance people actually type: any case,
+# `-` / `_` / space / nothing between the words, `**bold**` or `__bold__`
+# around the key (with or without the colon inside), `:` or `=`.
 _REQUIRES_APPROVAL_FIELD_RE = re.compile(
-    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：=]"
-    r"(?:\*\*|__)?\s*(?P<val>.*)$",
+    _LINE_PREFIX + _REQUIRES_APPROVAL_KEY + r"\s*[:=]" + _BOLD + r"\s*(?P<val>.*)$",
     re.IGNORECASE,
 )
-# Any spelling of the word: approval, aproval, approvals, approve(d).
-_APPROVAL_HINT_RE = re.compile(r"ap{1,2}r{1,2}o?v", re.IGNORECASE)
-# A bulleted `key: value` line — the shape of a step field.
-_FIELD_LIKE_LINE_RE = re.compile(r"^\s*[-*+]\s+(?P<key>[^:：=]{1,80})[:：=]")
+# The same key with the separator missing: `- Requires-Approval true`.
+_REQUIRES_APPROVAL_NO_SEPARATOR_RE = re.compile(
+    _LINE_PREFIX + _REQUIRES_APPROVAL_KEY + r"(?:\s+\S.*)?$", re.IGNORECASE,
+)
+# The one definition of "this word is some spelling of approval": approval,
+# aproval, apprval, aprooval, approve(d), approvals. Needs the leading `a`,
+# so `provider` / `improve` are not hits. The parser has no cheaper
+# pre-filter of its own; every step line goes through approval_line().
+_APPROVAL_HINT_RE = re.compile(r"a+p+r+o*v", re.IGNORECASE)
+# `key: value` with a field-name-shaped key (letters, digits, spaces, `-`,
+# `_`, `/`, bold markers), so a sentence that happens to contain a colon
+# is not a field.
+_FIELD_LIKE_LINE_RE = re.compile(_LINE_PREFIX + r"(?P<key>[\w\s/*-]{1,40}?)\s*[:=]")
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -89,9 +107,19 @@ def is_recognised_approval_value(raw: str) -> bool:
     return value in APPROVAL_TRUE_VALUES or value in APPROVAL_FALSE_VALUES
 
 
+def normalise_field_line(line: str) -> str:
+    """NFKC plus dash look-alikes to `-`: what every approval match sees."""
+    return unicodedata.normalize("NFKC", line).translate(_DASH_LIKES)
+
+
+def approval_hint(text: str) -> bool:
+    """Whether `text` contains some spelling of "approval"."""
+    return bool(_APPROVAL_HINT_RE.search(normalise_field_line(text)))
+
+
 def match_requires_approval_field(line: str) -> str | None:
     """The raw value when `line` is a Requires-Approval step field, else None."""
-    match = _REQUIRES_APPROVAL_FIELD_RE.match(line)
+    match = _REQUIRES_APPROVAL_FIELD_RE.match(normalise_field_line(line))
     return match.group("val").strip() if match else None
 
 
@@ -99,33 +127,33 @@ def approval_line(
     step_id: str, line: str, *, known_field: bool,
 ) -> tuple[bool | None, str | None] | None:
     """(gated, init warning) for a step line that bears on the gate, else None.
-    gated is None for a line that only earns a warning and no verdict.
 
-    Fail-closed (review N2): a real Requires-Approval field is parsed with
-    the value rules. A bulleted `key: value` line the parser does not know
-    whose *key* spells approval in any way (`Require-Approval`,
-    `Requires-Aproval`, `Approval-Required`...) gates the step and names
-    the line. When only the value of such a line mentions approval
-    (`Test: approval flow works`) the step is not gated -- that would leave
-    no way to say "no" -- but init still names the line. `known_field`
-    lines (Action, Risk...) and lines that never mention approval are
-    left alone.
+    Fail-closed (reviews N2, N2-R): a real Requires-Approval field is
+    parsed with the value rules; the same key with its separator missing
+    gates and warns. A `key: value` line the parser does not know whose
+    *key* spells approval in any way (`Require-Approval`, `Requires-Apprval`,
+    `Approval-Required`...) gates the step and names the line. Free text is
+    never looked at (review N2-FP): `Test: approval flow works` or a note
+    saying "approve" decides nothing. `known_field` lines (Action, Risk...)
+    and lines whose key never mentions approval are left alone.
     """
     value = match_requires_approval_field(line)
     if value is not None:
         return parse_requires_approval(value), approval_value_warning(step_id, value)
-    field = _FIELD_LIKE_LINE_RE.match(line)
-    if known_field or field is None or not _APPROVAL_HINT_RE.search(line):
-        return None
-    if _APPROVAL_HINT_RE.search(field.group("key")):
+    text = normalise_field_line(line)
+    if _REQUIRES_APPROVAL_NO_SEPARATOR_RE.match(text):
         return True, (
-            f"{step_id}: line {line.strip()!r} looks like Requires-Approval but the "
-            "key is not recognised; treated as requiring approval (fail-closed). "
+            f"{step_id}: line {line.strip()!r} is Requires-Approval without a `:` "
+            "separator; treated as requiring approval (fail-closed). "
             "Write `Requires-Approval: true` or `false`"
         )
-    return None, (
-        f"{step_id}: line {line.strip()!r} mentions approval in an unrecognised "
-        "field; not gated. Add `Requires-Approval: true` if a human must sign off"
+    field = None if known_field else _FIELD_LIKE_LINE_RE.match(text)
+    if field is None or not _APPROVAL_HINT_RE.search(field.group("key")):
+        return None
+    return True, (
+        f"{step_id}: line {line.strip()!r} looks like Requires-Approval but the "
+        "key is not recognised; treated as requiring approval (fail-closed). "
+        "Write `Requires-Approval: true` or `false`"
     )
 
 
@@ -218,6 +246,49 @@ def _contains(outer: Path, inner: Path) -> bool:
     return _folded(inner)[:len(folded_outer)] == folded_outer
 
 
+def _identity(path: Path) -> tuple[int, int] | None:
+    """(st_dev, st_ino), or None when `path` does not exist or cannot be
+    stat'ed."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino
+
+
+def _identities_up(path: Path) -> frozenset[tuple[int, int]]:
+    """Identities of `path` and of every ancestor that exists. For a path
+    that is not created yet this starts at its first existing ancestor."""
+    found = (_identity(p) for p in (path, *path.parents))
+    return frozenset(i for i in found if i is not None)
+
+
+def _same_or_inside(path: Path, protected: Path) -> bool:
+    """`path` is `protected` or below it, judged by inode, not by string."""
+    target = _identity(protected)
+    return target is not None and target in _identities_up(path)
+
+
+def _same_or_contains(path: Path, protected: Path) -> bool:
+    """`path` is `protected` or one of its ancestors, judged by inode."""
+    here = _identity(path)
+    return here is not None and here in _identities_up(protected)
+
+
+def _inode_scope_error(path: Path, home: Path, claude_dir: Path) -> str | None:
+    """The same rules as the string checks, compared by (st_dev, st_ino).
+
+    A macOS firmlink (`/System/Volumes/Data/Users/<me>/.claude`) resolves
+    to a different string for the very same directory, so string rules
+    alone let it through (review N4-F).
+    """
+    if _same_or_contains(path, home):
+        return f"sandbox path {path} is $HOME or a directory containing it (same inode)"
+    if _same_or_inside(path, claude_dir) or _same_or_contains(path, claude_dir):
+        return f"sandbox path {path} is ~/.claude, inside it, or contains it (same inode)"
+    return None
+
+
 def _allow_path_scope_error(path: Path, home: Path) -> str | None:
     """Why a resolved sandbox path is too broad, or None.
 
@@ -225,7 +296,8 @@ def _allow_path_scope_error(path: Path, home: Path) -> str | None:
     that is, contains, or sits inside one of them would make the two
     rules contradict each other (review F5). `~/.claude` is checked both
     as written and resolved, because it is often a symlink into a
-    dotfiles repo (review N4).
+    dotfiles repo (review N4). String rules come first; the last check
+    compares inodes, which also catches firmlinks (review N4-F).
     """
     claude_dirs = (home / ".claude", (home / ".claude").resolve())
     if path == Path("/"):
@@ -236,7 +308,7 @@ def _allow_path_scope_error(path: Path, home: Path) -> str | None:
         return f"sandbox path {path} must not be ~/.claude, inside it, or contain it"
     if len(path.parts) <= 2:
         return f"sandbox path {path} must not be a top-level directory"
-    return None
+    return _inode_scope_error(path, home, claude_dirs[1])
 
 
 def validate_allow_paths(

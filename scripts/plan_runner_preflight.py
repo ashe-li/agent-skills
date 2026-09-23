@@ -16,6 +16,9 @@ healthy plan, which is worse than missing a check):
 
 - Only the `Command:` field is scanned. `Action:` backticks are mostly file
   paths and function names, so they are never treated as tools.
+- Shell comments go first: an unquoted `#` at the start of a word (after
+  whitespace, an operator, or at the beginning) drops the rest of its
+  line, while `a#b`, `${#arr}`, `$#` and a quoted or escaped `#` stay.
 - The whole command is tokenized once with `shlex` (POSIX quoting,
   `punctuation_chars` for operators), so `;`, `&&`, `||`, `|`, `&`, `(` and
   newlines only separate commands when they are unquoted and unescaped:
@@ -72,7 +75,7 @@ _KEYWORDS_KEEP_COMMAND = frozenset({
 })
 # Keywords that close a construct or introduce non-command words.
 _KEYWORDS_END_COMMAND = frozenset({
-    "fi", "done", "esac", "}", "]]", "in", "for", "select",
+    "fi", "done", "esac", "}", "]]", "in", "for", "select", "coproc",
 })
 # Keywords whose whole body is skipped up to the matching closing word.
 _KEYWORDS_SKIP_TO = {"[[": "]]", "case": "esac"}
@@ -81,6 +84,9 @@ _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _OPERATOR_CHARS = "();<>|&\n"
 _SEPARATOR_CHARS = frozenset(";&|(\n")
 _QUOTING_CHARS = ("'", '"', "\\")
+# A `#` starts a comment only at the start of a word: after whitespace, an
+# operator, or at the very beginning. `a#b`, `${#arr}` and `$#` are words.
+_COMMENT_MAY_FOLLOW = frozenset(" \t\r\n;&|()<>")
 
 Which = Callable[[str], "str | None"]
 
@@ -134,6 +140,36 @@ def _is_operator(text: str, raw: str) -> bool:
         and all(ch in _OPERATOR_CHARS for ch in text)
         and not any(q in raw for q in _QUOTING_CHARS)
     )
+
+
+def _quote_state(quote: str | None, ch: str) -> str | None:
+    """Quote context after reading `ch` (escapes are handled by the caller)."""
+    if quote is None:
+        return ch if ch in ("'", '"') else None
+    return None if ch == quote else quote
+
+
+def _strip_comments(command: str) -> str:
+    """Drop each unquoted, word-initial `#` and the rest of its line.
+
+    shlex's own `commenters` would also cut `a#b` and `${#arr}` mid-word,
+    so this follows the shell rule instead (review N1).
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        escapes = ch == "\\" and quote != "'"
+        at_word_start = i == 0 or command[i - 1] in _COMMENT_MAY_FOLLOW
+        if quote is None and ch == "#" and at_word_start:
+            end = command.find("\n", i)
+            i = len(command) if end < 0 else end
+            continue
+        out.append(command[i:i + 2] if escapes else ch)
+        quote = quote if escapes else _quote_state(quote, ch)
+        i += 2 if escapes else 1
+    return "".join(out)
 
 
 def _tokenize(command: str) -> tuple[_Token, ...] | None:
@@ -268,7 +304,7 @@ def _scan(state: _ScanState, token: _Token, next_token: _Token | None) -> _ScanS
 
 def extract_tools(command: str | None) -> tuple[str, ...]:
     """Tools one `Command:` value needs, in first-seen order, de-duplicated."""
-    tokens = _tokenize(command or "")
+    tokens = _tokenize(_strip_comments(command or ""))
     if tokens is None:
         return ()
     state = _ScanState()

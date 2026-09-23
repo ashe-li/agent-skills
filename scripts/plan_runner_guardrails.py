@@ -32,13 +32,17 @@ APPROVAL_FALSE_VALUES = frozenset({"false", "no", "0", "none", ""})
 _APPROVAL_VALUE_STRIP = " \t`'\"*_"
 # `  - Requires-Approval: x` with the tolerance people actually type: any
 # case, `-` / `_` / space / nothing between the words, `**bold**` or
-# `__bold__` around the key (with or without the colon inside), full-width
-# colon. Indented like every other step field.
+# `__bold__` around the key (with or without the colon inside), `:` / `：`
+# / `=`, a `-` / `*` / `+` bullet or none, any indentation (review N2).
 _REQUIRES_APPROVAL_FIELD_RE = re.compile(
-    r"^\s+-\s+(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：]"
+    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：=]"
     r"(?:\*\*|__)?\s*(?P<val>.*)$",
     re.IGNORECASE,
 )
+# Any spelling of the word: approval, aproval, approvals, approve(d).
+_APPROVAL_HINT_RE = re.compile(r"ap{1,2}r{1,2}o?v", re.IGNORECASE)
+# A bulleted `key: value` line — the shape of a step field.
+_FIELD_LIKE_LINE_RE = re.compile(r"^\s*[-*+]\s+(?P<key>[^:：=]{1,80})[:：=]")
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -88,6 +92,40 @@ def match_requires_approval_field(line: str) -> str | None:
     """The raw value when `line` is a Requires-Approval step field, else None."""
     match = _REQUIRES_APPROVAL_FIELD_RE.match(line)
     return match.group("val").strip() if match else None
+
+
+def approval_line(
+    step_id: str, line: str, *, known_field: bool,
+) -> tuple[bool | None, str | None] | None:
+    """(gated, init warning) for a step line that bears on the gate, else None.
+    gated is None for a line that only earns a warning and no verdict.
+
+    Fail-closed (review N2): a real Requires-Approval field is parsed with
+    the value rules. A bulleted `key: value` line the parser does not know
+    whose *key* spells approval in any way (`Require-Approval`,
+    `Requires-Aproval`, `Approval-Required`...) gates the step and names
+    the line. When only the value of such a line mentions approval
+    (`Test: approval flow works`) the step is not gated -- that would leave
+    no way to say "no" -- but init still names the line. `known_field`
+    lines (Action, Risk...) and lines that never mention approval are
+    left alone.
+    """
+    value = match_requires_approval_field(line)
+    if value is not None:
+        return parse_requires_approval(value), approval_value_warning(step_id, value)
+    field = _FIELD_LIKE_LINE_RE.match(line)
+    if known_field or field is None or not _APPROVAL_HINT_RE.search(line):
+        return None
+    if _APPROVAL_HINT_RE.search(field.group("key")):
+        return True, (
+            f"{step_id}: line {line.strip()!r} looks like Requires-Approval but the "
+            "key is not recognised; treated as requiring approval (fail-closed). "
+            "Write `Requires-Approval: true` or `false`"
+        )
+    return None, (
+        f"{step_id}: line {line.strip()!r} mentions approval in an unrecognised "
+        "field; not gated. Add `Requires-Approval: true` if a human must sign off"
+    )
 
 
 def approval_value_warning(step_id: str, raw: str) -> str | None:

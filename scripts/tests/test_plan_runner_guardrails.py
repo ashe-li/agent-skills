@@ -99,13 +99,69 @@ class RequiresApprovalFieldLineTests(unittest.TestCase):
 
     def test_other_lines_are_not_the_field(self):
         for line in (
-            "- Requires-Approval: true",
             "  - Action: set Requires-Approval: true later",
             "  - Risk: requires approval from ops",
             "  - Approval: true",
-            "Requires-Approval: true",
         ):
             self.assertIsNone(gr.match_requires_approval_field(line), line)
+
+    def test_list_marker_indent_and_separator_variants(self):
+        """Review N2: `*` / `+` bullets, no indentation and `=` are the same key."""
+        cases = {
+            "  * Requires-Approval: true": "true",
+            "  + Requires-Approval: yes": "yes",
+            "- Requires-Approval: true": "true",
+            "Requires-Approval: true": "true",
+            "  - Requires-Approval = true": "true",
+            "\t- Requires-Approval: no": "no",
+        }
+        for line, value in cases.items():
+            self.assertEqual(gr.match_requires_approval_field(line), value, line)
+
+
+class ApprovalLineTests(unittest.TestCase):
+    """Review N2: a step field that mentions approval but cannot be parsed
+    gates the step and warns; only lines that never mention it are neutral."""
+
+    MISSPELLED = (
+        "  - Require-Approval: true",
+        "  - Requires-Aproval: true",
+        "  - Requires-Approvals: true",
+        "  - Approval-Required: true",
+        "  - Needs-Approval: true",
+        "  - Approval: false",
+        "  * Approver: ops",
+    )
+
+    def test_misspelled_keys_gate_and_name_step_and_line(self):
+        for line in self.MISSPELLED:
+            gated, warning = gr.approval_line("S7", line, known_field=False)
+            self.assertTrue(gated, line)
+            self.assertIn("S7", warning)
+            self.assertIn(line.strip(), warning)
+
+    def test_approval_only_in_an_unknown_value_warns_without_gating(self):
+        gated, warning = gr.approval_line("S7", "  - Test: approval flow works", known_field=False)
+        self.assertIsNone(gated)
+        self.assertIn("S7", warning)
+        self.assertIn("Test: approval flow works", warning)
+
+    def test_parsed_fields_and_plain_lines_are_neutral(self):
+        for line, known in (
+            ("  - Risk: requires approval from ops", True),
+            ("  - Action: approve the release PR", True),
+            ("    - wait for approval", False),
+            ("  - Owner: alice", False),
+            ("    continue once approved", False),
+        ):
+            self.assertIsNone(gr.approval_line("S7", line, known_field=known), line)
+
+    def test_real_field_is_parsed_with_value_rules(self):
+        self.assertEqual(gr.approval_line("S7", "  - Requires-Approval: no", known_field=True),
+                         (False, None))
+        gated, warning = gr.approval_line("S7", "  * Requires-Approval: sure", known_field=False)
+        self.assertTrue(gated)
+        self.assertIn("sure", warning)
 
 
 class RiskyCommandTests(unittest.TestCase):
@@ -229,6 +285,34 @@ class AllowPathScopeTests(unittest.TestCase):
         self.assertIn("$HOME", self._check("~")[1])
         self.assertIn("~/.claude", self._check("~/.claude")[1])
         self.assertIn("top-level", self._check("/usr")[1])
+
+    def test_case_variants_are_rejected(self):
+        """Review N4: APFS is case-insensitive, and resolve() keeps the case
+        as typed, so `~/.Claude` is the same directory as `~/.claude`."""
+        upper_home = str(self.home).upper()
+        for raw in ("~/.Claude", "~/.CLAUDE/settings.json", str(self.home / ".CLAUDE" / "x"),
+                    upper_home, str(self.home.parent).upper()):
+            paths, error = self._check(raw)
+            self.assertEqual(paths, (), raw)
+            self.assertIsNotNone(error, raw)
+
+    def test_symlinked_claude_dir_is_rejected_by_both_names(self):
+        """Review N4: `~/.claude` managed as a symlink into a dotfiles repo."""
+        root = self.home.parent
+        dotfiles = root / "dotfiles" / "claude"
+        (dotfiles / "skills").mkdir(parents=True)
+        home = root / "home2"
+        home.mkdir()
+        (home / ".claude").symlink_to(dotfiles)
+        for raw in ("~/.claude", "~/.claude/skills", str(dotfiles), str(dotfiles / "skills")):
+            paths, error = gr.validate_allow_paths([raw], home, home=home)
+            self.assertEqual(paths, (), raw)
+            self.assertIn(".claude", error, raw)
+        paths, error = gr.validate_allow_paths([str(root / "dotfiles")], home, home=home)
+        self.assertEqual(paths, ())
+        self.assertIn(".claude", error)
+        ok, error = gr.validate_allow_paths([str(root / "dotfiles" / "other")], home, home=home)
+        self.assertIsNone(error)
 
     def test_paths_inside_home_are_still_fine(self):
         paths, error = gr.validate_allow_paths(
@@ -376,6 +460,72 @@ class ParsePlanApprovalFailClosedTests(unittest.TestCase):
             parsed = pr.parse_plan(path)
         self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
         self.assertEqual(parsed["warnings"], [])
+
+
+def _parse_plan_text(*fields: str) -> str:
+    return "\n".join([
+        "# P", "", "### Phase 1: A", "",
+        "- [ ] S1 First", "  - Action: do A", *fields, "  - Command: `make deploy-prod`",
+        "- [ ] S2 Second", "  - Dependencies: S1", "",
+    ])
+
+
+def _parse_s1(*fields: str) -> dict:
+    body = _parse_plan_text(*fields)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "p.md"
+        path.write_text(body, encoding="utf-8")
+        return pr.parse_plan(path)
+
+
+class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
+    """Review N2 (key typos / format) and N3 (repeated lines)."""
+
+    def test_misspelled_keys_gate_and_warn(self):
+        for line in ApprovalLineTests.MISSPELLED[:5] + ("  - Requires-Approval = true",):
+            with self.subTest(line=line):
+                parsed = _parse_s1(line)
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
+        typo = _parse_s1("  - Require-Approval: true")
+        self.assertTrue(any("S1" in w and "Require-Approval" in w for w in typo["warnings"]),
+                        typo["warnings"])
+
+    def test_format_variants_gate_without_warning(self):
+        for line in ("  * Requires-Approval: true", "- Requires-Approval: true",
+                     "  - Requires-Approval = true"):
+            with self.subTest(line=line):
+                parsed = _parse_s1(line)
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                self.assertEqual(parsed["warnings"], [])
+
+    def test_value_only_mention_warns_but_does_not_decide(self):
+        parsed = _parse_s1("  - Test: approval flow works", "  - Requires-Approval: false")
+        self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
+        self.assertEqual(len(parsed["warnings"]), 1, parsed["warnings"])
+        self.assertNotIn("conflict", parsed["warnings"][0])
+
+    def test_no_mention_of_approval_is_ungated(self):
+        parsed = _parse_s1("  - Owner: alice")
+        self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
+        self.assertEqual(parsed["warnings"], [])
+
+    def test_any_true_line_wins_and_conflict_warns(self):
+        for lines in (("true", "false"), ("false", "true"), ("no", "yes", "no")):
+            with self.subTest(lines=lines):
+                parsed = _parse_s1(*(f"  - Requires-Approval: {v}" for v in lines))
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                conflict = [w for w in parsed["warnings"] if "conflict" in w]
+                self.assertEqual(len(conflict), 1, parsed["warnings"])
+                self.assertIn("S1", conflict[0])
+
+    def test_repeated_agreeing_lines_do_not_warn(self):
+        self.assertTrue(_parse_s1("  - Requires-Approval: true", "  - Requires-Approval: yes")
+                        ["steps"]["S1"]["requires_approval"])
+        both_false = _parse_s1("  - Requires-Approval: false", "  - Requires-Approval: no")
+        self.assertFalse(both_false["steps"]["S1"]["requires_approval"])
+        self.assertEqual(both_false["warnings"], [])
+        self.assertNotIn("_approval_lines", both_false["steps"]["S1"])
 
 
 class HookApprovalGateTests(unittest.TestCase):
@@ -708,6 +858,17 @@ class GuardrailCliTests(unittest.TestCase):
         warnings = json.loads(result.stdout)["warnings"]
         self.assertTrue(any(gr.SANDBOX_ENV_VAR in w and ".claude" in w for w in warnings))
         self.assertEqual(self._state()["allowed_paths"], [])
+
+    def test_misspelled_and_conflicting_approval_are_gated_end_to_end(self):
+        """Review N2 / N3 through the CLI: gated, warned, `start` refused."""
+        for fields in (("  - Require-Approval: true",), ("  - Requires-Aproval: true",),
+                       ("  - Requires-Approval: true", "  - Requires-Approval: false")):
+            with self.subTest(fields=fields):
+                self.plan.write_text(_parse_plan_text(*fields), encoding="utf-8")
+                data = json.loads(self._init("--force").stdout)
+                self.assertEqual(data["awaiting_approval_steps"], ["S1"])
+                self.assertTrue(any("S1" in w for w in data["warnings"]), data["warnings"])
+                self.assertNotEqual(self._run("start", str(self.plan), "S1").returncode, 0)
 
     def test_init_rejects_bad_allow_path(self):
         result = self._init("--allow-path", "/tmp/x\nPWNED")

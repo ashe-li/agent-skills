@@ -17,6 +17,7 @@ refuses it, but work done without `start` is still not prevented.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -32,13 +33,17 @@ APPROVAL_FALSE_VALUES = frozenset({"false", "no", "0", "none", ""})
 _APPROVAL_VALUE_STRIP = " \t`'\"*_"
 # `  - Requires-Approval: x` with the tolerance people actually type: any
 # case, `-` / `_` / space / nothing between the words, `**bold**` or
-# `__bold__` around the key (with or without the colon inside), full-width
-# colon. Indented like every other step field.
+# `__bold__` around the key (with or without the colon inside), `:` / `：`
+# / `=`, a `-` / `*` / `+` bullet or none, any indentation (review N2).
 _REQUIRES_APPROVAL_FIELD_RE = re.compile(
-    r"^\s+-\s+(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：]"
+    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：=]"
     r"(?:\*\*|__)?\s*(?P<val>.*)$",
     re.IGNORECASE,
 )
+# Any spelling of the word: approval, aproval, approvals, approve(d).
+_APPROVAL_HINT_RE = re.compile(r"ap{1,2}r{1,2}o?v", re.IGNORECASE)
+# A bulleted `key: value` line — the shape of a step field.
+_FIELD_LIKE_LINE_RE = re.compile(r"^\s*[-*+]\s+(?P<key>[^:：=]{1,80})[:：=]")
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -88,6 +93,47 @@ def match_requires_approval_field(line: str) -> str | None:
     """The raw value when `line` is a Requires-Approval step field, else None."""
     match = _REQUIRES_APPROVAL_FIELD_RE.match(line)
     return match.group("val").strip() if match else None
+
+
+def approval_line(
+    step_id: str, line: str, *, known_field: bool,
+) -> tuple[bool | None, str | None] | None:
+    """(gated, init warning) for a step line that bears on the gate, else None.
+    gated is None for a line that only earns a warning and no verdict.
+
+    Fail-closed (review N2): a real Requires-Approval field is parsed with
+    the value rules. A bulleted `key: value` line the parser does not know
+    whose *key* spells approval in any way (`Require-Approval`,
+    `Requires-Aproval`, `Approval-Required`...) gates the step and names
+    the line. When only the value of such a line mentions approval
+    (`Test: approval flow works`) the step is not gated -- that would leave
+    no way to say "no" -- but init still names the line. `known_field`
+    lines (Action, Risk...) and lines that never mention approval are
+    left alone.
+    """
+    value = match_requires_approval_field(line)
+    if value is not None:
+        return parse_requires_approval(value), approval_value_warning(step_id, value)
+    field = _FIELD_LIKE_LINE_RE.match(line)
+    if known_field or field is None or not _APPROVAL_HINT_RE.search(line):
+        return None
+    if _APPROVAL_HINT_RE.search(field.group("key")):
+        return True, (
+            f"{step_id}: line {line.strip()!r} looks like Requires-Approval but the "
+            "key is not recognised; treated as requiring approval (fail-closed). "
+            "Write `Requires-Approval: true` or `false`"
+        )
+    return None, (
+        f"{step_id}: line {line.strip()!r} mentions approval in an unrecognised "
+        "field; not gated. Add `Requires-Approval: true` if a human must sign off"
+    )
+
+
+def approval_conflict_warning(step_id: str) -> str:
+    return (
+        f"{step_id}: Requires-Approval appears more than once with conflicting "
+        "values; any true wins (treated as requiring approval)"
+    )
 
 
 def approval_value_warning(step_id: str, raw: str) -> str | None:
@@ -158,20 +204,36 @@ def _expand_home(raw: str, home: Path) -> Path:
     return Path(raw).expanduser()
 
 
+def _folded(path: Path) -> tuple[str, ...]:
+    """Path parts compared case-insensitively. macOS volumes usually are,
+    and resolve() keeps the case as typed, so `~/.Claude` would otherwise
+    slip past a check for `~/.claude` (review N4). On a case-sensitive
+    volume this only refuses a little more, never less."""
+    return tuple(os.path.normcase(part).casefold() for part in path.parts)
+
+
+def _contains(outer: Path, inner: Path) -> bool:
+    """True when `inner` is `outer` or anywhere below it."""
+    folded_outer = _folded(outer)
+    return _folded(inner)[:len(folded_outer)] == folded_outer
+
+
 def _allow_path_scope_error(path: Path, home: Path) -> str | None:
     """Why a resolved sandbox path is too broad, or None.
 
     The hook rule says "never touch ~/.claude or /", so a sandbox entry
     that is, contains, or sits inside one of them would make the two
-    rules contradict each other (review F5).
+    rules contradict each other (review F5). `~/.claude` is checked both
+    as written and resolved, because it is often a symlink into a
+    dotfiles repo (review N4).
     """
-    claude_dir = home / ".claude"
+    claude_dirs = (home / ".claude", (home / ".claude").resolve())
     if path == Path("/"):
         return "sandbox path must not be the filesystem root /"
-    if path == claude_dir or claude_dir in path.parents:
-        return f"sandbox path {path} must not be ~/.claude or inside it"
-    if path == home or path in home.parents:
+    if _contains(path, home):
         return f"sandbox path {path} must not be $HOME or a directory containing it"
+    if any(_contains(c, path) or _contains(path, c) for c in claude_dirs):
+        return f"sandbox path {path} must not be ~/.claude, inside it, or contain it"
     if len(path.parts) <= 2:
         return f"sandbox path {path} must not be a top-level directory"
     return None

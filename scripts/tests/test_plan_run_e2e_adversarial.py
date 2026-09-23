@@ -1,6 +1,6 @@
 """Adversarial E2E: inject the failures plan-run is supposed to survive.
 
-Six scenarios, each in its own fake $HOME, driven only through the CLI and
+Ten scenarios, each in its own fake $HOME, driven only through the CLI and
 the `hook-stop` entry point as subprocesses (see plan_run_e2e_support.py):
 
   C1 a script is missing (a Command: tool, the state file, the runner itself)

@@ -137,6 +137,27 @@ class ExtractToolsShellSyntaxTests(unittest.TestCase):
     def test_newline_separates_commands(self):
         self.assertTools("make\ngit status", ("make", "git"))
 
+    def test_comments_are_not_commands(self):
+        """Review N1: text after an unquoted word-initial `#` is a comment."""
+        self.assertTools("make -v  # prints version; harmless", ("make",))
+        self.assertTools("ls  # list files; then continue", ("ls",))
+        self.assertTools("git status # TODO: fix later; see issue", ("git",))
+        self.assertTools("make;# trailing; nope\ngit status", ("make", "git"))
+        self.assertTools("(# c; nope\nmake)", ("make",))
+        self.assertTools("# whole line; nope\nmake", ("make",))
+
+    def test_hash_that_is_not_a_comment_is_kept(self):
+        self.assertTools("a#b c; make", ("a#b", "make"))
+        self.assertTools('echo "x # y; nope" && make', ("make",))
+        self.assertTools("echo '# y; nope' && make", ("make",))
+        self.assertTools("echo ${#arr}; make", ("make",))
+        self.assertTools("echo $#; make", ("make",))
+        self.assertTools(r"echo \# y; make", ("make",))
+        self.assertTools('echo "a \\" # y; nope" && make', ("make",))
+
+    def test_coproc_is_not_a_tool(self):
+        self.assertTools("coproc x", ())
+
     def test_keyword_as_argument_is_not_special(self):
         self.assertTools("echo done if then && make", ("make",))
 

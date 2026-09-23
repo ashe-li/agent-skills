@@ -12,6 +12,7 @@
 
 ### Changed
 - **`plan_runner.py` 會載入同目錄的 `plan_runner_preflight.py`、`plan_runner_checkpoint.py`**：`_import_sibling()` 在 import 前把 `scripts/` 補進 `sys.path`，用 `importlib.util.spec_from_file_location` 載入（`python3 -I`、cwd 不在 scripts/）也能運作；hook 路徑遇到 `ImportError` 就略過 preflight，只複製 `plan_runner.py` 一個檔案的舊式安裝不會讓每個 Stop event 報錯。`AGENT_SKILLS_DIR` 須指向完整 checkout，見 `scripts/hooks/README.md`。
+- **CI 開始跑 `scripts/tests/`**：`skill-quality.yml` 新增 `unit-tests` job 執行 `python -m unittest discover scripts/tests`，`paths` 觸發條件補上 `scripts/**` 與 workflow 本身。先前 CI 只跑 SKILL.md 品質檢查與 golden set，改 runner 的 PR 不會觸發任何測試，測試再多也不擋 merge。
 
 ## [v3.2.0] - 2026-09-17
 

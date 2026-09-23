@@ -165,6 +165,30 @@ class ApprovalLineTests(unittest.TestCase):
             self.assertIsNotNone(result, line)
             self.assertTrue(result[0], line)
 
+    def test_backtick_wrapped_key_is_the_field(self):
+        """r3b: `` `Requires-Approval`: true `` used to parse as no approval."""
+        for line, gated in (
+            ("  - `Requires-Approval`: true", True),
+            ("  - `Requires-Approval:` yes", True),
+            ("  - **`Requires-Approval`**: true", True),
+            ("  - `Requires-Approval`: false", False),
+            ("  - ``Requires-Approval``: no", False),
+        ):
+            self.assertEqual(gr.approval_line("S7", line, known_field=False), (gated, None), line)
+
+    def test_key_position_hint_fails_closed_whatever_the_wrapping(self):
+        """r3b backstop: a key that spells approval gates, backticks or not."""
+        for line in ("  - `Require-Approval`: true", "  - `Approver`: ops",
+                     "  1. __`Needs-Approval`__: yes"):
+            gated, warning = gr.approval_line("S7", line, known_field=False)
+            self.assertTrue(gated, line)
+            self.assertIn("S7", warning)
+
+    def test_backticks_in_free_text_do_not_make_a_key(self):
+        for line in ("- see the `approve` step: later", "- run `approve` first: then deploy",
+                     "- User review + approve（改 Status: APPROVED）"):
+            self.assertIsNone(gr.approval_line("S7", line, known_field=False), line)
+
     def test_missing_separator_gates_and_warns(self):
         for line in ("  - Requires-Approval true", "  - Requires-Approval - true",
                      "  1. Requires Approval yes"):
@@ -584,7 +608,8 @@ class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
         self.assertEqual(parsed["warnings"], [])
 
     def test_residual_shapes_gate_through_parse_plan(self):
-        for line in ApprovalLineTests.RESIDUAL + ("  - Requires-Approval true",):
+        for line in ApprovalLineTests.RESIDUAL + ("  - Requires-Approval true",
+                                                  "  - `Requires-Approval`: true"):
             with self.subTest(line=line):
                 parsed = _parse_s1(line)
                 self.assertTrue(parsed["steps"]["S1"]["requires_approval"])

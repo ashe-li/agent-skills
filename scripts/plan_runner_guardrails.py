@@ -2,7 +2,8 @@
 out-of-scope instruction log.
 
 Everything here is pure except validate_allow_paths(), which resolves each
-path (it only runs from `init`, never from the hook). No environment reads, no import of plan_runner (it is loaded
+path (it only runs from `init`, never from the hook) and, when the caller
+passes no `home`, falls back to Path.home(). No other environment reads, no import of plan_runner (it is loaded
 by path in tests, so a back-import would create a second copy of that
 module). Where plan_runner's own sanitizers and fence are needed, the caller
 passes them in.
@@ -23,6 +24,21 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 SANDBOX_ENV_VAR = "PLAN_SANDBOX_ROOT"
 REQUIRES_APPROVAL_KEYS = ("Requires-Approval", "Requires_Approval")
 APPROVAL_TRUE_VALUES = frozenset({"true", "yes", "1"})
+# The only values that turn the gate off. The gate is fail-closed: any other
+# value (a typo, `required`, `true (prod deploy)`) still gates the step, and
+# init warns about it, because a safety gate that silently opens on a value
+# it cannot read is worse than one that asks a human once too often.
+APPROVAL_FALSE_VALUES = frozenset({"false", "no", "0", "none", ""})
+_APPROVAL_VALUE_STRIP = " \t`'\"*_"
+# `  - Requires-Approval: x` with the tolerance people actually type: any
+# case, `-` / `_` / space / nothing between the words, `**bold**` or
+# `__bold__` around the key (with or without the colon inside), full-width
+# colon. Indented like every other step field.
+_REQUIRES_APPROVAL_FIELD_RE = re.compile(
+    r"^\s+-\s+(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：]"
+    r"(?:\*\*|__)?\s*(?P<val>.*)$",
+    re.IGNORECASE,
+)
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -51,9 +67,37 @@ OUT_OF_SCOPE_SOURCE_MAX_CHARS = 200
 OUT_OF_SCOPE_LOG_MAX_ENTRIES = 50
 
 
+def _normalise_approval_value(raw: str) -> str:
+    return raw.strip(_APPROVAL_VALUE_STRIP).lower()
+
+
 def parse_requires_approval(raw: str) -> bool:
-    """`true` / `yes` / `1` (any case, optional backticks) mean gated."""
-    return raw.strip().strip("`").strip().lower() in APPROVAL_TRUE_VALUES
+    """Fail-closed: only `false` / `no` / `0` / `none` / empty (any case,
+    optional backticks, quotes or bold) leave the step ungated."""
+    return _normalise_approval_value(raw) not in APPROVAL_FALSE_VALUES
+
+
+def is_recognised_approval_value(raw: str) -> bool:
+    """False for a value that is gated only because it could not be read;
+    the parser turns that into an init warning."""
+    value = _normalise_approval_value(raw)
+    return value in APPROVAL_TRUE_VALUES or value in APPROVAL_FALSE_VALUES
+
+
+def match_requires_approval_field(line: str) -> str | None:
+    """The raw value when `line` is a Requires-Approval step field, else None."""
+    match = _REQUIRES_APPROVAL_FIELD_RE.match(line)
+    return match.group("val").strip() if match else None
+
+
+def approval_value_warning(step_id: str, raw: str) -> str | None:
+    """init warning for a value that gated the step without being understood."""
+    if is_recognised_approval_value(raw):
+        return None
+    return (
+        f"{step_id}: Requires-Approval value {raw.strip()!r} is not true/false; "
+        "treated as requiring approval (fail-closed). Write `true` or `false`"
+    )
 
 
 def risky_command_in(text: Any) -> str | None:
@@ -107,8 +151,34 @@ def _allow_path_error(raw: str) -> str | None:
     return None
 
 
+def _expand_home(raw: str, home: Path) -> Path:
+    """`~` and `~/x` against the given home; `~user` via the OS."""
+    if raw == "~" or raw.startswith("~/"):
+        return home / raw[2:]
+    return Path(raw).expanduser()
+
+
+def _allow_path_scope_error(path: Path, home: Path) -> str | None:
+    """Why a resolved sandbox path is too broad, or None.
+
+    The hook rule says "never touch ~/.claude or /", so a sandbox entry
+    that is, contains, or sits inside one of them would make the two
+    rules contradict each other (review F5).
+    """
+    claude_dir = home / ".claude"
+    if path == Path("/"):
+        return "sandbox path must not be the filesystem root /"
+    if path == claude_dir or claude_dir in path.parents:
+        return f"sandbox path {path} must not be ~/.claude or inside it"
+    if path == home or path in home.parents:
+        return f"sandbox path {path} must not be $HOME or a directory containing it"
+    if len(path.parts) <= 2:
+        return f"sandbox path {path} must not be a top-level directory"
+    return None
+
+
 def validate_allow_paths(
-    raw_paths: Sequence[str], base: Path,
+    raw_paths: Sequence[str], base: Path, *, home: Path | None = None,
 ) -> tuple[tuple[str, ...], str | None]:
     """Resolve sandbox paths against `base`; reject rather than repair.
 
@@ -116,21 +186,25 @@ def validate_allow_paths(
     be a file: an output directory is often created by the step itself.
     Text that merely looks like a path is not this function's problem --
     the hook prints every value inside the data fence, which is where the
-    injection defence lives. `/` is refused outright: a sandbox rooted at
-    `/` is no sandbox.
+    injection defence lives. Each value is resolved first (`~`, `..`,
+    symlinks), then refused when it is `/`, a top-level directory such as
+    `/private` (what `/tmp/..` becomes on macOS), `$HOME` or any directory
+    containing it, or `~/.claude` or anything inside it.
     """
     if len(raw_paths) > ALLOW_PATHS_MAX_ITEMS:
         return (), f"at most {ALLOW_PATHS_MAX_ITEMS} sandbox paths"
+    home_real = (home if home is not None else Path.home()).resolve()
     resolved: list[str] = []
     for raw in raw_paths:
         problem = _allow_path_error(raw)
         if problem:
             return (), f"sandbox path {raw!r} {problem}"
-        path = str((base / Path(raw).expanduser()).resolve())
-        if path == "/":
-            return (), "sandbox path must not be the filesystem root /"
-        if path not in resolved:
-            resolved.append(path)
+        path = (base / _expand_home(raw, home_real)).resolve()
+        scope_error = _allow_path_scope_error(path, home_real)
+        if scope_error:
+            return (), scope_error
+        if str(path) not in resolved:
+            resolved.append(str(path))
     return tuple(resolved), None
 
 

@@ -163,6 +163,23 @@ def expand_deps(
     return expanded
 
 
+def _approval_field(raw: str, step_id: str) -> tuple[bool, str | None] | None:
+    """(gated, init warning) when `raw` is a Requires-Approval field line.
+
+    The key is matched leniently (bold, space, any case) and the value
+    fail-closed — see plan_runner_guardrails (review F4). Guardrails are
+    only imported for lines that mention approval, so a runner copied
+    without its siblings still parses plans that never use the gate.
+    """
+    if "approval" not in raw.lower():
+        return None
+    gr = _import_sibling("plan_runner_guardrails")
+    value = gr.match_requires_approval_field(raw)
+    if value is None:
+        return None
+    return gr.parse_requires_approval(value), gr.approval_value_warning(step_id, value)
+
+
 def parse_plan(plan_path: Path) -> dict[str, Any]:
     """Parse plan.md into step graph."""
     text = plan_path.read_text(encoding="utf-8")
@@ -239,6 +256,12 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
             continue
 
         if current_step_id:
+            approval = _approval_field(raw, current_step_id)
+            if approval is not None:
+                steps[current_step_id]["requires_approval"] = approval[0]
+                parse_warnings.extend(w for w in approval[1:] if w)
+                in_action_block = False
+                continue
             m_field = field_re.match(raw)
             if m_field:
                 key = m_field.group("key").lower()
@@ -265,11 +288,6 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
                     in_action_block = False
                 elif key == "risk":
                     steps[current_step_id]["risk"] = val
-                    in_action_block = False
-                elif key in ("requires-approval", "requires_approval"):
-                    steps[current_step_id]["requires_approval"] = (
-                        _import_sibling("plan_runner_guardrails").parse_requires_approval(val)
-                    )
                     in_action_block = False
                 continue
 
@@ -726,6 +744,15 @@ def recompute_blocked_status(state: dict[str, Any]) -> None:
             step["status"] = PENDING
 
 
+def step_start_count(step: dict[str, Any]) -> int:
+    """How many times `start` has moved this step to in_progress. State is
+    user-writable, so anything but a non-negative int reads as 0."""
+    value = step.get("start_count")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 def transition_step(
     state: dict[str, Any],
     step_id: str,
@@ -742,6 +769,9 @@ def transition_step(
     step["status"] = new_status
     if new_status == IN_PROGRESS:
         step["started_at"] = now_iso()
+        # Survives `reset` on purpose: the hook's STUCK count compares it
+        # to tell "start was never run" from "start ran, then fail + reset".
+        step["start_count"] = step_start_count(step) + 1
         if kwargs.get("task_id"):
             step["task_id"] = kwargs["task_id"]
         if kwargs.get("session_id"):
@@ -941,20 +971,23 @@ def _awaiting_approval_lines(awaiting: list[str]) -> list[str]:
     ]
 
 
-def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
-    """Markdown rendering. Skips empty sections to save tokens.
-    Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
+def _state_view_header_lines(data: dict[str, Any]) -> list[str]:
+    """Progress, parent task and per-status counts (empty parts skipped)."""
     s = data["summary"]
-    lines: list[str] = []
-    progress = s["progress"]
-    lines.append(f"Progress: {progress}" + (" — ALL DONE" if s["all_done"] else ""))
+    lines = [f"Progress: {s['progress']}" + (" — ALL DONE" if s["all_done"] else "")]
     parent = data.get("parent_task_id")
     if parent:
         lines.append(f"Parent task: {parent}")
-    counts = s["by_status"]
-    counts_str = " | ".join(f"{k}:{v}" for k, v in counts.items() if v)
+    counts_str = " | ".join(f"{k}:{v}" for k, v in s["by_status"].items() if v)
     if counts_str:
         lines.append(counts_str)
+    return lines
+
+
+def _format_state_view_lines(data: dict[str, Any]) -> list[str]:
+    """Markdown rendering. Skips empty sections to save tokens.
+    Ready-steps split into 'new' (full block) and 'still' (IDs only)."""
+    lines = _state_view_header_lines(data)
 
     new_ready = data.get("ready_steps_new", [])
     still_ready = data.get("ready_steps_still", [])
@@ -1223,7 +1256,11 @@ _POINTER_COUNTER_FIELDS = ("consecutive_blocks", "bg_poll_count", "nag_counts")
 # by an older build stays VALID instead of being condemned as malformed —
 # validate_pointer() failing would disable auto-advance for that cwd, which
 # is a far worse outcome than a missing nag counter.
-_POINTER_OPTIONAL_COUNTER_FIELDS = ("assign_repeat_count", "turn_start_completed")
+_POINTER_OPTIONAL_COUNTER_FIELDS = (
+    "assign_repeat_count", "turn_start_completed",
+    # The step's start_count when it was last handed out (review F2).
+    "assigned_start_count",
+)
 
 
 class ResolvedPointer(NamedTuple):
@@ -2772,16 +2809,27 @@ def _branch_in_progress(ctx: _HookContext) -> HookDecision | None:
 
 
 def _record_assignment(ctx: _HookContext, step_id: str) -> int:
-    """Count how many times in a row we have handed out this same step.
+    """Count how many times in a row we have handed out this same step
+    without a `start` of it in between.
 
     Reset by the assignment changing, not by the turn changing — see the
-    note on _HOOK_TURN_COUNTERS. Branch (9) clears it as soon as a step is
-    actually in progress, which is the only proof that a `start` we asked
-    for was really run.
+    note on _HOOK_TURN_COUNTERS. Proof that a `start` we asked for was
+    really run resets it too: branch (9) seeing the step in progress, or
+    the step's `start_count` having moved since the last assignment — the
+    latter catches start -> fail -> reset inside one turn, which leaves the
+    step pending again and is invisible to (9) (review F2).
     """
+    starts = step_start_count(ctx.state["steps"][step_id])
+    recorded = ctx.pointer.get("assigned_start_count")
+    # A pointer from before the field existed has no record: keep its streak.
+    same_attempt = recorded is None or recorded == starts
     previous = _hook_str(ctx.pointer.get("last_assigned_step_id"))
-    count = ctx.counter("assign_repeat_count") + 1 if previous == step_id else 1
-    ctx.update(last_assigned_step_id=step_id, assign_repeat_count=count)
+    repeat = previous == step_id and same_attempt
+    count = ctx.counter("assign_repeat_count") + 1 if repeat else 1
+    ctx.update(
+        last_assigned_step_id=step_id, assign_repeat_count=count,
+        assigned_start_count=starts,
+    )
     if count == 1:
         ctx.update(attempt_first_at=now_iso())
     return count
@@ -3300,6 +3348,41 @@ def _init_allowed_paths(
     return tuple(dict.fromkeys((*flags, *env_paths))), None, warnings
 
 
+def _dag_error_payload(
+    plan_path: Path, parsed: dict[str, Any], errors: list[str],
+) -> dict[str, Any]:
+    """`init`'s error payload for a plan whose DAG does not validate."""
+    payload: dict[str, Any] = {
+        "error": "DAG validation failed",
+        "details": errors,
+        "warnings": parsed["warnings"],
+    }
+    if any("No steps found" in e for e in errors):
+        payload["hint"] = (
+            "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
+            f"Try: plan_runner.py normalize {plan_path} --diff "
+            f"→ if diff looks reasonable: --write → re-run init."
+        )
+    return payload
+
+
+def _attach_after_init(plan_path: Path, fmt: str) -> None:
+    """Attach the cwd pointer after a successful `init`.
+
+    attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
+    JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
+    文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
+    """
+    attach_stream = sys.stderr if fmt == "json" else sys.stdout
+    pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
+    if error is not None:
+        print(error, file=attach_stream)
+        return
+    _print_attach_result(
+        plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
+    )
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     if not plan_path.exists():
@@ -3312,18 +3395,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     parsed = parse_plan(plan_path)
     errors = validate_dag(parsed)
     if errors:
-        payload: dict[str, Any] = {
-            "error": "DAG validation failed",
-            "details": errors,
-            "warnings": parsed["warnings"],
-        }
-        if any("No steps found" in e for e in errors):
-            payload["hint"] = (
-                "Plan may be in planner-agent format (e.g. `**Step N: title**`). "
-                f"Try: plan_runner.py normalize {plan_path} --diff "
-                f"→ if diff looks reasonable: --write → re-run init."
-            )
-        emit(payload)
+        emit(_dag_error_payload(plan_path, parsed, errors))
         return 1
     existing = load_state(plan_path)
     if existing and not args.force:
@@ -3336,6 +3408,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         plan_path, parsed, getattr(args, "require_summary", False), allowed_paths,
     )
     save_state(plan_path, state)
+    _refresh_checkpoint_if_present(plan_path, state)
     risky = _import_sibling("plan_runner_guardrails").risky_step_warnings(state["steps"])
     ready_now, awaiting = _split_ready_for_cli(state)
     payload = {
@@ -3351,17 +3424,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     }
     emit_formatted(payload, args.format, format_init_md)
     if getattr(args, "attach", True):
-        # attach 的成功／失敗訊息是給人看的旁白，不是 payload 的一部分。
-        # JSON 模式把它們寫到 stderr，stdout 才會維持成單一可 json.loads 的
-        # 文件（CodeRabbit on PR #67）。md 模式維持原本全部走 stdout。
-        attach_stream = sys.stderr if args.format == "json" else sys.stdout
-        pointer_path, error = _attach_pointer_for_cwd(plan_path, Path.cwd())
-        if error is not None:
-            print(error, file=attach_stream)
-        else:
-            _print_attach_result(
-                plan_path, Path.cwd().resolve(), pointer_path, stream=attach_stream,
-            )
+        _attach_after_init(plan_path, args.format)
     return 0
 
 
@@ -3396,6 +3459,28 @@ def _split_ready_for_cli(state: dict[str, Any]) -> tuple[list[str], list[str]]:
     return list(assignable), list(gated)
 
 
+def _in_progress_entries(state: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = state["steps"]
+    return [
+        {"id": sid, "title": steps[sid]["title"], "task_id": steps[sid]["task_id"]}
+        for sid in sorted(sid for sid, s in steps.items() if s["status"] == IN_PROGRESS)
+    ]
+
+
+def _blocked_entries(state: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = state["steps"]
+    return [
+        {
+            "id": sid,
+            "title": steps[sid]["title"],
+            "failed_deps": [
+                d for d in steps[sid]["deps"] if steps.get(d, {}).get("status") == FAILED
+            ],
+        }
+        for sid in compute_blocked_steps(state)
+    ]
+
+
 def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, Any]:
     """Shared state-view payload — embed in transition outputs so callers
     don't need a follow-up `next` call.
@@ -3410,10 +3495,6 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
     ready set so the next call's delta is computed correctly.
     """
     current_ready, awaiting = _split_ready_for_cli(state)
-    in_progress = sorted(
-        sid for sid, s in state["steps"].items() if s["status"] == IN_PROGRESS
-    )
-    blocked = compute_blocked_steps(state)
 
     if mode == "full":
         prev_reported: set[str] = set()
@@ -3432,25 +3513,8 @@ def _build_state_view(state: dict[str, Any], mode: str = "delta") -> dict[str, A
         "ready_steps_new": [step_to_instruction(state, sid) for sid in newly],
         "ready_steps_still": still,  # IDs only — Claude already saw these
         "awaiting_approval_steps": awaiting,
-        "in_progress_steps": [
-            {
-                "id": sid,
-                "title": state["steps"][sid]["title"],
-                "task_id": state["steps"][sid]["task_id"],
-            }
-            for sid in in_progress
-        ],
-        "blocked_steps": [
-            {
-                "id": sid,
-                "title": state["steps"][sid]["title"],
-                "failed_deps": [
-                    d for d in state["steps"][sid]["deps"]
-                    if state["steps"].get(d, {}).get("status") == FAILED
-                ],
-            }
-            for sid in blocked
-        ],
+        "in_progress_steps": _in_progress_entries(state),
+        "blocked_steps": _blocked_entries(state),
     }
 
 
@@ -3534,6 +3598,15 @@ def _write_checkpoint_best_effort(plan_path: Path, state: dict[str, Any]) -> Non
     except Exception:
         return None
     return None
+
+
+def _refresh_checkpoint_if_present(plan_path: Path, state: dict[str, Any]) -> None:
+    """`reset` / `init --force` rewrite history, so an existing checkpoint
+    must be rebuilt from the new state; otherwise `next --resume` would keep
+    reporting `done` for steps that are pending again (review F3). No file
+    means no complete/fail/skip yet, and that stays true: none is created."""
+    if _checkpoint_file(plan_path).exists():
+        _write_checkpoint_best_effort(plan_path, state)
 
 
 def _load_resume_checkpoint(plan_path: Path) -> dict[str, Any] | None:
@@ -3651,6 +3724,30 @@ def cmd_start(args: argparse.Namespace) -> int:
     return _run_locked(args, _cmd_start_locked)
 
 
+def _start_refusal(
+    state: dict[str, Any], sid: str, plan_path: Path,
+) -> dict[str, Any] | None:
+    """Error payload when `start sid` must be refused before any transition:
+    unknown step, waiting on human approval, or deps not satisfied."""
+    if sid not in state["steps"]:
+        return {"error": f"Unknown step: {sid}"}
+    if _import_sibling("plan_runner_guardrails").awaiting_approval(state["steps"][sid]):
+        return {
+            "error": f"{sid} is marked Requires-Approval and has not been approved",
+            "hint": (
+                f"Stop and ask the user. Only a human may run: "
+                f"plan_runner.py approve {plan_path} {sid}"
+            ),
+        }
+    if not deps_all_completed(state, sid):
+        unmet = [
+            d for d in state["steps"][sid]["deps"]
+            if state["steps"][d]["status"] not in (COMPLETED, SKIPPED)
+        ]
+        return {"error": "Deps not satisfied", "unmet": unmet}
+    return None
+
+
 def _cmd_start_locked(args: argparse.Namespace) -> int:
     """`start` under the state lock, so the read of `pending` and the write
     of `in_progress` cannot interleave with another session's. Without it
@@ -3660,24 +3757,9 @@ def _cmd_start_locked(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     state = _require_state(plan_path)
     sid = args.step
-    if sid not in state["steps"]:
-        emit({"error": f"Unknown step: {sid}"})
-        return 1
-    if _import_sibling("plan_runner_guardrails").awaiting_approval(state["steps"][sid]):
-        emit({
-            "error": f"{sid} is marked Requires-Approval and has not been approved",
-            "hint": (
-                f"Stop and ask the user. Only a human may run: "
-                f"plan_runner.py approve {plan_path} {sid}"
-            ),
-        })
-        return 1
-    if not deps_all_completed(state, sid):
-        unmet = [
-            d for d in state["steps"][sid]["deps"]
-            if state["steps"][d]["status"] not in (COMPLETED, SKIPPED)
-        ]
-        emit({"error": "Deps not satisfied", "unmet": unmet})
+    refusal = _start_refusal(state, sid, plan_path)
+    if refusal is not None:
+        emit(refusal)
         return 1
     try:
         transition_step(
@@ -4005,6 +4087,7 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
     recompute_blocked_status(state)
     save_state(plan_path, state)
+    _refresh_checkpoint_if_present(plan_path, state)
     emit({"status": "reset", "summary": summary(state)})
     return 0
 

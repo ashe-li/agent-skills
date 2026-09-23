@@ -55,17 +55,57 @@ def _outside_fence(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 class ParseRequiresApprovalTests(unittest.TestCase):
-    def test_truthy_values_case_insensitive(self):
-        for raw in ("true", "TRUE", " Yes ", "1", "`true`"):
-            self.assertTrue(gr.parse_requires_approval(raw), raw)
+    """Review F4: the gate is fail-closed. Only an explicit false-like value
+    turns it off; anything unrecognised gates the step and warns."""
 
-    def test_anything_else_is_false(self):
-        for raw in ("false", "no", "0", "maybe", "", "true-ish"):
+    def test_truthy_values_case_insensitive(self):
+        for raw in ("true", "TRUE", " Yes ", "1", "`true`", '"true"', "'yes'", "**true**"):
+            self.assertTrue(gr.parse_requires_approval(raw), raw)
+            self.assertTrue(gr.is_recognised_approval_value(raw), raw)
+
+    def test_explicit_false_values_turn_the_gate_off(self):
+        for raw in ("false", "FALSE", "no", "0", "none", "None", "", "  ", "`false`", '"no"'):
             self.assertFalse(gr.parse_requires_approval(raw), raw)
+            self.assertTrue(gr.is_recognised_approval_value(raw), raw)
+
+    def test_unrecognised_values_fail_closed(self):
+        for raw in ("required", "true (prod deploy)", "y", "maybe", "true-ish", "false (later)"):
+            self.assertTrue(gr.parse_requires_approval(raw), raw)
+            self.assertFalse(gr.is_recognised_approval_value(raw), raw)
 
     def test_field_keys_cover_hyphen_and_underscore(self):
         lowered = {k.lower() for k in gr.REQUIRES_APPROVAL_KEYS}
         self.assertEqual(lowered, {"requires-approval", "requires_approval"})
+
+
+class RequiresApprovalFieldLineTests(unittest.TestCase):
+    """Review F4: bold keys, a space instead of `-`, and any case must still
+    be read as the approval field, or the gate silently never gets set."""
+
+    def test_key_variants_are_recognised(self):
+        cases = {
+            "  - Requires-Approval: true": "true",
+            "  - requires_approval：TRUE": "TRUE",
+            "  - **Requires-Approval**: true": "true",
+            "  - **Requires-Approval:** true": "true",
+            "  - __Requires_Approval__: yes": "yes",
+            "  - Requires Approval: true": "true",
+            "  - REQUIRES APPROVAL: required": "required",
+            "  - RequiresApproval: 1": "1",
+            "    - Requires-Approval:": "",
+        }
+        for line, value in cases.items():
+            self.assertEqual(gr.match_requires_approval_field(line), value, line)
+
+    def test_other_lines_are_not_the_field(self):
+        for line in (
+            "- Requires-Approval: true",
+            "  - Action: set Requires-Approval: true later",
+            "  - Risk: requires approval from ops",
+            "  - Approval: true",
+            "Requires-Approval: true",
+        ):
+            self.assertIsNone(gr.match_requires_approval_field(line), line)
 
 
 class RiskyCommandTests(unittest.TestCase):
@@ -244,6 +284,50 @@ class ParsePlanApprovalFieldTests(unittest.TestCase):
         self.assertEqual(parsed["steps"]["S1"]["action"], "x")
         self.assertTrue(all(s["approved_at"] is None for s in state["steps"].values()))
         self.assertEqual(state["out_of_scope_log"], [])
+
+
+R4_FIELD_VARIANTS = (
+    ("  - Requires-Approval: required", True),
+    ("  - Requires-Approval: true (prod deploy)", True),
+    ('  - Requires-Approval: "true"', False),
+    ("  - Requires-Approval: y", True),
+    ("  - **Requires-Approval**: true", False),
+    ("  - Requires Approval: true", False),
+)
+
+
+def _r4_plan(field: str) -> str:
+    return "\n".join([
+        "# P", "", "### Phase 1: A", "",
+        "- [ ] S1 First", "  - Action: do A", field, "  - Command: `make deploy-prod`",
+        "- [ ] S2 Second", "  - Dependencies: S1", "  - Action: do B", "",
+    ])
+
+
+class ParsePlanApprovalFailClosedTests(unittest.TestCase):
+    """Review F4 (R4): each of these used to parse as requires_approval=False
+    with no warning, so the step was assigned and `start` let it run."""
+
+    def test_r4_variants_gate_and_warn_only_on_unrecognised_values(self):
+        for field, warns in R4_FIELD_VARIANTS:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "p.md"
+                path.write_text(_r4_plan(field), encoding="utf-8")
+                parsed = pr.parse_plan(path)
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
+                hits = [w for w in parsed["warnings"] if "Requires-Approval" in w]
+                self.assertEqual(bool(hits), warns, parsed["warnings"])
+                if warns:
+                    self.assertIn("S1", hits[0])
+
+    def test_explicit_false_does_not_gate_or_warn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.md"
+            path.write_text(_r4_plan("  - **Requires-Approval**: no"), encoding="utf-8")
+            parsed = pr.parse_plan(path)
+        self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
+        self.assertEqual(parsed["warnings"], [])
 
 
 class HookApprovalGateTests(unittest.TestCase):
@@ -544,6 +628,23 @@ class GuardrailCliTests(unittest.TestCase):
         self.assertFalse(any("S1" in w or "S3" in w for w in warnings))
         self.assertEqual(self._state()["allowed_paths"],
                          [str(self.proj / n) for n in ("extra", "y", "root")])
+
+    def test_r4_variants_are_gated_end_to_end(self):
+        """Review F4 (R4) through the CLI: not ready, listed as awaiting
+        approval, and `start` refuses it."""
+        for field, warns in R4_FIELD_VARIANTS:
+            with self.subTest(field=field):
+                self.plan.write_text(_r4_plan(field), encoding="utf-8")
+                data = json.loads(self._init("--force").stdout)
+                self.assertNotIn("S1", data["ready_steps"])
+                self.assertEqual(data["awaiting_approval_steps"], ["S1"])
+                self.assertEqual(
+                    any("Requires-Approval" in w for w in data["warnings"]), warns, data["warnings"],
+                )
+                self.assertTrue(self._state()["steps"]["S1"]["requires_approval"])
+                start = self._run("start", str(self.plan), "S1")
+                self.assertNotEqual(start.returncode, 0, start.stdout)
+                self.assertEqual(self._state()["steps"]["S1"]["status"], "pending")
 
     def test_init_rejects_bad_allow_path(self):
         result = self._init("--allow-path", "/tmp/x\nPWNED")

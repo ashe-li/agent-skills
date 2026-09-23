@@ -23,6 +23,21 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 SANDBOX_ENV_VAR = "PLAN_SANDBOX_ROOT"
 REQUIRES_APPROVAL_KEYS = ("Requires-Approval", "Requires_Approval")
 APPROVAL_TRUE_VALUES = frozenset({"true", "yes", "1"})
+# The only values that turn the gate off. The gate is fail-closed: any other
+# value (a typo, `required`, `true (prod deploy)`) still gates the step, and
+# init warns about it, because a safety gate that silently opens on a value
+# it cannot read is worse than one that asks a human once too often.
+APPROVAL_FALSE_VALUES = frozenset({"false", "no", "0", "none", ""})
+_APPROVAL_VALUE_STRIP = " \t`'\"*_"
+# `  - Requires-Approval: x` with the tolerance people actually type: any
+# case, `-` / `_` / space / nothing between the words, `**bold**` or
+# `__bold__` around the key (with or without the colon inside), full-width
+# colon. Indented like every other step field.
+_REQUIRES_APPROVAL_FIELD_RE = re.compile(
+    r"^\s+-\s+(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：]"
+    r"(?:\*\*|__)?\s*(?P<val>.*)$",
+    re.IGNORECASE,
+)
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -51,9 +66,37 @@ OUT_OF_SCOPE_SOURCE_MAX_CHARS = 200
 OUT_OF_SCOPE_LOG_MAX_ENTRIES = 50
 
 
+def _normalise_approval_value(raw: str) -> str:
+    return raw.strip(_APPROVAL_VALUE_STRIP).lower()
+
+
 def parse_requires_approval(raw: str) -> bool:
-    """`true` / `yes` / `1` (any case, optional backticks) mean gated."""
-    return raw.strip().strip("`").strip().lower() in APPROVAL_TRUE_VALUES
+    """Fail-closed: only `false` / `no` / `0` / `none` / empty (any case,
+    optional backticks, quotes or bold) leave the step ungated."""
+    return _normalise_approval_value(raw) not in APPROVAL_FALSE_VALUES
+
+
+def is_recognised_approval_value(raw: str) -> bool:
+    """False for a value that is gated only because it could not be read;
+    the parser turns that into an init warning."""
+    value = _normalise_approval_value(raw)
+    return value in APPROVAL_TRUE_VALUES or value in APPROVAL_FALSE_VALUES
+
+
+def match_requires_approval_field(line: str) -> str | None:
+    """The raw value when `line` is a Requires-Approval step field, else None."""
+    match = _REQUIRES_APPROVAL_FIELD_RE.match(line)
+    return match.group("val").strip() if match else None
+
+
+def approval_value_warning(step_id: str, raw: str) -> str | None:
+    """init warning for a value that gated the step without being understood."""
+    if is_recognised_approval_value(raw):
+        return None
+    return (
+        f"{step_id}: Requires-Approval value {raw.strip()!r} is not true/false; "
+        "treated as requiring approval (fail-closed). Write `true` or `false`"
+    )
 
 
 def risky_command_in(text: Any) -> str | None:

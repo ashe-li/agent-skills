@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -31,19 +32,34 @@ APPROVAL_TRUE_VALUES = frozenset({"true", "yes", "1"})
 # it cannot read is worse than one that asks a human once too often.
 APPROVAL_FALSE_VALUES = frozenset({"false", "no", "0", "none", ""})
 _APPROVAL_VALUE_STRIP = " \t`'\"*_"
-# `  - Requires-Approval: x` with the tolerance people actually type: any
-# case, `-` / `_` / space / nothing between the words, `**bold**` or
-# `__bold__` around the key (with or without the colon inside), `:` / `：`
-# / `=`, a `-` / `*` / `+` bullet or none, any indentation (review N2).
+# Every line is NFKC-normalised first (full-width letters and `：` become
+# ASCII) and dash look-alikes become `-`, so the patterns below only need
+# to handle ASCII (review N2-R). Look-alikes from other scripts (Cyrillic
+# `а`) are not mapped.
+_DASH_LIKES = str.maketrans({c: "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"})
+# Optional blockquote, then a `-` / `*` / `+` bullet, a `1.` / `1)` number,
+# or nothing; any indentation.
+_LINE_PREFIX = r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s+)?"
+_BOLD = r"(?:\*\*|__)?"
+_REQUIRES_APPROVAL_KEY = _BOLD + r"requires[\s_-]*approval" + _BOLD
+# `Requires-Approval: x` with the tolerance people actually type: any case,
+# `-` / `_` / space / nothing between the words, `**bold**` or `__bold__`
+# around the key (with or without the colon inside), `:` or `=`.
 _REQUIRES_APPROVAL_FIELD_RE = re.compile(
-    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?requires[\s_-]*approval(?:\*\*|__)?\s*[:：=]"
-    r"(?:\*\*|__)?\s*(?P<val>.*)$",
+    _LINE_PREFIX + _REQUIRES_APPROVAL_KEY + r"\s*[:=]" + _BOLD + r"\s*(?P<val>.*)$",
     re.IGNORECASE,
 )
-# Any spelling of the word: approval, aproval, approvals, approve(d).
-_APPROVAL_HINT_RE = re.compile(r"ap{1,2}r{1,2}o?v", re.IGNORECASE)
-# A bulleted `key: value` line — the shape of a step field.
-_FIELD_LIKE_LINE_RE = re.compile(r"^\s*[-*+]\s+(?P<key>[^:：=]{1,80})[:：=]")
+# The same key with the separator missing: `- Requires-Approval true`.
+_REQUIRES_APPROVAL_NO_SEPARATOR_RE = re.compile(
+    _LINE_PREFIX + _REQUIRES_APPROVAL_KEY + r"(?:\s+\S.*)?$", re.IGNORECASE,
+)
+# The one definition of "this word is some spelling of approval": approval,
+# aproval, apprval, aprooval, approve(d), approvals. Needs the leading `a`,
+# so `provider` / `improve` are not hits. The parser has no cheaper
+# pre-filter of its own; every step line goes through approval_line().
+_APPROVAL_HINT_RE = re.compile(r"a+p+r+o*v", re.IGNORECASE)
+# A `key: value` line — the shape of a step field.
+_FIELD_LIKE_LINE_RE = re.compile(_LINE_PREFIX + r"(?P<key>[^:=]{1,80}?)\s*[:=]")
 
 # Commands that merge, deploy or apply infrastructure. A step that mentions
 # one without Requires-Approval gets an `init` warning, nothing more.
@@ -89,9 +105,19 @@ def is_recognised_approval_value(raw: str) -> bool:
     return value in APPROVAL_TRUE_VALUES or value in APPROVAL_FALSE_VALUES
 
 
+def normalise_field_line(line: str) -> str:
+    """NFKC plus dash look-alikes to `-`: what every approval match sees."""
+    return unicodedata.normalize("NFKC", line).translate(_DASH_LIKES)
+
+
+def approval_hint(text: str) -> bool:
+    """Whether `text` contains some spelling of "approval"."""
+    return bool(_APPROVAL_HINT_RE.search(normalise_field_line(text)))
+
+
 def match_requires_approval_field(line: str) -> str | None:
     """The raw value when `line` is a Requires-Approval step field, else None."""
-    match = _REQUIRES_APPROVAL_FIELD_RE.match(line)
+    match = _REQUIRES_APPROVAL_FIELD_RE.match(normalise_field_line(line))
     return match.group("val").strip() if match else None
 
 
@@ -99,23 +125,29 @@ def approval_line(
     step_id: str, line: str, *, known_field: bool,
 ) -> tuple[bool | None, str | None] | None:
     """(gated, init warning) for a step line that bears on the gate, else None.
-    gated is None for a line that only earns a warning and no verdict.
 
-    Fail-closed (review N2): a real Requires-Approval field is parsed with
-    the value rules. A bulleted `key: value` line the parser does not know
-    whose *key* spells approval in any way (`Require-Approval`,
-    `Requires-Aproval`, `Approval-Required`...) gates the step and names
-    the line. When only the value of such a line mentions approval
-    (`Test: approval flow works`) the step is not gated -- that would leave
-    no way to say "no" -- but init still names the line. `known_field`
-    lines (Action, Risk...) and lines that never mention approval are
-    left alone.
+    Fail-closed (reviews N2, N2-R): a real Requires-Approval field is
+    parsed with the value rules; the same key with its separator missing
+    gates and warns. A `key: value` line the parser does not know whose
+    *key* spells approval in any way (`Require-Approval`, `Requires-Apprval`,
+    `Approval-Required`...) gates the step and names the line. When only
+    the value of such a line mentions approval the step is not gated, but
+    init names the line. `known_field` lines (Action, Risk...) and lines
+    that never mention approval are left alone.
+    gated is None for a line that only earns a warning and no verdict.
     """
     value = match_requires_approval_field(line)
     if value is not None:
         return parse_requires_approval(value), approval_value_warning(step_id, value)
-    field = _FIELD_LIKE_LINE_RE.match(line)
-    if known_field or field is None or not _APPROVAL_HINT_RE.search(line):
+    text = normalise_field_line(line)
+    if _REQUIRES_APPROVAL_NO_SEPARATOR_RE.match(text):
+        return True, (
+            f"{step_id}: line {line.strip()!r} is Requires-Approval without a `:` "
+            "separator; treated as requiring approval (fail-closed). "
+            "Write `Requires-Approval: true` or `false`"
+        )
+    field = None if known_field else _FIELD_LIKE_LINE_RE.match(text)
+    if field is None or not _APPROVAL_HINT_RE.search(text):
         return None
     if _APPROVAL_HINT_RE.search(field.group("key")):
         return True, (

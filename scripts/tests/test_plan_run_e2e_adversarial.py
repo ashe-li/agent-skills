@@ -1,6 +1,6 @@
 """Adversarial E2E: inject the failures plan-run is supposed to survive.
 
-Thirteen scenarios, each in its own fake $HOME, driven only through the CLI and
+Sixteen scenarios, each in its own fake $HOME, driven only through the CLI and
 the `hook-stop` entry point as subprocesses (see plan_run_e2e_support.py):
 
   C1 a script is missing (a Command: tool, the state file, the runner itself)
@@ -16,6 +16,9 @@ the `hook-stop` entry point as subprocesses (see plan_run_e2e_support.py):
   C11 a shell comment in `Command:` (fresh review N1: no false "missing tool")
   C12 a misspelled Requires-Approval key (fresh review N2: gated and named)
   C13 conflicting Requires-Approval lines (fresh review N3: any true wins)
+  C14 a `#` right after an escaped `;` (round-3 N1-R: not a comment)
+  C15 numbered / colon-less / full-width Requires-Approval (round-3 N2-R)
+  C16 a `### Notes` section after the last step (round-3 N2-FP)
 
 What this suite cannot see, stated so a green run is not over-read:
 
@@ -69,6 +72,23 @@ MISSPELLED_APPROVAL_FIELDS = (
 )
 # Fresh review N3: a later `false` used to reopen the gate.
 CONFLICTING_APPROVAL_FIELDS = "  - Requires-Approval: true\n  - Requires-Approval: false\n"
+
+# Round-3 N1-R: `\;#y` is one word, so what follows is a real command.
+ESCAPED_HASH_MISSING = "plan-run-e2e-missing-zz8"
+ESCAPED_HASH_COMMAND = f"echo x\\;#y; {ESCAPED_HASH_MISSING} --run"
+# Round-3 N2-R: (label, field, init must warn).
+RESIDUAL_APPROVAL_FIELDS = (
+    ("numbered", "  1. Requires-Approval: true\n", False),
+    ("no-colon", "  - Requires-Approval true\n", True),
+    ("no-bullet-typo", "  Require-Approval: true\n", True),
+    ("apprval", "  - Requires-Apprval: true\n", True),
+    ("fullwidth", "  - Ｒｅｑｕｉｒｅｓ－Ａｐｐｒｏｖａｌ： true\n", False),
+)
+# Round-3 N2-FP: prose after the last step, lifted from a real plan.
+NOTES_AFTER_LAST_STEP = (
+    "  - Requires-Approval: false\n\n### Notes\n\n"
+    "- Approval-Required: true\n- User review + approve（改 Status: APPROVED）\n"
+)
 
 # Review F4: each of these used to parse as "no approval needed".
 LOOSE_APPROVAL_FIELDS = (
@@ -574,6 +594,74 @@ class C13ConflictingApproval(AdversarialCase):
         self.check("AC-C13.2", "start S1 被拒且仍是 pending",
                    refused.returncode != 0 and sb.statuses().get("S1") == "pending",
                    f"rc={refused.returncode}")
+        self.assert_all_checks_passed()
+
+
+class C14EscapedHashIsNotAComment(AdversarialCase):
+
+    def test_c14_hash_after_escaped_separator(self):
+        self.log.scenario = "C14-escaped-hash"
+        sb = self.sandbox(LINEAR_PLAN.format(s1_extra=f"  - Command: `{ESCAPED_HASH_COMMAND}`\n"))
+        sb.cli("init", "plan.md")
+        pf = sb.cli("preflight", "plan.md", "--format", "json")
+        failed = [c.get("name") for c in parse_json(pf.stdout).get("checks", []) if not c.get("ok")]
+        self.check("AC-C14.1", "`\\;#y` 不是註解：後面真的缺的工具要被點名",
+                   pf.returncode == e2e.PREFLIGHT_FAIL_RC and failed == [ESCAPED_HASH_MISSING],
+                   f"rc={pf.returncode} failed={failed}")
+        _, payload, _ = sb.hook("s1", sb.transcript("t1"))
+        self.check("AC-C14.2", "hook 不 block，PREFLIGHT 失敗訊息點名缺的工具",
+                   not is_block(payload)
+                   and system_message(payload).startswith(e2e.PREFLIGHT_MSG)
+                   and ESCAPED_HASH_MISSING in system_message(payload), payload)
+        self.assert_all_checks_passed()
+
+
+class C15ResidualApprovalShapes(AdversarialCase):
+
+    def test_c15_numbered_colonless_fullwidth_still_gate(self):
+        self.log.scenario = "C15-residual-approval-shapes"
+        for label, field, warns in RESIDUAL_APPROVAL_FIELDS:
+            sb = self.sandbox(GATED_PLAN.format(gate=field))
+            init = parse_json(sb.cli("init", "plan.md", "--format", "json").stdout)
+            approval_warns = [w for w in init.get("warnings", [])
+                              if "S1" in w and "Requires-Approval" in w]
+            self.check(f"AC-C15.1[{label}]", "S1 列在 awaiting_approval；該 warning 的才 warning",
+                       init.get("awaiting_approval_steps") == ["S1"]
+                       and bool(approval_warns) == warns,
+                       {k: init.get(k) for k in ("awaiting_approval_steps", "warnings")})
+            _, payload, _ = sb.hook("s1", sb.transcript("t1"))
+            refused = sb.cli("start", "plan.md", "S1")
+            self.check(f"AC-C15.2[{label}]", "hook 先派 S4；start S1 被拒且仍 pending",
+                       assigns_only(payload, "S4") and refused.returncode != 0
+                       and sb.statuses().get("S1") == "pending",
+                       {"reason": reason_of(payload)[:120], "start_rc": refused.returncode})
+        self.assert_all_checks_passed()
+
+
+class C16NotesAfterLastStep(AdversarialCase):
+
+    def test_c16_notes_heading_does_not_gate_the_last_step(self):
+        self.log.scenario = "C16-notes-after-last-step"
+        sb = self.sandbox(LINEAR_PLAN + NOTES_AFTER_LAST_STEP)
+        init = parse_json(sb.cli("init", "plan.md", "--format", "json").stdout)
+        s3 = sb.state().get("steps", {}).get("S3", {})
+        self.check("AC-C16.1", "### Notes 之後的條列不算 S3 的欄位：S3 不需核准、沒有 approval warning",
+                   s3.get("requires_approval") is False
+                   and not [w for w in init.get("warnings", []) if "pproval" in w],
+                   {"S3": s3.get("requires_approval"), "warnings": init.get("warnings")})
+        for sid in ("S1", "S2"):
+            sb.cli("start", "plan.md", sid)
+            sb.cli("complete", "plan.md", sid)
+        started = sb.cli("start", "plan.md", "S3")
+        self.check("AC-C16.2", "S1、S2 完成後 start S3 放行",
+                   started.returncode == 0 and sb.statuses().get("S3") == "in_progress",
+                   f"rc={started.returncode} {sb.statuses()}")
+        # Positive control: the very same line inside S3's fields does gate.
+        inside = self.sandbox(LINEAR_PLAN + "  - Approval-Required: true\n")
+        inside.cli("init", "plan.md")
+        self.check("AC-C16.3", "對照：同一行放在 S3 欄位裡就會擋",
+                   inside.state().get("steps", {}).get("S3", {}).get("requires_approval") is True,
+                   inside.state().get("steps", {}).get("S3"))
         self.assert_all_checks_passed()
 
 

@@ -168,14 +168,13 @@ def _approval_field(
 ) -> tuple[bool | None, str | None] | None:
     """(gated, init warning) when `raw` bears on the Requires-Approval gate.
 
-    Key matched leniently, value fail-closed, and an unparseable line that
-    mentions approval gates too — see plan_runner_guardrails.approval_line
-    (reviews F4, N2). Guardrails are only imported for lines containing
-    "prov" (every spelling of approval does), so a runner copied without
-    its siblings still parses plans that never use the gate.
+    Key matched leniently, value fail-closed, and a line whose key spells
+    approval gates too — see plan_runner_guardrails.approval_line (reviews
+    F4, N2, N2-R). There is deliberately no pre-filter here: a cheaper
+    check of its own would be a second definition of "mentions approval"
+    that can drift narrower than the real one (it did: `"prov"` missed
+    `Apprval`).
     """
-    if "prov" not in raw.lower():
-        return None
     gr = _import_sibling("plan_runner_guardrails")
     return gr.approval_line(step_id, raw, known_field=known_field)
 

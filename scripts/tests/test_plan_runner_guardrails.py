@@ -146,6 +146,39 @@ class ApprovalLineTests(unittest.TestCase):
         self.assertIn("S7", warning)
         self.assertIn("Test: approval flow works", warning)
 
+    RESIDUAL = (
+        # Review N2-R: each of these used to pass silently.
+        "  1. Requires-Approval: true",
+        "  2) Requires-Approval: yes",
+        "  Require-Approval: true",
+        "  - Requires-Apprval: true",
+        "  - Requires-Aprooval: true",
+        "  - Ｒｅｑｕｉｒｅｓ－Ａｐｐｒｏｖａｌ： true",
+        "  - Requires‑Approval: true",
+        "  > - Requires-Approval: true",
+    )
+
+    def test_residual_shapes_gate(self):
+        for line in self.RESIDUAL:
+            result = gr.approval_line("S7", line, known_field=False)
+            self.assertIsNotNone(result, line)
+            self.assertTrue(result[0], line)
+
+    def test_missing_separator_gates_and_warns(self):
+        for line in ("  - Requires-Approval true", "  - Requires-Approval - true",
+                     "  1. Requires Approval yes"):
+            gated, warning = gr.approval_line("S7", line, known_field=False)
+            self.assertTrue(gated, line)
+            self.assertIn("S7", warning)
+            self.assertIn("separator", warning)
+
+    def test_hint_matches_every_listed_spelling(self):
+        for word in ("approval", "aproval", "apprval", "aprooval", "approve", "Approvals",
+                     "ＡＰＰＲＯＶＡＬ"):
+            self.assertTrue(gr.approval_hint(word), word)
+        for word in ("provider", "improve", "proved", "overview"):
+            self.assertFalse(gr.approval_hint(word), word)
+
     def test_parsed_fields_and_plain_lines_are_neutral(self):
         for line, known in (
             ("  - Risk: requires approval from ops", True),
@@ -504,6 +537,13 @@ class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
         self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
         self.assertEqual(len(parsed["warnings"]), 1, parsed["warnings"])
         self.assertNotIn("conflict", parsed["warnings"][0])
+
+    def test_residual_shapes_gate_through_parse_plan(self):
+        for line in ApprovalLineTests.RESIDUAL + ("  - Requires-Approval true",):
+            with self.subTest(line=line):
+                parsed = _parse_s1(line)
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                self.assertFalse(parsed["steps"]["S2"]["requires_approval"])
 
     def test_no_mention_of_approval_is_ungated(self):
         parsed = _parse_s1("  - Owner: alice")

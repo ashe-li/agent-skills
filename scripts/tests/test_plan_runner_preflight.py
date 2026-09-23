@@ -41,8 +41,10 @@ class ExtractToolsTests(unittest.TestCase):
     def test_duplicates_collapse_in_first_seen_order(self):
         self.assertEqual(pf.extract_tools("git a && make && git b"), ("git", "make"))
 
-    def test_unparseable_segment_is_skipped_not_guessed(self):
-        self.assertEqual(pf.extract_tools("echo 'unbalanced && jq ."), ("jq",))
+    def test_unparseable_command_is_skipped_not_guessed(self):
+        # The shell sees `&& jq .` as part of the unterminated quote, so there
+        # is no second command to check; guessing one is how false FAILs happen.
+        self.assertEqual(pf.extract_tools("echo 'unbalanced && jq ."), ())
 
     def test_empty_and_none_yield_nothing(self):
         self.assertEqual(pf.extract_tools(None), ())
@@ -66,6 +68,77 @@ class ExtractToolsTests(unittest.TestCase):
 
     def test_absolute_path_executable_is_kept_verbatim(self):
         self.assertEqual(pf.extract_tools("/usr/bin/env python3"), ("/usr/bin/env",))
+
+
+class ExtractToolsShellSyntaxTests(unittest.TestCase):
+    """Review F1: valid shell syntax must never surface as a missing tool."""
+
+    def assertTools(self, command, expected):
+        self.assertEqual(pf.extract_tools(command), expected, command)
+
+    def test_separators_inside_quotes_do_not_split(self):
+        self.assertTools('python3 -c "import json; import sys; print(1)"', ("python3",))
+        self.assertTools("echo 'a;b' 'c;d'", ())
+        self.assertTools('git commit -m "fix: a; b && c"', ("git",))
+        self.assertTools('jq ".a | .b" f.json', ("jq",))
+
+    def test_quoted_or_escaped_operator_is_a_word(self):
+        self.assertTools(r"find . -exec rm {} \; && git status", ("find", "git"))
+        self.assertTools("echo ';' foo", ())
+
+    def test_for_loop_keywords_are_not_tools(self):
+        self.assertTools("for f in *.md; do wc -l $f; done", ("wc",))
+        self.assertTools("select x in a b; do make $x; done", ("make",))
+
+    def test_while_and_until_loops(self):
+        self.assertTools("while read l; do grep x $l; done < f", ("grep",))
+        self.assertTools("until curl -sf x; do sleep 1; done", ("curl", "sleep"))
+
+    def test_if_elif_else_fi(self):
+        self.assertTools("if [ -f README.md ]; then cat README.md; fi", ("cat",))
+        self.assertTools("if a1; then b1; elif c1; then d1; else e1; fi", ("a1", "b1", "c1", "d1", "e1"))
+
+    def test_case_body_is_skipped(self):
+        self.assertTools('case "$x" in a) make a;; *) make b;; esac && git status', ("git",))
+
+    def test_double_bracket_test_is_skipped(self):
+        self.assertTools("[[ -f x ]] && echo ok", ())
+        self.assertTools("[[ a && b || c ]] || make", ("make",))
+
+    def test_subshell_and_group(self):
+        self.assertTools("(cd sub && make test)", ("make",))
+        self.assertTools("{ make; git status; }", ("make", "git"))
+
+    def test_negation_and_time(self):
+        self.assertTools("! grep -q x f", ("grep",))
+        self.assertTools("time make test", ("make",))
+        self.assertTools("time -p make test", ("make",))
+
+    def test_env_prefix(self):
+        self.assertTools("env FOO=1 BAR=2 make", ("make",))
+        self.assertTools("env -i PATH=/x make", ())
+        self.assertTools("FOO=1 env BAR=2 pytest -q", ("pytest",))
+
+    def test_command_substitution_and_arithmetic_are_skipped(self):
+        self.assertTools("echo $(missing-tool x) && git status", ("git",))
+        self.assertTools('echo "$(missing-tool)"', ())
+        self.assertTools("for ((i=0;i<3;i++)); do echo $i; done", ())
+        self.assertTools("(( n > 1 )) && make", ("make",))
+        self.assertTools("echo $((1 + 2)); make", ("make",))
+
+    def test_function_definition_and_call(self):
+        self.assertTools("f() { make; }; f", ("make",))
+        self.assertTools("function g { make; }; g", ("make",))
+
+    def test_redirects_are_not_tools(self):
+        self.assertTools("ls >out 2>&1 && git status", ("ls", "git"))
+        self.assertTools(">log make", ("make",))
+
+    def test_newline_separates_commands(self):
+        self.assertTools("make\ngit status", ("make", "git"))
+
+    def test_keyword_as_argument_is_not_special(self):
+        self.assertTools("echo done if then && make", ("make",))
 
 
 class CheckToolTests(unittest.TestCase):
@@ -125,6 +198,20 @@ class RunPreflightTests(unittest.TestCase):
         fail preflight and stop the hook before step one."""
         result = self._run(["cd sub && ./run.sh", "$RUNNER --x"])
         self.assertTrue(result.ok, [c.name for c in result.failures])
+
+    def test_review_f1_shell_syntax_passes_and_real_tool_is_checked(self):
+        """Review F1 (R1): loops, conditionals, subshells and quoted `;` used
+        to fail preflight; `python3 -c "import a; ..."` checked `import`."""
+        result = self._run([
+            'python3 -c "import json; import sys; print(1)"',
+            "for f in *.md; do git add $f; done",
+            "if [ -f README.md ]; then git status; fi",
+            "(cd sub && git status)",
+            "[[ -f x ]] && echo ok",
+            "echo 'a;b' 'c;d'",
+        ])
+        self.assertTrue(result.ok, [c.name for c in result.failures])
+        self.assertEqual([c.name for c in result.checks if c.kind == "tool"], ["python3", "git"])
 
     def test_all_present_is_ok(self):
         result = self._run(["git status", "/verify", None, "cd x && python3 -c 1"])

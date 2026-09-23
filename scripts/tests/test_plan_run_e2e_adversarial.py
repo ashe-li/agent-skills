@@ -202,7 +202,14 @@ class C3OutOfScope(AdversarialCase):
         self.check("AC-C3.4", "state.out_of_scope_log 保存原文、來源、時間、當時的 step",
                    last.get("text") == injected and last.get("source") == "tool output"
                    and bool(last.get("at")) and last.get("step") == "S1", entries)
-        self.check("AC-C3.5", "記錄輸出不回印原文", injected not in logged.stdout, logged.stdout)
+        # Review F7: against a runner without the subcommand, argparse writes
+        # to stderr and stdout is empty, so "not echoed" held vacuously.
+        # Require a real, successful confirmation first, then look at both
+        # streams.
+        self.check("AC-C3.5", "記錄有成功輸出確認，且 stdout／stderr 都不回印原文",
+                   logged.returncode == 0 and bool(logged.stdout.strip())
+                   and injected not in logged.stdout + logged.stderr,
+                   f"rc={logged.returncode} out={logged.stdout!r} err={logged.stderr[:80]!r}")
         early = sb.checkpoint()
         self.check("AC-C3.7", "還沒 complete：log-out-of-scope 當下 checkpoint 就有筆數、沒有原文",
                    any("1 out-of-scope" in q for q in early.get("open_questions") or [])

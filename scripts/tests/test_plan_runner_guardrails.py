@@ -451,7 +451,7 @@ def _parse_s1(*fields: str) -> dict:
 
 
 class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
-    """Review N2: key typos and format variants."""
+    """Review N2 (key typos / format) and N3 (repeated lines)."""
 
     def test_misspelled_keys_gate_and_warn(self):
         for line in ApprovalLineTests.MISSPELLED[:5] + ("  - Requires-Approval = true",):
@@ -481,6 +481,23 @@ class ParsePlanApprovalKeyVariantTests(unittest.TestCase):
         parsed = _parse_s1("  - Owner: alice")
         self.assertFalse(parsed["steps"]["S1"]["requires_approval"])
         self.assertEqual(parsed["warnings"], [])
+
+    def test_any_true_line_wins_and_conflict_warns(self):
+        for lines in (("true", "false"), ("false", "true"), ("no", "yes", "no")):
+            with self.subTest(lines=lines):
+                parsed = _parse_s1(*(f"  - Requires-Approval: {v}" for v in lines))
+                self.assertTrue(parsed["steps"]["S1"]["requires_approval"])
+                conflict = [w for w in parsed["warnings"] if "conflict" in w]
+                self.assertEqual(len(conflict), 1, parsed["warnings"])
+                self.assertIn("S1", conflict[0])
+
+    def test_repeated_agreeing_lines_do_not_warn(self):
+        self.assertTrue(_parse_s1("  - Requires-Approval: true", "  - Requires-Approval: yes")
+                        ["steps"]["S1"]["requires_approval"])
+        both_false = _parse_s1("  - Requires-Approval: false", "  - Requires-Approval: no")
+        self.assertFalse(both_false["steps"]["S1"]["requires_approval"])
+        self.assertEqual(both_false["warnings"], [])
+        self.assertNotIn("_approval_lines", both_false["steps"]["S1"])
 
 
 class HookApprovalGateTests(unittest.TestCase):
@@ -815,8 +832,9 @@ class GuardrailCliTests(unittest.TestCase):
         self.assertEqual(self._state()["allowed_paths"], [])
 
     def test_misspelled_and_conflicting_approval_are_gated_end_to_end(self):
-        """Review N2 through the CLI: gated, warned, `start` refused."""
-        for fields in (("  - Require-Approval: true",), ("  - Requires-Aproval: true",)):
+        """Review N2 / N3 through the CLI: gated, warned, `start` refused."""
+        for fields in (("  - Require-Approval: true",), ("  - Requires-Aproval: true",),
+                       ("  - Requires-Approval: true", "  - Requires-Approval: false")):
             with self.subTest(fields=fields):
                 self.plan.write_text(_parse_plan_text(*fields), encoding="utf-8")
                 data = json.loads(self._init("--force").stdout)

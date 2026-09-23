@@ -155,6 +155,13 @@ class ExtractToolsShellSyntaxTests(unittest.TestCase):
         self.assertTools(r"echo \# y; make", ("make",))
         self.assertTools('echo "a \\" # y; nope" && make', ("make",))
 
+    def test_hash_after_an_escaped_separator_is_part_of_the_word(self):
+        """Review N1-R: `\\;` and `\\ ` are word characters, so a `#` right
+        after them does not start a comment and the next command is checked."""
+        self.assertTools(r"echo x\;#y; nope-tool", ("nope-tool",))
+        self.assertTools(r"echo x\ #y; nope-tool", ("nope-tool",))
+        self.assertTools(r"echo x\\ #y; nope-tool", ())
+
     def test_coproc_is_not_a_tool(self):
         self.assertTools("coproc x", ())
 

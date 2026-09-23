@@ -353,7 +353,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
   - `complete / fail / skip` — delta 模式（150~2KB），只列本次新解鎖的完整模板
   - `index` — 純 trace（~500 chars），整體狀態一覽
   - `report` — 產執行報告（依 phase 列狀態／耗時／evidence／摘要），all_done 時 runner 自動寫檔，不必手動跑；**不計入推進迴圈 token**：純腳本執行、不呼叫 LLM
-- **人工核准關卡（`Requires-Approval`）**：step 標 `- Requires-Approval: true` 後，hook 不指派、`start` 拒絕，要人跑 `approve` 才放行。key 寬鬆比對（大小寫、`-`／`_`／空白、粗體、`*` 清單、`=` 都認得），值是 **fail-closed**：只有 `false`／`no`／`0`／`none`／空值不需要核准，其他寫法一律擋下，無法辨識的值在 `init` 發 warning；key 拼錯同樣擋下並警告，多行時任一為 true 就需要核准。runner 分辨不出 `approve` 是不是人下的，不經 `start` 直接動手也攔不住，細節見 [`plan-run/SKILL.md`](plan-run/SKILL.md) Step 3.6
+- **人工核准關卡（`Requires-Approval`）**：step 標 `- Requires-Approval: true` 後，hook 不指派、`start` 拒絕，要人跑 `approve` 才放行。key 寬鬆比對（大小寫、`-`／`_`／空白、粗體、`*` 或編號清單、全形字、`=` 都認得，漏冒號也擋），值是 **fail-closed**：只有 `false`／`no`／`0`／`none`／空值不需要核准，其他寫法一律擋下，無法辨識的值在 `init` 發 warning；key 拼錯同樣擋下並警告，多行時任一為 true 就需要核准。runner 分辨不出 `approve` 是不是人下的，不經 `start` 直接動手也攔不住，細節見 [`plan-run/SKILL.md`](plan-run/SKILL.md) Step 3.6
 - **每 7 步一次 check-in**：實測 harness 對每個 turn 的 Stop 輪數設上限（9 次呼叫、8 次續推被採納），且該上限由所有 blocker 共用——多掛一支 blocker 不會換到更多輪。hook 主動在第 7 步（或更早的 phase 邊界）停下來留一輪餘裕，讓停的那刻落在有意義的檢查點，而不是撞上限被截斷；`PLAN_RUN_BLOCK_BUDGET=8` 可用滿。step `fail` 時 hook 不 block，交還 HITL gate
 
 **何時用：**

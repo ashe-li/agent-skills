@@ -286,6 +286,34 @@ class AllowPathScopeTests(unittest.TestCase):
         self.assertIn("~/.claude", self._check("~/.claude")[1])
         self.assertIn("top-level", self._check("/usr")[1])
 
+    def test_case_variants_are_rejected(self):
+        """Review N4: APFS is case-insensitive, and resolve() keeps the case
+        as typed, so `~/.Claude` is the same directory as `~/.claude`."""
+        upper_home = str(self.home).upper()
+        for raw in ("~/.Claude", "~/.CLAUDE/settings.json", str(self.home / ".CLAUDE" / "x"),
+                    upper_home, str(self.home.parent).upper()):
+            paths, error = self._check(raw)
+            self.assertEqual(paths, (), raw)
+            self.assertIsNotNone(error, raw)
+
+    def test_symlinked_claude_dir_is_rejected_by_both_names(self):
+        """Review N4: `~/.claude` managed as a symlink into a dotfiles repo."""
+        root = self.home.parent
+        dotfiles = root / "dotfiles" / "claude"
+        (dotfiles / "skills").mkdir(parents=True)
+        home = root / "home2"
+        home.mkdir()
+        (home / ".claude").symlink_to(dotfiles)
+        for raw in ("~/.claude", "~/.claude/skills", str(dotfiles), str(dotfiles / "skills")):
+            paths, error = gr.validate_allow_paths([raw], home, home=home)
+            self.assertEqual(paths, (), raw)
+            self.assertIn(".claude", error, raw)
+        paths, error = gr.validate_allow_paths([str(root / "dotfiles")], home, home=home)
+        self.assertEqual(paths, ())
+        self.assertIn(".claude", error)
+        ok, error = gr.validate_allow_paths([str(root / "dotfiles" / "other")], home, home=home)
+        self.assertIsNone(error)
+
     def test_paths_inside_home_are_still_fine(self):
         paths, error = gr.validate_allow_paths(
             ["~/work/out", "sub", str(self.home / ".claude-notes")], self.base, home=self.home,

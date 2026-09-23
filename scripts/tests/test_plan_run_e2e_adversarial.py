@@ -83,6 +83,8 @@ RESIDUAL_APPROVAL_FIELDS = (
     ("no-bullet-typo", "  Require-Approval: true\n", True),
     ("apprval", "  - Requires-Apprval: true\n", True),
     ("fullwidth", "  - Ｒｅｑｕｉｒｅｓ－Ａｐｐｒｏｖａｌ： true\n", False),
+    # r3b: a key wrapped in backticks used to parse as "no approval".
+    ("backtick-key", "  - `Requires-Approval`: true\n", False),
 )
 # Round-3 N2-FP: prose after the last step, lifted from a real plan.
 NOTES_AFTER_LAST_STEP = (

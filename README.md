@@ -96,6 +96,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
+| [`/rca`](#rca--四路平行-rca--對抗式彙整) | 告警（Sentry／Grafana／CI）→ 四路唯讀平行調查 → 用新證據裁決矛盾 → 根因＋falsifier＋修復 PR 草稿 |
 
 ---
 
@@ -306,6 +307,27 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 「我要準備 compact 了，給我 compact 之後可以用的 prompt」
 - 「幫我整理 handoff」
 - 「我要換機器繼續，給我接手用的 prompt」
+
+</details>
+
+### `/rca` — 四路平行 RCA ＋ 對抗式彙整
+
+輸入一則告警（Sentry issue、Grafana alert 連結，或 CI 失敗的 URL），同時派出四個唯讀調查 agent，再由一個 fresh-context 的 SYNTHESIS 把結果收斂成可驗證的根因。
+
+<details>
+<summary>Features</summary>
+
+- **四路同時跑，各自只有窄範圍的唯讀權限**：OBSERVABILITY 撈 metrics／logs／Sentry events，只收數字不收形容詞；HISTORY 找 30 天內碰過相關路徑的 commit，附日期與作者；KNOWLEDGE 查 KB 裡的過去事故，AD 編號決策逐字引用；INFRA 查 cluster／CDN／terraform 的 drift、orphan PDB、lifecycle rules、spot 事件
+- **每一路都要預測其他路會看到什麼**，讓 SYNTHESIS 有明確的對照點找矛盾
+- **矛盾只能用新證據裁決**：SYNTHESIS 要自己跑唯讀指令來解，不能挑信心比較高的那一路；解不了的標 `UNRESOLVED`
+- **根因要附 falsifier**：寫出「哪條查詢結果是 X 就推翻」；寫不出 falsifier 的，信心最高只能給 LOW
+- **四類分類**：`SELF-INFLICTED → CODIFY`、`DRIFT → REVERT`、`REAL DEFECT → FIX`、`EXTERNAL／BENIGN → RECORD`。看到 drift 時，預設先問「這是不是該寫進 IaC 的正確狀態」
+- **兩條反模式護欄**：不用字面資源名 grep 判斷 IaC 有沒有管理（要看 `terraform state list`，並追資源名怎麼組）；沒讀到值之前不把 placeholder 當成 secret 回報
+- **附 `scripts/obs_http.py`**：subagent 拿不到主對話的 MCP，改用這支 GET-only helper 查 Grafana／Sentry。憑證執行時從 `~/.claude.json` 讀，不落地、不印出
+- 修復 PR 只擬草稿，附 rollback checklist；開 PR 前（G1）、動到後端資源時（G3）、根因信心 LOW 時（G4），一律停下來等使用者確認
+- 與 `alert-triage` 互補：只需判斷一則 Grafana 告警是 benign 還是 real 時，用 `alert-triage` 就夠
+
+**首跑實例（2026-09-22）**：Sentry `item with id nmsd must have "output" method`，258 個 issue、4,135 次事件，查出來是廣告素材注入的第三方驗證腳本。降噪 PR 已 merge（vocus-web-ui PR 8228）。
 
 </details>
 

@@ -72,7 +72,7 @@ init 之後跑一次 `preflight`，確認環境跑得動這份 plan：
 python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
 ```
 
-它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（取每段指令的第一個字；`/verify` 這類 slash command、shell builtin、`NAME=value`、含 `$`／反引號的變數展開、以及同一條指令裡 `cd` 之後的相對路徑都不算，寧可漏查也不誤報）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
+它檢查 runner 腳本、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具（用 `shlex` 切 token，取每個指令位置的第一個字；引號或跳脫裡的 `;`／`&&`／`|` 不算分隔，`if`／`for`／`while`／`case`／`[[ ]]`／`{ }`／`!`／`time` 等 shell 關鍵字、`env`／`NAME=value` 前綴、`$( )`／`(( ))` 內容、指令自己定義的函式、`/verify` 這類 slash command、shell builtin、含 `$`／反引號的變數展開、以及同一條指令裡 `cd` 之後的相對路徑都不算；引號不成對的指令整條略過，寧可漏查也不誤報）。任一項失敗 exit 1，每個缺項一行附修復建議，**先修好再推進**——指令跑不起來的 step 永遠不會被 `start`，只會被一直重派。`Action:` 裡的反引號不會被當成工具，要 preflight 檢查的工具請寫進 `Command:`。模式 B 的 hook 在第一個 step 開始前也會自動跑同一份檢查，失敗時不 block，改在 systemMessage 以 `[plan-run] PREFLIGHT 失敗` 逐項列出。
 
 `warnings` 若出現 `` S<id>: mentions `gh pr merge` but has no `Requires-Approval: true` ``（偵測 `gh pr merge`、`kubectl apply/delete`、`helm upgrade/install/uninstall`、`terraform apply/destroy`），把這條轉告使用者，問要不要在該 step 補 `Requires-Approval: true` 再 `init --force`；只是警告，不擋 init。
 
@@ -132,7 +132,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py preflight "$ARGUMENTS"
 
 ## Step 3.5（模式 B）: STUCK —— 同一個 step 沒有進展
 
-hook 對同一個 step 第 3 次沒有進展時（ready 一直沒被 `start`，或 in_progress 一直沒回報 `complete`／`fail`），**不再 block**，改發 `[plan-run] STUCK：...` systemMessage，列出 step、次數、首次與本次時間、建議動作，之後這個 step 有進展前 hook 都不會再 block。看到 STUCK 不要重跑同一道指令：先查為什麼 `start`／`complete` 沒被執行（指令跑不起來就 `preflight`、做不了就 `skip`、結果不明就 `fail`）。ready 的次數不隨使用者開口歸零；in_progress 的次數在使用者開口時歸零，跨 turn 的長 step 不會被誤判。
+hook 對同一個 step 第 3 次沒有進展時（ready 一直沒被 `start`，或 in_progress 一直沒回報 `complete`／`fail`），**不再 block**，改發 `[plan-run] STUCK：...` systemMessage，列出 step、次數、首次與本次時間、建議動作，之後這個 step 有進展前 hook 都不會再 block。看到 STUCK 不要重跑同一道指令：先查為什麼 `start`／`complete` 沒被執行（指令跑不起來就 `preflight`、做不了就 `skip`、結果不明就 `fail`）。ready 的次數不隨使用者開口歸零，但兩次指派之間只要 `start` 過（即使之後 `fail`＋`reset` 回到 pending）就從 1 重算，重試 flaky step 不會被誤判；in_progress 的次數在使用者開口時歸零，跨 turn 的長 step 不會被誤判。
 
 ## Step 3.6: 人工核准關卡（Requires-Approval）
 
@@ -226,7 +226,7 @@ parser 只認 step／phase／field 的樣式，不看 checkbox 打勾、也不�
 
 transition 由 Python 強制驗證，不允許 `completed → pending` 等非法轉移（避免覆寫已完成工作）。
 
-每次 `complete`／`fail`／`skip` 成功後，runner 另外原子寫入 `.plan-state/<slug>.checkpoint.json`：已完成 steps（含摘要與 evidence）、artifacts、open questions（失敗原因與仍有效的 STUCK）、下一個 ready step、STUCK 與 preflight 狀態。它是給新 session 接手看的摘要，推進順序仍以 state 為準；寫不出來不影響該次轉換的 rc。
+每次 `complete`／`fail`／`skip` 成功後，runner 另外原子寫入 `.plan-state/<slug>.checkpoint.json`：已完成 steps（含摘要與 evidence）、artifacts、open questions（失敗原因與仍有效的 STUCK）、下一個 ready step、STUCK 與 preflight 狀態。`reset` 與 `init --force` 之後，已存在的 checkpoint 也會依新的 state 重寫（還沒有就不建立）。它是給新 session 接手看的摘要，推進順序仍以 state 為準；寫不出來不影響該次轉換的 rc。
 
 每個 step 另有 `requires_approval`／`approved_at`；plan 層級有 `allowed_paths`（init 時記下的額外 sandbox 路徑）與 `out_of_scope_log`。舊 state 沒有這些欄位時一律視為「不需核准、沒有額外路徑、沒有記錄」。
 

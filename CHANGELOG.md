@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.3.0] - 2026-09-23
+
 ### Added
 - **新增 `preflight` 子命令，hook 在第一步前先檢查執行環境**：`plan_runner.py preflight <plan> [--format md|json]` 檢查 runner 腳本本身（就是 hook reason 印出的那個路徑）、plan 檔、state 檔，以及每個 step `Command:` 欄位用到的工具，任一項失敗 exit 1，每個缺項一行並附修復建議。起因是 E2E 實測：ready step 的指令跑不起來，模型一直沒有 `start`，hook 在 0/20 連發六輪同一道指令——環境缺東西應該在第一步之前一次講清楚。工具抽取規則刻意收窄，寧可漏查也不誤報：只看 `Command:`（`Action:` 的反引號多半是檔名與函式名），整條指令用 `shlex`（POSIX 引號規則＋`punctuation_chars`）切 token，只有沒被引號或反斜線包住的 `;`／`&&`／`||`／`|`／`&`／`(`／換行才算指令分隔（`python3 -c "import a; import b"` 只抽出 `python3`），取每個指令位置的第一個字；切之前先去掉 shell 註解（未加引號、位於字首的 `#` 到行尾；`a#b`、`${#arr}`、`$#` 與引號內的 `#` 不算）；shell 關鍵字（`if then elif else fi for select while until do done case esac in function time ! { } [[ ]]`）不算工具，`[[ ]]`、`case … esac`、`$( )`、`(( ))` 的內容整段略過，`env`／`time`／`!` 前綴之後才是工具（`env` 帶選項就整條略過），指令自己定義的函式不查，引號不成對的整條略過；跳過 `NAME=value`、shell builtin、`/verify` 這類 slash command（它們是 skill 不是執行檔）、含 `$`／反引號的變數展開，以及同一條指令裡 `cd`／`pushd` 之後的相對路徑（要到執行時才知道解析到哪），含 `/` 的當路徑檢查、其餘查 PATH。模式 B 的 hook 在還沒有任何 step 開始時，由 I/O 層先跑 preflight 再把結果傳進 `decide_hook_action()`（維持 no-I/O 契約）；失敗就 allow＋`[plan-run] PREFLIGHT 失敗` systemMessage 逐項列出，不再 block 重發一個跑不起來的 step。
 - **Stop hook 加單調進度斷言（STUCK）**：同一個 step 第 3 次被 hook 指派仍沒有進展（ready 沒被 `start`，或 in_progress 沒回報 `complete`／`fail`），改為 allow＋`[plan-run] STUCK` systemMessage，列出 step、次數、首次與本次時間、建議動作；之後這個 step 有進展前一律 allow、不重複訊息。原本 ready 分支第 2 次重複只加一段警告、照樣 block 到 `BLOCK_BUDGET`（7）用完，重送已經失敗兩次的指令不會有不同結果。門檻為常數 `HOOK_STUCK_AT = 3`。ready 的次數沿用 `assign_repeat_count`、不隨使用者開口歸零（新的一輪不會讓沒跑的 `start` 變成跑過），但只算「兩次指派之間沒有 `start`」：`start` 會把 step 的 `start_count` 加一（`reset` 不清），hook 指派時記下當下的值（pointer `assigned_start_count`），值變了就從 1 重算，所以 flaky step 以 `start`→`fail`→`reset` 重試不會被誤判 STUCK；in_progress 沿用 `nag_counts`、使用者開口就歸零，只抓 auto-advance 自己繞圈，不誤判跨 turn 的長 step。pointer 新增 optional 欄位 `attempt_first_at`、`stuck_step_id`、`stuck_kind`、`stuck_at`、`assigned_start_count`，舊 pointer 仍為 VALID（沒有 `assigned_start_count` 時沿用原本的連續次數）；state 的 step 新增 optional 欄位 `start_count`，舊 state 視為 0。
@@ -678,7 +680,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.3.0...HEAD
+[v3.3.0]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...v3.3.0
 [v3.2.0]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...v3.2.0
 [v3.1.0]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...v3.1.0
 [v3.0.0]: https://github.com/ashe-li/agent-skills/compare/v2.2.0...v3.0.0

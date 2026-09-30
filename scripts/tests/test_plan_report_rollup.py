@@ -218,6 +218,35 @@ class RollupDataTests(unittest.TestCase):
         self.assertEqual(counts, {"sonnet": 2, "未指定": 2, "opus": 1})
         self.assertEqual(list(counts), ["sonnet", "未指定", "opus"])
 
+    def test_agent_values_are_normalized_before_counting(self):
+        steps = {
+            "S1": _step(agent="`sonnet`（readonly-verifier）"),
+            "S2": _step(agent="Sonnet (general-purpose)"),
+            "S3": _step(agent="   "),
+            "S4": _step(agent="opus，深度審查"),
+        }
+        counts = _report(_state(steps))["rollup"]["agent_counts"]
+        self.assertEqual(counts, {"sonnet": 2, "未指定": 1, "opus": 1})
+
+    def test_normalize_agent_cases(self):
+        normalize = _import_plan_report().normalize_agent
+        cases = {
+            "`sonnet`（readonly-verifier）": "sonnet",
+            "Opus (deep review)": "opus",
+            "  \t ": "未指定",
+            "``": "未指定",
+            None: "未指定",
+            "haiku,fast": "haiku",
+            "Sonnet 4.5": "sonnet",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize(raw), expected)
+
+    def test_md_agent_line_uses_normalized_keys(self):
+        steps = {"S1": _step(agent="`sonnet`（readonly-verifier）"), "S2": _step(agent="sonnet")}
+        self.assertIn("**Agent 分布**：sonnet 2", _md(_state(steps)))
+
     def test_total_duration_sums_completed_and_wall_clock_spans_all(self):
         rollup = _report(_mixed_state())["rollup"]
         self.assertEqual(rollup["total_duration_seconds"], 60 + 60 + 10)

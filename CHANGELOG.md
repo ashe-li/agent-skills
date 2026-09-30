@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.4.0] - 2026-09-30
+
 ### Added
 - **`report` 新增四段式 summary 彙整段**：讀報告時原本要自己逐 step 把「偏離 plan」「副作用」「延後待辦」撈出來，現在 md 與 json 都在 `### 執行摘要` 標頭之後、第一個 phase 表格之前多一段彙整。標頭多三行：狀態計數（沿用 `summary(state)`）、總耗時（completed step 的耗時加總，另附 wall-clock：最早 `started_at` 到最晚 `completed_at`，缺 timestamp 印 `—`）、Agent 分布（依 step `agent` 計數，次數多的在前；計數前先正規化：去掉反引號與頭尾空白、取第一個 `（`／`(`／`，`／`,`／空白之前的 token 並小寫化，所以 ``` `sonnet`（readonly-verifier） ``` 算進 `sonnet`，結果為空歸「未指定」）。接著 `#### 彙整` 底下三張清單，每條 `- **<step>**：<該段文字>`，依 phase 順序排列，標題附 step 數，全空印 `（無）`；切不出四段式的摘要另列「未分類摘要」，不會丟掉。解析規則：以 `1.`／`2.`／`3.`／`4.` 切段（前面是字首或空白、後面不接數字，所以 `S1.10`、`1.5`、`L142-179` 不會被切開），也接受全形 `１．` 與 `1、`；第 2 到第 4 個標記必須跟第 1 個同一族（句點族 `.`／`．` 或頓號族 `、`），避免 `隱藏 6、bridge 2、` 這種頓號列舉被誤判成第 2 段（真實樣本 PDT-10552 的 S1.10 就踩到）；段落等於 `無`、`無偏離`、`無偏離 plan`、`無新增`、`無新增項目`、`—`、`-`、`N/A`、`無新教訓` 或空字串（去頭尾空白與結尾 `；`／`，` 後比對）就不列，`無偏離；提案未發送` 這種後面還有內容的照列。判定字串集中在常數 `NONE_LIKE_SEGMENTS`。
 
@@ -686,7 +688,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.3.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.4.0...HEAD
+[v3.4.0]: https://github.com/ashe-li/agent-skills/compare/v3.3.0...v3.4.0
 [v3.3.0]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...v3.3.0
 [v3.2.0]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...v3.2.0
 [v3.1.0]: https://github.com/ashe-li/agent-skills/compare/v3.0.0...v3.1.0

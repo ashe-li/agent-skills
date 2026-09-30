@@ -82,6 +82,10 @@ _TRAILING_CATEGORIES = (
 # Rollup (彙整段) constants.
 ROLLUP_HEADING = "#### 彙整"
 UNSPECIFIED_AGENT = "未指定"
+# Agent values are hand-written plan text ("`sonnet`（readonly-verifier）"):
+# drop these characters, then keep the token before the first delimiter.
+_AGENT_STRIP_CHARS = "`"
+_AGENT_TOKEN_END_RE = re.compile(r"[（(，,\s]")
 EMPTY_LIST_NOTE = "（無）"
 UNCLASSIFIED_SUMMARY_LABEL = "未分類摘要"
 # Keys of a parsed summary, in template order (1. 2. 3. 4.).
@@ -255,10 +259,17 @@ def _wall_clock(steps: list[dict[str, Any]]) -> int | None:
     return None if delta < 0 else int(delta)
 
 
+def normalize_agent(agent: Any) -> str:
+    """Lower-cased model token of a step's `agent`, or UNSPECIFIED_AGENT."""
+    text = str(agent or "").replace(_AGENT_STRIP_CHARS, "").strip()
+    token = _AGENT_TOKEN_END_RE.split(text, maxsplit=1)[0]
+    return token.lower() or UNSPECIFIED_AGENT
+
+
 def _agent_counts(steps: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for step in steps:
-        name = str(step.get("agent") or "").strip() or UNSPECIFIED_AGENT
+        name = normalize_agent(step.get("agent"))
         counts[name] = counts.get(name, 0) + 1
     # sorted() is stable: ties keep first-appearance order.
     return {name: counts[name] for name in sorted(counts, key=lambda n: -counts[n])}

@@ -18,7 +18,8 @@ red/green cycle; S2.2 implements it):
       a required keyword-only callable (no default), injected by the caller
       as `plan_runner._strip_unsafe_bytes`.
     - `render_report_json(report) -> str`: plain `json.dumps`-shaped output,
-      `json.loads`-able, carrying `schema_version: 1`.
+      `json.loads`-able, carrying `schema_version: 2` (bumped from 1 when
+      the rollup block and `steps[].summary_parts` were added).
     - `format_duration(seconds: float | int | None) -> str`: `45s` / `2m49s`
       / `1h02m`; `None` or negative -> `"—"`.
     - `plan_runner.cmd_report(Namespace(plan, format, output, force))`:
@@ -376,7 +377,7 @@ class TrailingListsAndProgressTests(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # (e) `report --format json` stdout is json.loads-able and carries
-# schema_version: 1. CLI-level: real plan on disk, in-process cmd_report.
+# schema_version: 2. CLI-level: real plan on disk, in-process cmd_report.
 # ---------------------------------------------------------------------------
 
 PLAN_TEXT = """# Report CLI Test Plan
@@ -485,12 +486,12 @@ class CliJsonFormatTests(unittest.TestCase):
     def setUp(self):
         self.plan_report = _import_plan_report()
 
-    def test_report_json_stdout_is_loadable_and_has_schema_version_1(self):
+    def test_report_json_stdout_is_loadable_and_has_schema_version_2(self):
         plan_path = _new_populated_plan(self)
         rc, out = _capture(pr.cmd_report, _report_args(plan_path, fmt="json"))
         self.assertEqual(rc, 0, out)
         payload = json.loads(out)
-        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["schema_version"], 2)
         self.assertEqual(payload["progress"], pr.summary(pr.load_state(plan_path))["progress"])
         phase_names = [p["name"] for p in payload["phases"]]
         self.assertEqual(phase_names, ["Phase 1: Setup", "Phase 2: Build"])

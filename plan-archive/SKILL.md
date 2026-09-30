@@ -53,7 +53,7 @@ python3 ~/Documents/agent-skills/scripts/plan_runner.py report <plan>
 
 **不存在**：在 `## 執行摘要` 段寫一行「（本 plan 未經 /plan-run 推進，無執行紀錄）」，繼續下一步。
 
-為什麼要在移動前做：state 放在 `.plan-state/` 隱藏目錄，Step 4 的 `mv` 只搬 `.md`，歸檔後 plan 和 state 就分開了，執行紀錄必須先嵌進 plan 本身才會被保存。報告格式對 `parse_plan` 無效（開頭固定 `### 執行摘要` 不含 Phase 字樣、各 phase 標題用 `####`、不用 `- [ ]` 列表、摘要每行以 `>` 引用開頭、其餘行也都不以空白、`-` 或 `#` 開頭，整段包在 `## 執行摘要` 底下），歸檔後的 plan 就算被重新 `init` 也不會多出 step 或 phase。
+為什麼要在移動前做：state 放在 `.plan-state/` 隱藏目錄，Step 4 的 `mv` 只搬 `.md`，歸檔後 plan 和 state 就分開了，執行紀錄必須先嵌進 plan 本身才會被保存。報告格式對 `parse_plan` 無效（開頭固定 `### 執行摘要` 不含 Phase 字樣、各 phase 標題用 `####`、不用 `- [ ]` 列表（彙整段與「未完成與例外」的清單項一律以 `- **<step>**` 開頭）、摘要每行以 `>` 引用開頭、其餘行也都不以空白或 `#` 開頭，整段包在 `## 執行摘要` 底下），歸檔後的 plan 就算被重新 `init` 也不會多出 step 或 phase。
 
 Step 3 的驗證表可以直接引用報告裡「未完成與例外」的 failed／skipped 清單，不必重新逐條核對。
 
@@ -92,7 +92,7 @@ mkdir -p plans/completed
 mv plans/active/<filename>.md plans/completed/<filename>.md
 ```
 
-確認移動成功後輸出：`✅ 已歸檔：plans/completed/<filename>.md`。**最終回覆必須附上嵌入的執行摘要精簡版**：Progress 進度行、每個 phase 的 step 狀態表（可省略逐 step 摘要引文）、Step 2.5「未完成與例外」段全文——只把摘要嵌進歸檔後的 `.md` 不算交付，使用者要在這次回覆裡就看到。Step 2.5 判定為「無執行紀錄」的 plan，這裡照實回覆「（本 plan 未經 /plan-run 推進，無執行紀錄）」，不用假造摘要內容。
+確認移動成功後輸出：`✅ 已歸檔：plans/completed/<filename>.md`。**最終回覆必須附上嵌入的執行摘要精簡版**：報告路徑獨立一行（例：`報告：plans/completed/<filename>.md`（`## 執行摘要` 段），供使用者直接開檔 review）、Progress 進度行、`#### 彙整` 的三張清單（偏離 plan／副作用／延後待辦）全文、每個 phase 的 step 狀態表（可省略逐 step 摘要引文）、Step 2.5「未完成與例外」段全文——只把摘要嵌進歸檔後的 `.md` 不算交付，使用者要在這次回覆裡就看到。Step 2.5 判定為「無執行紀錄」的 plan，這裡照實回覆「（本 plan 未經 /plan-run 推進，無執行紀錄）」，不用假造摘要內容。
 
 ---
 

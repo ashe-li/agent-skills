@@ -97,6 +97,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
 | [`/rca`](#rca--四路平行-rca--對抗式彙整) | 告警（Sentry／Grafana／CI）→ 四路唯讀平行調查 → 用新證據裁決矛盾 → 根因＋falsifier＋修復 PR 草稿 |
+| [`/alert-triage`](#alert-triage--firing-alert-live-data-rca--分類) | firing Grafana/Loki alert → live-data RCA → 分類 benign vs real；real 才開 guardrail PR，report 沉澱到 KB |
 
 ---
 
@@ -328,6 +329,22 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 與 `alert-triage` 互補：只需判斷一則 Grafana 告警是 benign 還是 real 時，用 `alert-triage` 就夠
 
 **首跑實例（2026-09-22）**：Sentry `item with id nmsd must have "output" method`，258 個 issue、4,135 次事件，查出來是廣告素材注入的第三方驗證腳本。降噪 PR 已 merge（web-app PR 8228）。
+
+</details>
+
+### `/alert-triage` — Firing Alert Live-Data RCA ＋ 分類
+
+收到一則 firing Grafana／Loki alert，先對 live 資料（grafana MCP、kubectl）做 root-cause analysis，再判斷是 benign false-positive 還是 real regression。real 才提 guardrail fix 並開 PR；benign 只記錄理由、不開 PR。最後產一份繁體中文 RCA report 沉澱到知識庫。
+
+<details>
+<summary>Features</summary>
+
+- **分類先驗來自內部 incident KB**，不是通用 SRE 知識：每次先 grep KB 撈既有 RCA 當 priors，再對照當前 alert
+- **下結論前必做 live verify**；只靠 alert 描述、runbook、config 推論的結論一律標 `provisional`。runbook 歸因視為待驗證假設，與實測衝突時以 live 為準並寫出「runbook 說 X，實測 Y」
+- **benign／real 不是純二元**：同一個 alert 可以拆成 sub-signal 分別處理（例如 imgproxy 422 的 two-classes）
+- **HITL Gates（G1–G4）**：開 PR、動後端資源等不可逆動作前停下來等使用者確認
+- 附 `fixtures/`：5 個代表案例（imgproxy 422、CF Tunnel 404、ARC arm64 cold-start、cert-manager webhook、Loki OOM）與驗收結果，作為分類決策的回歸樣本
+- 與 `/rca` 互補：只需判斷單一 Grafana alert 是 benign 還是 real 用 `alert-triage`；要跨 metrics／git／KB／infra 交叉比對時用 `/rca`
 
 </details>
 

@@ -1,7 +1,9 @@
 ---
 fixture_id: "02"
+kind: negative-control
 alert: "CF Tunnel: Prod 404 Sustained High (Route Regression)"
 expected_classification: benign
+expected_verdict: benign
 expected_confidence: HIGH
 expected_matched_priors:
   - memory/verify-runbook-attribution-before-citing

@@ -1,7 +1,9 @@
 ---
 fixture_id: "03"
+kind: negative-control
 alert: "KubePodNotReady (INFO — diagnostic)"
 expected_classification: benign
+expected_verdict: benign
 expected_confidence: HIGH
 expected_matched_priors:
   - wiki/learned/hpa-scaleup-containercreating-not-failure

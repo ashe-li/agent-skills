@@ -1,7 +1,9 @@
 ---
 fixture_id: "04"
+kind: negative-control
 alert: "kustomize-controller: Certificate dry-run failed (no endpoints available for service cert-manager-webhook)"
 expected_classification: benign
+expected_verdict: benign
 expected_confidence: HIGH
 expected_matched_priors:
   - wiki/learned/flux-kustomization-webhook-transient-fail-triage

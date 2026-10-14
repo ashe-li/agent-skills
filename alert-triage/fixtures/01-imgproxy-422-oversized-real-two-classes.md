@@ -1,7 +1,9 @@
 ---
 fixture_id: "01"
+kind: regression
 alert: "imgproxy: High 422 Rate (Oversized Source Images)"
 expected_classification: real
+expected_verdict: real
 expected_confidence: HIGH
 expected_matched_priors:
   - wiki/learned/dedup-marker-tried-vs-succeeded

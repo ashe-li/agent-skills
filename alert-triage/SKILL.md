@@ -150,6 +150,7 @@ date: <YYYY-MM-DD>
 type: incident-rca
 tags: [alert-triage, <service>, <failure-class>]
 status: <benign 記錄 / real 已開 PR / provisional 待補證據>
+action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 action item 寫 0
 ---
 
 ## TL;DR
@@ -170,12 +171,38 @@ status: <benign 記錄 / real 已開 PR / provisional 待補證據>
 ## 處置
 <benign：為何 benign、不開 PR 的理由；real：guardrail 方案 + PR 連結>
 
-## 待辦 / 後續
+## Action Items
+<有項目：下方 schema 的表格；無項目（典型是 benign）：只寫「無」一個字>
 ```
 
 - **benign**：報告寫清楚「為何 benign」（引 prior + live 證據），**不開 PR**。
 - **real**：附證據連結進 Step 6（Loki query 字串 / `mcp__grafana__generate_deeplink` 生的 Grafana deeplink / kubectl 輸出片段）。
 - 文件原則：Markdown report，**不寫一次性 `.sh` 驗證腳本**（rule `documentation-style`）；commit 依主題分組。
+
+### Action Items 固定 schema（S3.6 digest 會解析，不可更動）
+
+表頭、欄位順序、分隔符一字不改：
+
+```markdown
+| AI-ID | 項目 | owner | 期限(YYYY-MM-DD) | 狀態(open/done/wontfix) | 連結 |
+|---|---|---|---|---|---|
+| AI-20261014-01 | <一句話、動詞開頭的待辦> | 使用者 | <使用者給的 YYYY-MM-DD；未給寫 TBD> | open | <PR／issue／report 連結，沒有寫 `-`> |
+```
+
+- **標題**：固定 `## Action Items`（二級標題，英文，大小寫照寫）；表格緊接在標題下方，標題與表格之間不放其他段落。
+- **AI-ID**：`AI-<報告日期 YYYYMMDD>-<序號>`，序號兩位數、從 `01` 起、同一份報告內不重複（例：`AI-20261014-01`）。報告日期就是 frontmatter 的 `date`。
+- **owner**：只能填 `使用者` 或使用者指定的人名，不得填團隊名、`TBD`、空白。
+- **期限**：由使用者給，格式 `YYYY-MM-DD`。**agent 不得自行填日期**；使用者還沒給就寫 `TBD`。
+- **狀態**：只能是 `open`、`done`、`wontfix` 三者之一（小寫）。
+- **連結**：沒有就寫 `-`，欄位不可留空。
+- **後端 own 的項目一律不列入表格**（`smb-*`／`payment-*` 的 helm values／secrets、後端 EC2、prod 的 cloudflared／alloy deploy trigger 等，見 `~/.claude/rules/common/repo-ownership.md`）。殘餘問題在後端層時，只在正文（處置或分類結論）用一句話標「屬後端」，不寫通知草稿、不寫提案、不列 row。
+- **無項目**：結論是 benign 且沒有任何 action item 時，`## Action Items` 底下只寫「無」，不放表頭，frontmatter 寫 `action_items_open: 0`。
+- **`action_items_open`**：必須等於表中狀態為 `open` 的筆數；改了 row 狀態要同步改這個數字。
+- **格式約束**：每筆一行；任一欄位內不得出現 `|` 或換行（需要時用全形 `｜` 或改寫）；不得合併儲存格、不得在表格中間插入空行或註解。
+
+> **解析契約**：S3.6 的 digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
+
+完整範例：[`examples/action-items-open.md`](examples/action-items-open.md)（2 筆 open）、[`examples/action-items-benign.md`](examples/action-items-benign.md)（benign 寫「無」）。
 
 ## Step 6 — Guardrail Fix 草案（僅 real）
 

@@ -1,7 +1,9 @@
 ---
 fixture_id: "05"
+kind: regression
 alert: "KubeContainerOOMKilled + Loki: Pod Crashing (monitoring/loki-0)"
 expected_classification: real
+expected_verdict: real
 expected_confidence: HIGH
 expected_matched_priors:
   - reports/2026-05-25-prod-loki-oom-sw-cache-dashboard-range-unwrap

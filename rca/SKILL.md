@@ -83,7 +83,24 @@ INFRA 判斷「跟這次告警無關」時，要寫出排除依據（例如：�
    這一步要說明為什麼不是其他三類。**特別注意**：看到 drift 時，預設問題是「這個 drift 是不是該寫進 terraform 的正確狀態」，不是「要不要 apply 回去」。以前吃過虧：把本來該 commit 進 terraform 的 drift 直接當成正常狀態套用了。
 5. **修復 PR 草稿＋rollback checklist**：寫成草稿檔，不開 PR（開 PR 要經過 HITL G1）。草稿包含 repo、base branch（`web-app` 用 `hotfix`）、改動的 diff 或具體檔案:行號、繁體中文 PR body、驗收方式（要可觀察：哪一條 query 的數字降到多少）。rollback checklist 包含：觸發條件（哪個數字回升到多少）、每一步的指令、每一步的預期輸出、資料／狀態是否可逆、通知誰。
 
-SYNTHESIS 的產出寫到 KB 的 `reports/<YYYY-MM-DD>-rca-<slug>.md`（frontmatter `type: incident-rca`，tags 帶 `rca`），並掛到 `reports/INDEX.md`。PR 草稿放在同目錄的 `.verification/<date>/rca-<slug>/pr-draft.md`。
+6. **Action Items**：報告最後一節固定為 `## Action Items`，用下面這張固定 schema 的表格列出所有後續待辦（修復 PR、CODIFY 寫回 IaC、監控補強、要使用者決定的事）：
+
+   ```markdown
+   | AI-ID | 項目 | owner | 期限(YYYY-MM-DD) | 狀態(open/done/wontfix) | 連結 |
+   |---|---|---|---|---|---|
+   | AI-20261014-01 | <一句話、動詞開頭的待辦> | 使用者 | <使用者給的 YYYY-MM-DD；未給寫 TBD> | open | <PR 草稿路徑／issue 連結，沒有寫 `-`> |
+   ```
+
+   - **AI-ID**：`AI-<報告日期 YYYYMMDD>-<序號>`，序號兩位數、從 `01` 起、同報告內不重複；報告日期就是 frontmatter 的 `date`。
+   - **owner** 只能填 `使用者` 或使用者指定的人名。**後端 own 的項目一律不列入表格**（規則 5），只在正文用一句話標「屬後端」，不附通知草稿、不寫提案。
+   - **期限由使用者給，agent 不得自行填日期**；未定寫 `TBD`。**狀態**只能是 `open`／`done`／`wontfix`。**連結**沒有就寫 `-`，不可留空。
+   - 分類是 `EXTERNAL／BENIGN → RECORD` 且沒有任何待辦時，標題底下只寫「無」（不放表格），frontmatter `action_items_open: 0`。
+   - frontmatter 的 `action_items_open: <n>` 必須等於表中狀態為 `open` 的筆數。
+   - 每筆一行；欄位內不得有 `|` 或換行；不得在表格中間插入空行。
+   - **解析契約**：S3.6 的 digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
+   - 完整範例：[`examples/action-items-open.md`](examples/action-items-open.md)（2 筆 open）、[`examples/action-items-benign.md`](examples/action-items-benign.md)（無待辦寫「無」）。與 `alert-triage` Step 5 的 schema 完全相同。
+
+SYNTHESIS 的產出寫到 KB 的 `reports/<YYYY-MM-DD>-rca-<slug>.md`（frontmatter `type: incident-rca`、`action_items_open: <n>`，tags 帶 `rca`），並掛到 `reports/INDEX.md`。PR 草稿放在同目錄的 `.verification/<date>/rca-<slug>/pr-draft.md`。
 
 ## Step 3 — 驗收與 HITL
 

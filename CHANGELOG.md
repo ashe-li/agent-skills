@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.5.0] - 2026-10-15
+
 ### Added
 - **新增 `/alert-triage` skill 進 repo 版本控管**：firing Grafana／Loki alert 進來後，對 live 資料做 RCA，分類為 benign false-positive 或 real regression；real 開 guardrail PR，benign 只記錄，最後產繁體中文 RCA report 沉澱到 KB。分類先驗來自內部 incident KB，下結論前必做 live verify，附 HITL Gates（G1–G4）。原本只存在於 `~/.claude/skills/alert-triage/`、沒有版本控管；目錄（`SKILL.md` 加 `fixtures/` 內 5 個案例與驗收結果）原樣搬入，未改內容。`check_skill.py` 結構評分 PASS（24.2）。
 
@@ -694,7 +696,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.4.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.5.0...HEAD
+[v3.5.0]: https://github.com/ashe-li/agent-skills/compare/v3.4.0...v3.5.0
 [v3.4.0]: https://github.com/ashe-li/agent-skills/compare/v3.3.0...v3.4.0
 [v3.3.0]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...v3.3.0
 [v3.2.0]: https://github.com/ashe-li/agent-skills/compare/v3.1.0...v3.2.0

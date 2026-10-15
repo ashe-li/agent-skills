@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Added
+- **新增 `/alert-triage` skill 進 repo 版本控管**：firing Grafana／Loki alert 進來後，對 live 資料做 RCA，分類為 benign false-positive 或 real regression；real 開 guardrail PR，benign 只記錄，最後產繁體中文 RCA report 沉澱到 KB。分類先驗來自內部 incident KB，下結論前必做 live verify，附 HITL Gates（G1–G4）。原本只存在於 `~/.claude/skills/alert-triage/`、沒有版本控管；目錄（`SKILL.md` 加 `fixtures/` 內 5 個案例與驗收結果）原樣搬入，未改內容。`check_skill.py` 結構評分 PASS（24.2）。
+
+### Changed
+- **`alert-triage` 與 `rca` 報告模板固定產出 Action Items 表**：原本 `alert-triage` Step 5 的「待辦 / 後續」是自由文字、`rca` SYNTHESIS 沒有待辦欄位，後續追蹤沒辦法被機器彙整。現在兩處都改成固定的 `## Action Items` 節，表頭為 `| AI-ID | 項目 | owner | 期限(YYYY-MM-DD) | 狀態(open/done/wontfix) | 連結 |`，AI-ID 格式 `AI-<報告日期 YYYYMMDD>-<兩位數序號>`，報告 frontmatter 新增 `action_items_open: <n>`（等於 open 筆數）。規則：owner 只能填「使用者」或指定人名；後端 own 的項目不列入表格，只在正文用一句話標「屬後端」，不附通知草稿；期限由使用者給、agent 不得自填，未定寫 `TBD`；benign 且無待辦時該節只寫「無」、`action_items_open: 0`。S3.6 的 digest 會用 shell 解析這張表，欄位順序與分隔符不可更動，格式錯誤會被列為「解析失敗」，這點已寫進兩份 SKILL.md。兩個 skill 各附 `examples/action-items-open.md`（2 筆 open）與 `examples/action-items-benign.md`（寫「無」）完整範例（虛構案例）。`check_skill.py` 結構評分 `alert-triage` 21.7、`rca` 24.6，皆 PASS。
+
 ## [v3.4.0] - 2026-09-30
 
 ### Added

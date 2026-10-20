@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.5.1] - 2026-10-21
+
 ### Security
 - **`alert-triage` 的 `allowed-tools` 移除寫入類 Grafana 工具**：拿掉 `mcp__grafana__alerting_manage_rules` 與 `mcp__grafana__grafana_api_request`。這個 skill 會讀 Loki log，而 log 內容可受外部影響；兩個工具一旦預先核准，prompt injection 就可能在沒有確認的情況下修改或刪除 prod 告警規則，甚至建立 service account（互動 session 的 grafana MCP token 實際權限是 Admin）。移除後，呼叫這兩個工具都要經過權限確認，唯讀查詢工具不受影響。SKILL.md 工具表下方已補上原因說明。`check_skill.py` 結構評分 PASS（21.6）。來源：SRE 計畫 S6.3 security review（2026-10-21）。
 
@@ -699,7 +701,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.5.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.5.1...HEAD
+[v3.5.1]: https://github.com/ashe-li/agent-skills/compare/v3.5.0...v3.5.1
 [v3.5.0]: https://github.com/ashe-li/agent-skills/compare/v3.4.0...v3.5.0
 [v3.4.0]: https://github.com/ashe-li/agent-skills/compare/v3.3.0...v3.4.0
 [v3.3.0]: https://github.com/ashe-li/agent-skills/compare/v3.2.0...v3.3.0

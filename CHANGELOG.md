@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Security
+- **`alert-triage` 的 `allowed-tools` 移除寫入類 Grafana 工具**：拿掉 `mcp__grafana__alerting_manage_rules` 與 `mcp__grafana__grafana_api_request`。這個 skill 會讀 Loki log，而 log 內容可受外部影響；兩個工具一旦預先核准，prompt injection 就可能在沒有確認的情況下修改或刪除 prod 告警規則，甚至建立 service account（互動 session 的 grafana MCP token 實際權限是 Admin）。移除後，呼叫這兩個工具都要經過權限確認，唯讀查詢工具不受影響。SKILL.md 工具表下方已補上原因說明。`check_skill.py` 結構評分 PASS（21.6）。來源：SRE 計畫 S6.3 security review（2026-10-21）。
+
 ## [v3.5.0] - 2026-10-15
 
 ### Added

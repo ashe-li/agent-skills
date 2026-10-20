@@ -1,7 +1,7 @@
 ---
 name: alert-triage
 description: firing Grafana/Loki alert 進來 → live-data RCA → 分類 benign false-positive vs real regression → real 開 guardrail PR、benign 記錄不開 PR，產繁體中文 RCA report 沉澱到 KB。分類先驗來自內部 incident KB（非通用 SRE 知識）。觸發：使用者貼 firing alert payload、「triage 這個 alert」「這個告警是真的嗎」「查一下這個 firing alert」，典型案例 imgproxy 422/404、Loki OOM、CF Tunnel 404 noise、Karpenter cold-start、cert-manager webhook transient。
-allowed-tools: Bash, Read, Grep, Glob, Write, Edit, AskUserQuestion, Agent, mcp__grafana__query_loki_logs, mcp__grafana__query_loki_stats, mcp__grafana__query_loki_patterns, mcp__grafana__query_prometheus, mcp__grafana__query_prometheus_histogram, mcp__grafana__list_alert_groups, mcp__grafana__get_alert_group, mcp__grafana__alerting_manage_rules, mcp__grafana__generate_deeplink, mcp__grafana__get_panel_image, mcp__grafana__grafana_api_request
+allowed-tools: Bash, Read, Grep, Glob, Write, Edit, AskUserQuestion, Agent, mcp__grafana__query_loki_logs, mcp__grafana__query_loki_stats, mcp__grafana__query_loki_patterns, mcp__grafana__query_prometheus, mcp__grafana__query_prometheus_histogram, mcp__grafana__list_alert_groups, mcp__grafana__get_alert_group, mcp__grafana__generate_deeplink, mcp__grafana__get_panel_image
 argument-hint: <firing alert payload / alertname / Grafana alert URL>
 ---
 
@@ -243,6 +243,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 | panel PNG（貼報告/PR）| `mcp__grafana__get_panel_image` | — |
 | 任意 Grafana API | `mcp__grafana__grafana_api_request` | — |
 
+- **寫入類工具不預先核准**：`alerting_manage_rules`、`grafana_api_request` 可以建立、修改或刪除 prod 規則與 Grafana 資源。本 skill 會讀 Loki log，log 內容可受外部影響，所以這兩個工具刻意不放進 `allowed-tools`，每次呼叫都要經過權限確認，list／get 也一樣。唯讀查詢優先用上表其他工具（2026-10-21 S6.3 security review）。
 - **kubectl** 一律透過 Bash（`get` / `describe` / `logs --previous` / `top` / `get events`）。
 - grafana MCP 無 offset 的 timestamp 視為 **UTC**；跨 Loki/Prometheus/kubectl 比對時先對齊時區。
 - ALB/AWS 原生 metric grafana MCP 查不到（memory `grafana-mcp-cloudwatch-gap`）→ 走 Athena / AWS console。

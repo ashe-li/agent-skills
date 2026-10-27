@@ -197,6 +197,36 @@ def _record_approval(
     step["requires_approval"] = any(earlier)
 
 
+# `## ` sections that hold prose / checklists about the plan rather than steps.
+# Inside them `- [ ] S0.6 ...` is an acceptance item, not a step header, so it
+# is ignored until the next `## ` heading -- unless step field lines
+# (`  - Dependencies:` / `  - Action:` ...) follow it, in which case it is a
+# real step under a misleading heading (`## Risk-based rollout steps`) and is
+# parsed with a warning. A blacklist (not a "parse Implementation Steps only"
+# whitelist): some plans put steps directly under `### Phase N` with no
+# `## Implementation Steps`.
+NON_STEP_SECTION_RE = re.compile(
+    r"^(?:acceptance|review\s*notes?|risks?|驗收|验收|風險|风险)",
+    re.IGNORECASE,
+)
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+)$")
+_HEADING_LEAD_RE = re.compile(r"^[\W\d_]+")
+
+
+def is_non_step_section(heading: str) -> bool:
+    """True when a `## ` heading opens a section whose checkboxes are not steps."""
+    return bool(NON_STEP_SECTION_RE.match(_HEADING_LEAD_RE.sub("", heading.strip())))
+
+
+def _followed_by_field_line(lines: list[str], lineno: int, field_re: re.Pattern[str]) -> bool:
+    """True when the first non-blank line after 1-based `lineno` is a step
+    field line (`  - Dependencies: ...`). Acceptance items never carry one."""
+    for nxt in lines[lineno:]:
+        if nxt.strip():
+            return field_re.match(nxt) is not None
+    return False
+
+
 def parse_plan(plan_path: Path) -> dict[str, Any]:
     """Parse plan.md into step graph."""
     text = plan_path.read_text(encoding="utf-8")
@@ -214,6 +244,10 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
     current_step_id: str | None = None
     current_action_lines: list[str] = []
     parse_warnings: list[str] = []
+    duplicate_steps: list[dict[str, Any]] = []
+    step_lines: dict[str, int] = {}
+    in_non_step_section = False
+    non_step_heading = ""
 
     phase_re = re.compile(r"^###\s+(.+)$")
     step_re = re.compile(
@@ -236,7 +270,14 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
 
     in_action_block = False
 
-    for raw in lines:
+    for lineno, raw in enumerate(lines, start=1):
+        m_section = _SECTION_HEADING_RE.match(raw)
+        if m_section:
+            # A `## ` heading decides whether step headers are parsed until
+            # the next `## ` heading (`###` phases do not change it).
+            in_non_step_section = is_non_step_section(m_section.group(1))
+            non_step_heading = m_section.group(1).strip()
+
         m_phase = phase_re.match(raw)
         if m_phase:
             flush_action()
@@ -253,13 +294,35 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
             continue
 
         m_step = step_re.match(raw)
+        if m_step and in_non_step_section:
+            if _followed_by_field_line(lines, lineno, field_re):
+                # A step id with step fields underneath is a real step even
+                # when the heading only looks like a non-step section
+                # (`## Risk-based rollout steps`): never swallow it silently.
+                parse_warnings.append(
+                    f"step {m_step.group(1)} 出現在看起來像非 step 的區段"
+                    f"（標題 {non_step_heading}，行號 {lineno}），仍當成 step 解析"
+                )
+            else:
+                m_step = None
         if m_step:
             flush_action()
             in_action_block = False
             step_id = m_step.group(1)
             step_title = m_step.group(2).strip()
             if step_id in steps:
-                parse_warnings.append(f"Duplicate step id: {step_id}")
+                # First definition wins: never overwrite, and drop the
+                # duplicate's own field lines so they cannot leak into it.
+                parse_warnings.append(
+                    f"Duplicate step id: {step_id} "
+                    f"(line {step_lines[step_id]}, again at line {lineno})"
+                )
+                duplicate_steps.append(
+                    {"id": step_id, "first_line": step_lines[step_id], "line": lineno}
+                )
+                current_step_id = None
+                continue
+            step_lines[step_id] = lineno
             steps[step_id] = {
                 "id": step_id,
                 "title": step_title,
@@ -335,6 +398,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
         "steps": steps,
         "phase_order": phase_order,
         "warnings": parse_warnings,
+        "duplicate_steps": duplicate_steps,
     }
 
 
@@ -3404,6 +3468,25 @@ def _attach_after_init(plan_path: Path, fmt: str) -> None:
     )
 
 
+def _duplicate_step_error_payload(parsed: dict[str, Any]) -> dict[str, Any]:
+    """`init`'s error payload when one step id is defined more than once."""
+    details = [
+        f"{d['id']}: line {d['first_line']} (kept) and line {d['line']} (duplicate)"
+        for d in parsed["duplicate_steps"]
+    ]
+    return {
+        "error": "Duplicate step id: " + ", ".join(
+            sorted({d["id"] for d in parsed["duplicate_steps"]})
+        ),
+        "details": details,
+        "hint": (
+            "驗收項不要以 step id 開頭：Acceptance Criteria 等非 step 區段的 checkbox "
+            "請改成「…（對應 S0.6）」，step id 不要放在 checkbox 後的第一個 token。"
+            "修正 plan 後重新 init（已有 state 時加 --force）。"
+        ),
+    }
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).resolve()
     if not plan_path.exists():
@@ -3414,6 +3497,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         emit({"error": path_error})
         return 1
     parsed = parse_plan(plan_path)
+    if parsed["duplicate_steps"]:
+        emit(_duplicate_step_error_payload(parsed))
+        return 1
     errors = validate_dag(parsed)
     if errors:
         emit(_dag_error_payload(plan_path, parsed, errors))

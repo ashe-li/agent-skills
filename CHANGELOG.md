@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`plan_runner.py init`：非 step 區段的 checkbox 不再被解析成 step，重複 step id 改為 init 失敗**：`parse_plan` 的 `step_re` 對每一行都比對、不分區段，所以 `## Acceptance Criteria` 底下的 `- [ ] S0.6 寫完…` 會被當成 step header 重新註冊，**覆蓋**真的 S0.6（deps 被清空），結果該 step 被誤列進 `Ready now`，`init` 只印一行 `Duplicate step id` warning 就照樣成功。同一個坑已在 2026-06-26、2026-07-16、2026-07-27、2026-10-14、2026-10-22、2026-10-27 反覆出現。修法分兩層：(1) 根因：碰到 `## ` 標題時，開頭（略過編號與標點後）是 Acceptance、Review Notes、Risk(s)、驗收、風險的區段（不分大小寫、中英皆可）視為非 step 區段，到下一個 `## ` 標題之前，以 step id 開頭的 checkbox 只有在**底下沒有任何 step 欄位行**（`  - Dependencies:`／`  - Action:`／`  - Files:` 等，緊接在後的第一個非空白行）時才忽略；驗收項從來不帶欄位，所以被忽略。後面跟著 step 欄位的照常當 step 解析，並在 `warnings` 加一筆「step 出現在看起來像非 step 的區段（標題 X，行號 N）」，因此標題只是開頭字詞像黑名單的 step 區段（`## Risk-based rollout steps`、`## 風險評估步驟`、`## Acceptance-driven steps`）不會整段被吞掉；若它和別處同 id 撞號，交給下一條的 duplicate fail-fast；用黑名單而非「只解析 Implementation Steps」，因為有些 plan 的 step 直接放在 `### Phase` 底下、沒有 `## Implementation Steps`；(2) 防線：重複 step id 以第一次出現的定義為準、不再覆蓋（重複那一筆自己的欄位也不會混進去），`init`（含 `--force`）遇到重複時 rc=1、不建 state 也不動既有 state，錯誤訊息列出 id 與兩處行號，並提示「驗收項不要以 step id 開頭」。`parse_plan` 的回傳新增 `duplicate_steps`；`next`、`status` 等讀既有 state 的指令行為不變。影響：既有 plan 在可解析區段內若本來就有重複 id，`init` 會從 warning 變成失敗（原本那種 plan 的 DAG 已經是錯的）；repo 內三份 `plans/active/` plan 的 step 數（12／7／19）不變。測試：`test_plan_runner_regression.py` 新增 `NonStepSectionParsingTest`（15 個），涵蓋 Acceptance 勾選行不產生 step 且真 step 的 deps 保留、開頭字詞像黑名單的 step 區段（上述 4 種標題）全部 step 解析出來並帶 warning、真重複 id 時 `init` 失敗且不建 state（含 `--force` 保留舊 state）、非黑名單區段（`### Phase 2: 品質保障` 底下沒有 id 的 checkbox、step 直接放 Phase 底下）行為不變；golden fixture `scripts/tests/golden/plan_acceptance_checkbox_step_id.md` 縮自 2026-10-27 實際中招的 plan。先在未修改的 code 上跑為紅燈（18 項失敗），修完 `python -m unittest discover scripts/tests` 493 項全綠。`plan-run/SKILL.md` 的「作廢 step 與 parser 契約」補上這條規則。
+
 ## [v3.5.1] - 2026-10-21
 
 ### Security

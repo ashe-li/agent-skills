@@ -12,6 +12,7 @@
 | squash-merge 的 PR 不留 merge commit，用 `git log --merges` 枚舉會漏算 | 08 | wiki/learned/release-pr-enumeration-needs-gh-search-not-git-log-merges.md | 已涵蓋 |
 | workflow 的 branch filter 未涵蓋此 PR 的 base，check 全綠卻是空綠 | 09 | wiki/learned/ci-workflow-branch-filter-makes-checks-vacuous.md | 已涵蓋 |
 | body 引用的 commit hash 未經 hex 合法性／來源存在性／主題一致性三層驗證即被信任 | 10 | wiki/learned/commit-hash-hex-validity-fabrication-detector.md | 已涵蓋 |
+| body 出現 claim ledger 以外、或判定「無法佐證」的說法（起草前沒有逐條證據表，或起草時額外補寫） | 11 | wiki/learned/release-notes-transcribed-from-commits-inherit-their-errors.md | 已涵蓋（實驗性，見 fixture 11） |
 
 ## 未涵蓋 / 待補
 

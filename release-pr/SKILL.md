@@ -75,11 +75,33 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 （依據：web-app #7969 實測，28 commits / 64 檔，~62 條 claim 錯 2 條、誤導 5 條，且**檔案路徑與符號名稱 0/30 錯**——查核預算要放在否定式敘述與跨 PR 一致性，不是路徑。詳見 KB `wiki/learned/release-notes-transcribed-from-commits-inherit-their-errors.md`、`intra-batch-self-correction-is-not-a-bug-fix.md`）
 
+### 產出 claim ledger（起草前，強制）
+
+四項查核做完、**動筆寫 body 之前**，對每一條打算寫進 body 的條目先列一張表：
+
+```
+| PR# | 說法（一行） | 證據指令 | 關鍵輸出 | 判定 |
+|---|---|---|---|---|
+| NNNN | 新增 `utils/foo.ts`，status=added | `gh api repos/<repo>/compare/<base>...<head> --jq '.files[] | select(.filename=="utils/foo.ts") | .status'` | `added` | 正確 |
+| NNNN | 本機 12 suites 全綠 | 無可對當前 diff 重跑的指令 | — | 無法佐證（不進 body，改指向 check runs）|
+```
+
+- 欄位對齊 `evidence-gate` 第 1 節 Claim Schema（宣稱＋證據指令＋關鍵輸出＋判定）：**正確** = PASS、**無法佐證** = UNVERIFIABLE。
+- **證據只能來自 diff**：`gh api .../compare`、`gh pr view <PR> --json files`、`git show <base>:<path>` 等；**commit message 與 PR 標題不能當證據**（只能用來定位該查哪段 diff，見上方 Step 2.5 開頭與 `evidence-gate` 第 2 節）。
+- 證據指令作者先自己跑一次，把實際輸出貼進「關鍵輸出」，不憑記憶或預期填（`evidence-gate` 第 1 節末）。
+- 說法與證據矛盾（如否定式敘述被檔案清單推翻）時，先依上方四項改寫成 diff 支持的版本（補 scope 限定詞），以改寫後的說法**重列一行**再判定；ledger 最終只留「正確」「無法佐證」兩種判定。
+- **判定「無法佐證」的說法不得進 body**：改寫成可查證的版本重列，或整條剔除，不保留原句。
+- 大型批次沿用上方規則由 agent 產表（prompt 要求不變，輸出格式改為本表）。
+- 表落檔 `.verification/YYYY-MM-DD/release-pr-<PR>-claim-ledger.md`（沿用 `evidence-gate` 第 3 節路徑），不得刪除；Step 4.5 的驗收員要用它。
+- **不設人工關卡**：ledger 產完直接進 Step 3，整條鏈跑完才回報使用者。
+
 ## Step 3：產生 description
 
 沿用該 PR 既有 template 結構（通常是 `# Features` / `# Bug Fixes` / `# Improvements`，以 `---` 分隔）。若原 body 是空 template，填入分類結果即可。**保留原有的 section 標題語言與分隔線格式。**
 
 每條 bullet 用 `- **重點**（#PR）：說明`。
+
+**body 的每條 bullet 只能來自 claim ledger 中判定為「正確」的列，不得新增 ledger 沒有的說法**；寫作中想補一句 ledger 沒有的，先回 Step 2.5 補列並跑證據指令，再寫。
 
 ## Step 3.5：範圍相稱性擋門（scope proportionality）
 
@@ -149,7 +171,14 @@ Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Age
 
 本步驟即 `evidence-gate` skill 的 caller 落地（該 skill 第 6 節 Caller 呼叫契約已列本步驟為對應實作）；可直接 `Skill({ skill: "evidence-gate" })` 取用其 Claim Schema（第 1 節）與 Fact-Checker 派遣模板（第 4 節），不必重新定義格式。
 
-**輸入**：draft title/body 全文、PR 號、repo。
+**輸入**：draft title/body 全文、**Step 2.5 的 claim ledger**、PR 號、repo。
+
+**做法**：驗收員拿 ledger 與 body 一起核對，兩件事都要做：
+
+1. **逐列重跑 ledger 的證據指令**（不沿用 ledger 的「關鍵輸出」），確認判定與實際輸出一致。
+2. **反向檢查 body 有沒有 ledger 以外的說法**：逐條 bullet 對回 ledger 的列；對不上的、或對到「無法佐證」列的，各記一列 `通過?=否`（CLAIM 欄標「ledger 外說法」）。
+
+驗收員仍是 fresh-context：不給它草稿產生過程，ledger 只當「要重跑的指令清單」，不當結論。
 
 **輸出**：每條 claim 一列 `CLAIM | 驗證指令 | 實際結果 | 通過?`。base/head/state 一律現查 `gh pr view <PR> --repo <repo> --json baseRefName,headRefName,state`，不沿用記憶或先前對話推斷的值。
 

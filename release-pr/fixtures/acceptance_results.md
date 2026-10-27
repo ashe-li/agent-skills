@@ -52,12 +52,13 @@ self-test：6 個情境，0 個失敗
 | 08 squash-merge 枚舉漏算 | regression | — | REPLACE | 判讀規則已定義 |
 | 09 branch filter 造成空綠 check | regression | — | BLOCK | 判讀規則已定義 |
 | 10 body 引用的 commit hash 未驗證 | regression | — | BLOCK | 判讀規則已定義 |
+| 11 body 出現 ledger 以外或無法佐證的說法 | regression | — | BLOCK | 判讀規則已定義（實驗性，待觀察 3 次 release PR）|
 
 **02／03 在加入 Step 3.5 後沒有被誤剪**，這是本組最重要的一項——這道關卡若寫成「一律縮短」就會在這兩個 fixture 上失敗。
 
 ## 涵蓋率
 
-初版只涵蓋 **1 種**失效（scope bloat）。現為 **8 種**，KB 出處已逐一核對存在（`coverage.md`）。
+初版只涵蓋 **1 種**失效（scope bloat）。現為 **9 種**（含 fixture 11，實驗性），KB 出處已逐一核對存在（`coverage.md`）。
 
 **已知未涵蓋 2 種**（誠實列出，見 `coverage.md` 底部）：
 

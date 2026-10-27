@@ -472,5 +472,214 @@ class InitAttachStreamTestCase(unittest.TestCase):
         self.assertNotIn("Pointer:", conflict.stdout)
 
 
+# ---------------------------------------------------------------------------
+# Non-step sections must not register steps; duplicate step ids fail init.
+#
+# Root cause (KB learned `plan-runner-step-regex-matches-any-checkbox-with-
+# step-id`, recurred 2026-06-26 / 07-16 / 07-27 / 10-14 / 10-22 / 10-27):
+# step_re ran on every line, so `- [ ] S0.6 ...` under `## Acceptance
+# Criteria` re-registered S0.6 and overwrote the real step's deps.
+# ---------------------------------------------------------------------------
+
+ACCEPTANCE_GOLDEN_PLAN = GOLDEN_DIR / "plan_acceptance_checkbox_step_id.md"
+ACCEPTANCE_GOLDEN_EXPECTED = GOLDEN_DIR / "plan_acceptance_checkbox_step_id.expected.json"
+
+
+def _plan_with_tail(heading: str, tail: str) -> str:
+    """Two real steps (S2 depends on S1), then a `## <heading>` section."""
+    return (
+        "# Section Plan\n\n"
+        "## Implementation Steps\n\n"
+        "### Phase 1: Build\n\n"
+        "- [ ] **S1** — First\n"
+        "  - Action: do A\n\n"
+        "- [ ] **S2** — Second\n"
+        "  - Dependencies: S1\n"
+        "  - Action: do B\n\n"
+        f"## {heading}\n\n"
+        f"{tail}\n"
+    )
+
+
+class NonStepSectionParsingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.mod = load_module_from_path(PLAN_RUNNER, "plan_runner_under_test")
+
+    def _write(self, text: str, name: str = "section-plan.md") -> Path:
+        path = self.tmp_path / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _state(self, plan: Path) -> dict:
+        return json.loads(
+            (plan.parent / ".plan-state" / f"{plan.stem}.state.json").read_text("utf-8")
+        )
+
+    # (a) Acceptance-style checkbox with a step id is not a step ---------
+
+    def test_acceptance_checkbox_does_not_create_or_overwrite_step(self) -> None:
+        plan = self._write(
+            _plan_with_tail("Acceptance Criteria", "- [ ] S2 寫完裁決，附證據路徑\n- [ ] S1：報告")
+        )
+        parsed = self.mod.parse_plan(plan)
+        self.assertEqual(list(parsed["steps"]), ["S1", "S2"])
+        self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+        self.assertEqual(parsed["steps"]["S2"]["title"], "Second")
+        self.assertEqual(parsed["warnings"], [])
+
+        r = run_cli("init", str(plan), "--no-attach")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("Ready now: S1", r.stdout)
+        self.assertNotIn("S2", r.stdout.split("Ready now:", 1)[1].splitlines()[0])
+        self.assertNotIn("Duplicate", r.stdout + r.stderr)
+        self.assertEqual(self._state(plan)["steps"]["S2"]["deps"], ["S1"])
+
+    def test_blacklisted_headings_cover_zh_en_and_case(self) -> None:
+        headings = [
+            "Acceptance Criteria", "acceptance criteria", "ACCEPTANCE CRITERIA",
+            "驗收條件", "驗收", "Review Notes", "review notes",
+            "Risks & Mitigations", "Risks", "風險", "風險與對策",
+            "2. Acceptance Criteria",
+        ]
+        for heading in headings:
+            with self.subTest(heading=heading):
+                plan = self._write(_plan_with_tail(heading, "- [ ] S2 不是 step"))
+                parsed = self.mod.parse_plan(plan)
+                self.assertEqual(list(parsed["steps"]), ["S1", "S2"])
+                self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+                self.assertEqual(parsed["warnings"], [])
+
+    def test_skip_ends_at_next_level2_heading(self) -> None:
+        """A step list after a blacklisted section resumes parsing."""
+        text = _plan_with_tail(
+            "Acceptance Criteria", "- [ ] S2 不是 step\n\n## Follow-up Steps\n\n"
+            "- [ ] **S3** — Third\n  - Dependencies: S2\n  - Action: do C",
+        )
+        parsed = self.mod.parse_plan(self._write(text))
+        self.assertEqual(list(parsed["steps"]), ["S1", "S2", "S3"])
+        self.assertEqual(parsed["steps"]["S3"]["deps"], ["S2"])
+        self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+
+    def test_real_fixture_acceptance_lines_keep_deps(self) -> None:
+        """Trimmed from the 2026-10-27 plan that hit this bug live."""
+        expected = json.loads(ACCEPTANCE_GOLDEN_EXPECTED.read_text("utf-8"))
+        plan = self._write(
+            ACCEPTANCE_GOLDEN_PLAN.read_text("utf-8"), "sw-fallback-golden.md"
+        )
+        parsed = self.mod.parse_plan(plan)
+        self.assertEqual(
+            {sid: s["deps"] for sid, s in parsed["steps"].items()}, expected["steps"]
+        )
+        self.assertEqual(parsed["warnings"], [])
+
+        r = run_cli("init", str(plan), "--no-attach", "--format", "json")
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        payload = json.loads(r.stdout)
+        self.assertEqual(payload["ready_steps"], expected["ready"])
+        self.assertEqual(payload["total_steps"], len(expected["steps"]))
+
+    # (b) A real duplicate id inside Implementation Steps fails init -----
+
+    def test_real_duplicate_id_fails_init_without_state(self) -> None:
+        text = (
+            "# Dup Plan\n\n## Implementation Steps\n\n### Phase 1: Build\n\n"
+            "- [ ] **S1** — First\n  - Action: do A\n\n"
+            "- [ ] **S2** — Second\n  - Dependencies: S1\n  - Action: do B\n\n"
+            "- [ ] **S2** — Second again\n  - Action: do B2\n"
+        )
+        plan = self._write(text, "dup-plan.md")
+        r = run_cli("init", str(plan), "--no-attach")
+        self.assertNotEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        out = r.stdout + r.stderr
+        self.assertIn("S2", out)
+        self.assertIn("line 10 (kept)", out)  # first definition
+        self.assertIn("line 14 (duplicate)", out)
+        self.assertIn("驗收項不要以 step id 開頭", out)
+        self.assertFalse((self.tmp_path / ".plan-state").exists(), "must not create state")
+
+    def test_duplicate_keeps_first_definition_in_parse(self) -> None:
+        text = (
+            "# Dup Plan\n\n### Phase 1: Build\n\n"
+            "- [ ] **S1** — First\n  - Action: do A\n\n"
+            "- [ ] **S2** — Second\n  - Dependencies: S1\n  - Action: do B\n\n"
+            "- [ ] **S2** — Second again\n  - Action: do B2\n"
+        )
+        parsed = self.mod.parse_plan(self._write(text, "dup-first.md"))
+        self.assertEqual(parsed["steps"]["S2"]["title"], "Second")
+        self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+        self.assertEqual(parsed["steps"]["S2"]["action"], "do B")
+        self.assertEqual([d["id"] for d in parsed["duplicate_steps"]], ["S2"])
+
+    def test_force_reinit_also_fails_on_duplicate_and_keeps_old_state(self) -> None:
+        good = self._write(_plan_with_tail("Overview", "text"), "reinit-plan.md")
+        self.assertEqual(run_cli("init", str(good), "--no-attach").returncode, 0)
+        before = (self.tmp_path / ".plan-state" / "reinit-plan.state.json").read_text("utf-8")
+        good.write_text(
+            good.read_text("utf-8") + "\n- [ ] **S2** — Dup\n", encoding="utf-8"
+        )
+        r = run_cli("init", str(good), "--no-attach", "--force")
+        self.assertNotEqual(r.returncode, 0)
+        after = (self.tmp_path / ".plan-state" / "reinit-plan.state.json").read_text("utf-8")
+        self.assertEqual(before, after)
+
+    def test_commands_on_existing_state_unaffected_by_duplicate_plan(self) -> None:
+        """Only `init` rejects duplicates; next/status read the state."""
+        plan = self._write(_plan_with_tail("Overview", "text"), "existing-plan.md")
+        self.assertEqual(run_cli("init", str(plan), "--no-attach").returncode, 0)
+        plan.write_text(plan.read_text("utf-8") + "\n- [ ] **S2** — Dup\n", "utf-8")
+        for cmd in ("next", "status"):
+            r = run_cli(cmd, str(plan))
+            self.assertEqual(r.returncode, 0, msg=f"{cmd}: {r.stdout}{r.stderr}")
+
+    # (c) Non-blacklisted sections behave as before ----------------------
+
+    def test_checkbox_without_step_id_under_phase_heading_is_ignored(self) -> None:
+        text = (
+            "# Phase Plan\n\n### Phase 1: Build\n\n"
+            "- [ ] **S1** — First\n  - Action: do A\n\n"
+            "### Phase 2: 品質保障\n\n"
+            "- [ ] 跑一次 lint，沒有 step id\n"
+            "- [ ] 另一個普通待辦\n\n"
+            "- [ ] **S2** — Second\n  - Dependencies: S1\n  - Action: do B\n"
+        )
+        parsed = self.mod.parse_plan(self._write(text, "phase-plan.md"))
+        self.assertEqual(list(parsed["steps"]), ["S1", "S2"])
+        self.assertEqual(parsed["steps"]["S2"]["phase"], "Phase 2: 品質保障")
+        self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+        self.assertEqual(parsed["warnings"], [])
+
+    def test_steps_directly_under_phase_without_implementation_steps_heading(self) -> None:
+        text = (
+            "# Flat Plan\n\n## Overview\n\ntext\n\n### Phase 1: Build\n\n"
+            "- [ ] **S1** — First\n  - Action: do A\n"
+        )
+        parsed = self.mod.parse_plan(self._write(text, "flat-plan.md"))
+        self.assertEqual(list(parsed["steps"]), ["S1"])
+
+    def test_non_blacklisted_level2_heading_still_parses_steps(self) -> None:
+        for heading in ("Implementation Steps", "Rollout Steps", "Phase 3 收尾", "Verification"):
+            with self.subTest(heading=heading):
+                text = f"# P\n\n## {heading}\n\n- [ ] **S1** — First\n  - Action: do A\n"
+                parsed = self.mod.parse_plan(self._write(text, "other-plan.md"))
+                self.assertEqual(list(parsed["steps"]), ["S1"])
+
+    def test_repo_plans_step_counts_unchanged(self) -> None:
+        """Existing plans in this repo keep their step count (12/7/19) and
+        stay warning-free."""
+        expected = {
+            "ecc-decoupling-and-model-adaptation.md": 12,
+            "knowledge-base-quality-optimization.md": 7,
+            "plan-run-stop-hook-control-flow.md": 19,
+        }
+        for name, count in expected.items():
+            with self.subTest(plan=name):
+                parsed = self.mod.parse_plan(REPO_ROOT / "plans" / "active" / name)
+                self.assertEqual(len(parsed["steps"]), count)
+                self.assertEqual(parsed["warnings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

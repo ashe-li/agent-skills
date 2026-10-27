@@ -208,7 +208,7 @@ Step 0/1 照跑，Step 2 改成自己每完成一個 step 跑一次 `complete`�
 
 parser 只認 step／phase／field 的樣式，不看 checkbox 打勾、也不看旁白註記——改 plan 前先弄清楚這條界線：
 
-- **非 step 區段的 checkbox 不會被解析成 step，重複 step id 會讓 `init` 失敗**：`## ` 標題以 Acceptance／驗收／Review Notes／Risks／風險 開頭（不分大小寫、中英皆可）的區段，到下一個 `## ` 標題之前不比對 step 樣式，所以驗收項寫 `- [ ] S0.6 …` 不會再覆蓋真的 S0.6。同一個 step id 在可解析區段出現第二次時，`init` rc=1、不建 state，錯誤列出 id 與行號（以第一次出現為準）；驗收項請改寫成「…（對應 S0.6）」，不要以 step id 開頭
+- **非 step 區段的 checkbox 不會被解析成 step，重複 step id 會讓 `init` 失敗**：`## ` 標題以 Acceptance／驗收／Review Notes／Risks／風險 開頭（不分大小寫、中英皆可）的區段，到下一個 `## ` 標題之前不比對 step 樣式，這些區段裡以 step id 開頭、底下沒有 step 欄位行（`  - Dependencies:`／`  - Action:` 等）的 checkbox 會被忽略，所以驗收項寫 `- [ ] S0.6 …` 不會再覆蓋真的 S0.6；底下帶欄位的照常當 step 解析並在 `warnings` 提醒，不會被靜默丟掉。同一個 step id 在可解析區段出現第二次時，`init` rc=1、不建 state，錯誤列出 id 與行號（以第一次出現為準）；驗收項請改寫成「…（對應 S0.6）」，不要以 step id 開頭
 - **Checkbox 對 runner 沒有意義**：`init` 無條件把每個 step 設成 `pending`，`- [x]` 打勾的 step 照樣進 `ready_steps`（實測驗證）。想讓某個 step 不被執行，不能靠打勾，要讓它從一開始就不是 step
 - **作廢一個 step＝把它移出 step 結構**：搬進一個 parser 不當 step 看的區塊，例如 `## 作廢範圍（不可執行，YYYY-MM-DD）`，底下用普通條列、不套 step ID 樣式。**要用二級標題**：三級標題會被 phase regex 攔下，即使文字不含「Phase」照樣吃掉整行，且不像二級標題那樣正確結束前一個 step 的欄位收集。頂部 blockquote 或內文括號註記則相反——完全不會被 parser 認到，所以也擋不住 checkbox 判讀，別指望靠加註解讓 runner 跳過
 - 保留下來的 step ID **不重新編號**，同時把其他 step `Dependencies` 裡引用到被移出 ID 的邊一併刪掉——依賴指向不存在的 step，`init` 會直接判 DAG validation failed。想保留某個 step 位置（維持依賴邊）又不想真的執行它，**唯一在 runner 層生效的做法**是 `init` 之後立刻跑 `plan_runner.py skip <plan> <step_id>`——`skipped` 對下游依賴視同已完成、`next` 不會再列出它。在 plan 文字裡清空 `Files`、`Action` 寫「作廢，不執行」只是給人看的提示：`init` 照樣把它設成 `pending`，`start` 只檢查依賴、不讀 `Action`／`Files` 內容，執行者仍有可能把它跑掉

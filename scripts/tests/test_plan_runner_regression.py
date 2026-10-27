@@ -581,6 +581,51 @@ class NonStepSectionParsingTest(unittest.TestCase):
         self.assertEqual(payload["ready_steps"], expected["ready"])
         self.assertEqual(payload["total_steps"], len(expected["steps"]))
 
+    def test_step_section_with_blacklisted_word_in_heading_is_not_swallowed(self) -> None:
+        """PR 91 review: headings that start with a blacklisted word but hold
+        real steps (step id + field lines) must still parse, with a warning."""
+        headings = [
+            "Risk-based rollout steps", "Risk-first Implementation Steps",
+            "風險評估步驟", "Acceptance-driven steps",
+        ]
+        for heading in headings:
+            with self.subTest(heading=heading):
+                text = (
+                    "# P\n\n## Implementation Steps\n\n### Phase 1: Build\n\n"
+                    "- [ ] **S1** — First\n  - Action: do A\n\n"
+                    f"## {heading}\n\n"
+                    "- [ ] **S2** — Second\n  - Dependencies: S1\n  - Action: do B\n"
+                    "    continued action line\n\n"
+                    "- [ ] **S3** — Third\n  - Dependencies: S2\n  - Action: do C\n"
+                )
+                parsed = self.mod.parse_plan(self._write(text, "risky-heading.md"))
+                self.assertEqual(list(parsed["steps"]), ["S1", "S2", "S3"])
+                self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+                self.assertEqual(parsed["steps"]["S3"]["deps"], ["S2"])
+                self.assertIn("do B continued action line", parsed["steps"]["S2"]["action"])
+                hits = [w for w in parsed["warnings"] if "看起來像非 step 的區段" in w]
+                self.assertEqual(len(hits), 2, parsed["warnings"])
+                self.assertIn(f"標題 {heading}", hits[0])
+                self.assertIn("行號 12", hits[0])
+                plan = self.tmp_path / "risky-heading.md"
+                r = run_cli("init", str(plan), "--no-attach", "--force")
+                self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+                self.assertIn("Steps: 3", r.stdout)
+
+    def test_acceptance_item_without_fields_ignored_even_before_blank_and_prose(self) -> None:
+        tail = "- [ ] S2 沒有欄位\n\n補充說明文字\n- [ ] S1：另一項\n  備註"
+        parsed = self.mod.parse_plan(self._write(_plan_with_tail("Acceptance Criteria", tail)))
+        self.assertEqual(list(parsed["steps"]), ["S1", "S2"])
+        self.assertEqual(parsed["steps"]["S2"]["deps"], ["S1"])
+        self.assertEqual(parsed["warnings"], [])
+
+    def test_step_with_fields_in_acceptance_colliding_with_real_id_fails_init(self) -> None:
+        tail = "- [ ] **S2** — 撞號\n  - Action: 假的"
+        plan = self._write(_plan_with_tail("Acceptance Criteria", tail), "collide.md")
+        r = run_cli("init", str(plan), "--no-attach")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Duplicate step id: S2", r.stdout)
+
     # (b) A real duplicate id inside Implementation Steps fails init -----
 
     def test_real_duplicate_id_fails_init_without_state(self) -> None:

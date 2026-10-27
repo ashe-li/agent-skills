@@ -198,12 +198,13 @@ def _record_approval(
 
 
 # `## ` sections that hold prose / checklists about the plan rather than steps.
-# Inside them `- [ ] S0.6 ...` is an acceptance item, not a step header, so
-# step_re is not run until the next `## ` heading. A blacklist (not a
-# "parse Implementation Steps only" whitelist): some plans put steps directly
-# under `### Phase N` with no `## Implementation Steps`. The match is anchored
-# at the start of the heading (after numbering / punctuation) so a step section
-# that merely mentions "risk" in its title is never skipped.
+# Inside them `- [ ] S0.6 ...` is an acceptance item, not a step header, so it
+# is ignored until the next `## ` heading -- unless step field lines
+# (`  - Dependencies:` / `  - Action:` ...) follow it, in which case it is a
+# real step under a misleading heading (`## Risk-based rollout steps`) and is
+# parsed with a warning. A blacklist (not a "parse Implementation Steps only"
+# whitelist): some plans put steps directly under `### Phase N` with no
+# `## Implementation Steps`.
 NON_STEP_SECTION_RE = re.compile(
     r"^(?:acceptance|review\s*notes?|risks?|驗收|验收|風險|风险)",
     re.IGNORECASE,
@@ -215,6 +216,15 @@ _HEADING_LEAD_RE = re.compile(r"^[\W\d_]+")
 def is_non_step_section(heading: str) -> bool:
     """True when a `## ` heading opens a section whose checkboxes are not steps."""
     return bool(NON_STEP_SECTION_RE.match(_HEADING_LEAD_RE.sub("", heading.strip())))
+
+
+def _followed_by_field_line(lines: list[str], lineno: int, field_re: re.Pattern[str]) -> bool:
+    """True when the first non-blank line after 1-based `lineno` is a step
+    field line (`  - Dependencies: ...`). Acceptance items never carry one."""
+    for nxt in lines[lineno:]:
+        if nxt.strip():
+            return field_re.match(nxt) is not None
+    return False
 
 
 def parse_plan(plan_path: Path) -> dict[str, Any]:
@@ -237,6 +247,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
     duplicate_steps: list[dict[str, Any]] = []
     step_lines: dict[str, int] = {}
     in_non_step_section = False
+    non_step_heading = ""
 
     phase_re = re.compile(r"^###\s+(.+)$")
     step_re = re.compile(
@@ -265,6 +276,7 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
             # A `## ` heading decides whether step headers are parsed until
             # the next `## ` heading (`###` phases do not change it).
             in_non_step_section = is_non_step_section(m_section.group(1))
+            non_step_heading = m_section.group(1).strip()
 
         m_phase = phase_re.match(raw)
         if m_phase:
@@ -281,7 +293,18 @@ def parse_plan(plan_path: Path) -> dict[str, Any]:
             current_step_id = None
             continue
 
-        m_step = None if in_non_step_section else step_re.match(raw)
+        m_step = step_re.match(raw)
+        if m_step and in_non_step_section:
+            if _followed_by_field_line(lines, lineno, field_re):
+                # A step id with step fields underneath is a real step even
+                # when the heading only looks like a non-step section
+                # (`## Risk-based rollout steps`): never swallow it silently.
+                parse_warnings.append(
+                    f"step {m_step.group(1)} 出現在看起來像非 step 的區段"
+                    f"（標題 {non_step_heading}，行號 {lineno}），仍當成 step 解析"
+                )
+            else:
+                m_step = None
         if m_step:
             flush_action()
             in_action_block = False

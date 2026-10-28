@@ -46,7 +46,7 @@ haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（�
 - **輸入**：`$ARGUMENTS` + 對話中的需求脈絡（`/notion-plan` 來源含整理後的 Markdown）+ 專案根目錄路徑
 - **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；輸出契約見 `agents/complexity-triage.md` 的「輸出格式」章節（唯一權威，不在此重複 JSON schema）
 - **主模型裁決**：對照下表採納或否決——分診結果與主模型判斷衝突時，**取較高複雜度**（分診只准降級失敗、不准升級失敗）；`ambiguous_requirements=true` → 先 AskUserQuestion 補需求再重分診
-- 分診 agent 是 Haiku・小，換到的是：低複雜度任務跳過 Plan agent 全儀式 + Opus・大審查 agent 的成本
+- 分診 agent 是 Haiku・小，換到的是：低複雜度任務跳過 Plan agent 全儀式 + 完整審查 agent 的成本
 
 ### Step 2b: 路徑判定
 

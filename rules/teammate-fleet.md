@@ -55,4 +55,4 @@ Why: 本 session（teammate 編隊模式推進）實測至少 4 次交錯：①�
 - 任一路實際跑成比預估高一級的形狀（例：預估單軸調查卻擴成跨模組）、或連錯兩次 → 停下重估路線，不加派更多 agent 補洞。
 - trivial 任務（單檔已知位置、單條指令可答）不開編隊。
 
-Why: 2026-07-08 Fable 主對話實測 — 背景編隊（具名 teammate、派出即繼續、SendMessage 續問）讓多路調查與主對話推進並行、等待時間歸零；但無閘門的大量委派會失控燒 token，故比照 Task Tracking 以 HITL 附成本預估徵求啟用。2026-10-29 改為只估「模型 × 量級」：對照 120 天 1,199 個 subagent 實際用量，過去寫進 skill 的具體數字系統性偏低數倍，且同模型 p25 到 p90 差約 3 倍，具體數字給的是假精度。本機另有 `~/.claude/playbooks/10-model-dispatch.md` §7.1 詳版與 CLAUDE.md 硬性偏好一行；本檔為 repo 可攜版本，供其他環境接線（不建議同時 symlink 進常駐，避免重複載入）。
+Why: 2026-07-08 Fable 主對話實測 — 背景編隊（具名 teammate、派出即繼續、SendMessage 續問）讓多路調查與主對話推進並行、等待時間歸零；但無閘門的大量委派會失控燒 token，故比照 Task Tracking 以 HITL 附成本預估徵求啟用。2026-10-29 改為只估「模型 × 量級」：對照 120 天 1,199 個 subagent 實際用量，過去寫進 skill 的具體數字全部偏低（rca、dispatch-loop 約 1–2 倍，`/design` 分診與 `/evidence-check` 5 倍以上），且同模型 p25 到 p90 差約 3 倍，單一數字代表不了實際用量。本機另有 `~/.claude/playbooks/10-model-dispatch.md` §7.1 詳版與 CLAUDE.md 硬性偏好一行；本檔為 repo 可攜版本，供其他環境接線（不建議同時 symlink 進常駐，避免重複載入）。

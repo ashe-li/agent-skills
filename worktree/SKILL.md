@@ -120,7 +120,7 @@ Tip: 有 MERGED/CLOSED 的 PR → `/worktree cleanup`
 自動偵測並清理已 merge/closed PR 的 worktree。
 
 **單一 repo（互動式）**：依下列步驟由 skill 執行；
-**跨 repo 批次**：直接呼叫 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`（腳本在 agent-skills repo 根目錄，不在本 skill 目錄下；dry-run 預設；`--fetch --apply` 才動作；`--du` 加算磁碟用量；`--kill-blockers` 連佔用行程一起清；`--root` 覆寫掃描根目錄）。該腳本除了 PR 狀態與工作區乾淨，還會驗「有無未推送 commit」與「有無行程以該 worktree 為 cwd」，並且**永遠不刪 branch**；用法與硬規則見腳本檔頭註解。
+**跨 repo 批次**：直接呼叫 `~/Documents/agent-skills/scripts/worktree-cleanup.sh`（腳本在 agent-skills repo 根目錄，不在本 skill 目錄下；dry-run 預設；`--fetch --apply` 才動作；`--du` 加算磁碟用量；`--kill-blockers` 連佔用行程一起清；`--root` 覆寫找主 repo 的根目錄；worktree 從各主 repo 的 `git worktree list --porcelain` 列出，在 ROOT 外、第三層巢狀、detached HEAD 都涵蓋，目錄已不存在的列為 orphan 只提示 prune）。該腳本除了 PR 狀態與工作區乾淨，還會驗「有無未推送 commit」與「有無行程以該 worktree 為 cwd」，並且**永遠不刪 branch**；用法與硬規則見腳本檔頭註解。
 
 **步驟：**
 

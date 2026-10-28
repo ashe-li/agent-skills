@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 啟用：git config core.hooksPath .githooks
+# 掃暫存區新增行；黑名單由 BANNED_TERMS_REGEX 或 ~/.config/agent-skills/banned-terms.regex 提供，
+# 都沒有時直接放行。細節見 scripts/check-banned-terms.sh。
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+exec bash "$root/scripts/check-banned-terms.sh" --staged

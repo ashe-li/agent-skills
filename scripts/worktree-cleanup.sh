@@ -4,13 +4,20 @@
 # 把反覆手刻的 worktree 清理指令鏈固化下來。每個判斷條件都對應一次實際踩過的坑，
 # 來源標在該段註解（KB ~/Documents/knowledge-base/wiki/learned/<檔名>.md）。
 #
+# 盤點範圍：對每個主 repo 跑 `git worktree list --porcelain`，主 repo 由「ROOT 下的 .git 目錄」
+# 與「ROOT 下 .git 檔反查 --git-common-dir」聯集而得。worktree 在 ROOT 外（/private/tmp）、
+# 第三層巢狀（<repo>-wt/<name>）、detached HEAD 都會列出；目錄已不存在的列為 orphan，只提示
+# `git worktree prune`，不列入可移除。舊版靠 `find -maxdepth 2` + 有 branch 才判斷，2026-10-28
+# 對帳漏了 19 個且沒有任何提示。
+# 來源：worktree-cleanup-script-silently-skips-detached-head-tmp-and-nested-worktrees.md
+#
 # 用法：
 #   worktree-cleanup.sh                                  # 唯讀盤點（預設）
 #   worktree-cleanup.sh --du                             # 加算磁碟用量（慢，node_modules 很大）
 #   worktree-cleanup.sh --fetch                          # 先 fetch origin 再判斷（--apply 必要）
 #   worktree-cleanup.sh --fetch --apply                  # 實際移除判定為 remove 的 worktree
 #   worktree-cleanup.sh --fetch --apply --kill-blockers  # 連佔用行程一起 kill
-#   worktree-cleanup.sh --root <dir>                     # 覆寫掃描根目錄（預設 ~/Documents）
+#   worktree-cleanup.sh --root <dir>                     # 覆寫找主 repo 的根目錄（預設 ~/Documents）
 #
 # 硬規則（違反過會出事，不要改）：
 #   1. 只移除 worktree 目錄，永遠不刪 branch。2026-08-04 全機 sweep 誤清了一個含未推送
@@ -132,46 +139,65 @@ dump_prs() {
   printf '%s' "$dumpfile"
 }
 
-# ── 盤點 ──────────────────────────────────────────────────────────────────────────
-scan_processes
+# ── 發現 worktree：主 repo 側 porcelain ∪ worktree 側反查 ────────────────────────────
+# 舊版 `find "$ROOT" -maxdepth 2 -name .git -type f` 看不到 /private/tmp 底下的、也看不到
+# `<repo>-wt/<name>` 這種第三層的。改成先湊主 repo，再讓每個主 repo 自己報出全部 worktree。
+# 主 repo 集合必須兩側聯集：只從 ROOT 下的 .git 目錄出發，主 repo 在 ROOT 外的 worktree 會漏
+# （claude-reports 案例）。來源：worktree-scan-from-main-repo-side-misses-repos-outside-scan-root.md
+#       worktree-cleanup-script-silently-skips-detached-head-tmp-and-nested-worktrees.md
+SCAN_DEPTH=3
+DETACHED="(detached)"   # TSV 佔位：bash 的 tab IFS 會把空欄位吃掉，空 branch 不能直接寫空字串
 
-repos=""
-while IFS= read -r gitfile; do
-  wt=$(dirname "$gitfile")
-  parent=$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||') || parent=""
-  [ -n "$parent" ] || continue
-  [ "$parent" = "$wt" ] && continue           # 主 worktree 不列入候選
-  case " $repos " in *" $parent "*) ;; *) repos="$repos $parent" ;; esac
-done < <(find "$ROOT" -maxdepth 2 -name ".git" -type f 2>/dev/null)
-
-if [ "$DO_FETCH" -eq 1 ]; then
-  for parent in $repos; do
-    echo "fetch: $parent"
-    git -C "$parent" fetch --quiet --prune origin || echo "  ! fetch 失敗（後續判斷會用 stale ref）" >&2
+# 印出主 repo 路徑（每行一個，未去重）。--path-format=absolute 讓兩側都正規化成同一種寫法。
+discover_repos() {
+  local d
+  # find 碰到讀不到的目錄會回 1；pipefail + set -e 下整支腳本會零輸出結束，所以吞掉它的 rc。
+  { find "$ROOT" -maxdepth "$SCAN_DEPTH" \( -name .git -type d -prune -o -name .git -type f \) \
+         -print 2>/dev/null || true; } | while IFS= read -r d; do
+    git -C "$(dirname "$d")" rev-parse --path-format=absolute --git-common-dir 2>/dev/null \
+      | sed 's|/\.git$||' || true
   done
-fi
+}
 
-printf '\n%-13s %-9s %-56s %-34s %-6s %s\n' 動作 PR狀態 路徑 分支 未推送 標記
-printf '%s\n' "$(printf -- '-%.0s' $(seq 1 150))"
+# 對每個主 repo 跑 porcelain，輸出 TSV：路徑 / 主 repo / branch / 狀態（ok|locked|prunable）。
+# 第一筆記錄一定是主 worktree（或 bare），一律排除；同一路徑只留一筆。
+list_worktrees() {
+  local repo
+  sort -u | while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    git -C "$repo" worktree list --porcelain 2>/dev/null | awk -v repo="$repo" -v det="$DETACHED" '
+      function flush() { if (n > 1 && path != "") print path "\t" repo "\t" br "\t" st }
+      BEGIN { n = 0 }
+      /^worktree / { flush(); n++; path = substr($0, 10); br = det; st = "ok"; next }
+      /^branch /   { br = substr($0, 8); sub(/^refs\/heads\//, "", br); next }
+      /^locked/    { if (st == "ok") st = "locked"; next }
+      /^prunable/  { st = "prunable"; next }
+      END { flush() }' || true
+  done | awk -F'\t' '!seen[$1]++'
+}
 
-removable_list="$TMP/removable.txt"; : > "$removable_list"
-total=0; unknown=0; n_remove=0; n_keep=0
-
-while IFS= read -r gitfile; do
-  wt=$(dirname "$gitfile")
-  branch=$(git -C "$wt" symbolic-ref --short HEAD 2>/dev/null) || branch=""
-  parent=$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||') || parent=""
-  [ -n "$branch" ] && [ -n "$parent" ] && [ "$parent" != "$wt" ] || continue
-  total=$((total + 1))
-
+# ── 逐 worktree 檢查（結果寫進全域變數，bash 3.2 沒有好用的多值回傳） ─────────────────
+inspect_common() {
+  local st
   head_sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || head_sha=""
   last_commit=$(git -C "$wt" log -1 --format=%cs 2>/dev/null) || last_commit="?"
-  dirty=""; [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ] && dirty="dirty"
+  # status 本身失敗不能當成乾淨：空輸出與查詢失敗必須分開（同硬規則 4 的精神）。
+  st=$(git -C "$wt" status --porcelain 2>/dev/null) || st="status-failed"
+  dirty=""; [ -n "$st" ] && dirty="dirty"
+  blockers=$(blockers_for "$wt")
+  blocked=""; [ -n "$blockers" ] && blocked="blocked"
+  size="-"
+  [ "$DO_DU" -eq 1 ] && size=$(du -sh "$wt" 2>/dev/null | cut -f1 || echo "?")
+  squash_fp=""; remote_refs=""; bases=""; pr_num="-"; pr_oid=""
+  return 0
+}
 
-  # 檢查 1：PR 狀態（本地 join）
+# 檢查 1：PR 狀態（本地 join）
+lookup_pr() {
+  local dumpfile dstatus line
   dumpfile=$(dump_prs "$parent")
   dstatus=$(cat "$dumpfile.status" 2>/dev/null || echo UNKNOWN)
-  state="no-pr"; pr_num="-"; pr_oid=""
+  state="no-pr"
   if [ "$dstatus" = "OK" ]; then
     line=$(awk -F'\t' -v b="$branch" '$1==b {print; exit}' "$dumpfile" || true)
     if [ -n "$line" ]; then
@@ -184,9 +210,12 @@ while IFS= read -r gitfile; do
   else
     state="unknown"; unknown=$((unknown + 1))
   fi
+  return 0
+}
 
-  # 檢查 2（權威）：有沒有 commit 不在任何一條 base 上
-  bases=""
+# 檢查 2（權威）：有沒有 commit 不在任何一條 base 上
+compute_unpushed() {
+  local b
   for b in $BASE_CANDIDATES; do
     git -C "$wt" rev-parse --verify --quiet "origin/$b" >/dev/null 2>&1 && bases="$bases origin/$b"
   done
@@ -200,58 +229,126 @@ while IFS= read -r gitfile; do
   fi
   # squash / rebase 假陽性排除：PR 的 headRefOid == worktree HEAD 代表被 merge 的正是這條
   # branch 的 tip，rev-list >0 純粹是 SHA 改寫。不比這個會讓每個正常 merge 都判成不可刪。
-  squash_fp=""
   if [ "$unpushed" != "0" ] && [ "$unpushed" != "?" ] && [ -n "$pr_oid" ] && [ "$pr_oid" = "$head_sha" ]; then
     squash_fp="squash-fp"; unpushed="0*"
   fi
+  return 0
+}
 
-  # 檢查 3：有沒有行程以它為 cwd
-  blockers=$(blockers_for "$wt")
-  blocked=""; [ -n "$blockers" ] && blocked="blocked"
-
-  size="-"
-  [ "$DO_DU" -eq 1 ] && size=$(du -sh "$wt" 2>/dev/null | cut -f1 || echo "?")
-
-  # 三關全過才算可移除
+# 有 branch：三關全過才算可移除（判斷與舊版逐字相同）
+inspect_branch() {
+  n_branch=$((n_branch + 1))
+  lookup_pr
+  compute_unpushed
   action="keep"
   case "$state" in MERGED|CLOSED) action="remove" ;; esac
   [ "$action" = "remove" ] && [ -n "$dirty" ] && action="skip-dirty"
   [ "$action" = "remove" ] && [ "$unpushed" != "0" ] && [ "$unpushed" != "0*" ] && action="skip-unpushed"
   [ "$action" = "remove" ] && [ -n "$blocked" ] && [ "$KILL_BLOCKERS" -eq 0 ] && action="skip-blocked"
+  return 0
+}
 
-  flags=$(printf '%s %s %s pr=%s last=%s size=%s' \
-          "$dirty" "$blocked" "$squash_fp" "$pr_num" "$last_commit" "$size" | tr -s ' ')
+# detached HEAD：沒有 branch 就沒有 PR 可查，PR 關卡改成「HEAD 是否已在某條 remote branch 上」。
+# 舊版在這裡直接 continue，驗證／baseline 用的 detached worktree 永遠不會出現在輸出。
+# branch -r --contains = 0 一律保留：可能是本機 merge 試驗（vocus-web-ui-rca-merge）。
+# 查詢失敗（pipefail）也落到 0 → 保留，故障只會往保守方向偏。
+inspect_detached() {
+  local n_remote
+  n_detached=$((n_detached + 1))
+  state="detached"; unpushed="-"
+  n_remote=$(git -C "$wt" branch -r --contains "$head_sha" 2>/dev/null | wc -l | tr -d ' ') || n_remote=0
+  [ -n "$head_sha" ] || n_remote=0
+  remote_refs="remote=${n_remote}"
+  action="remove"
+  [ -n "$dirty" ] && action="skip-dirty"
+  [ "$action" = "remove" ] && [ "$n_remote" -eq 0 ] && action="keep"
+  [ "$action" = "remove" ] && [ -n "$blocked" ] && [ "$KILL_BLOCKERS" -eq 0 ] && action="skip-blocked"
+  return 0
+}
+
+report_row() {
+  local flags
+  flags=$(printf '%s %s %s %s pr=%s last=%s size=%s' \
+          "$dirty" "$blocked" "$squash_fp" "$remote_refs" "$pr_num" "$last_commit" "$size" | tr -s ' ')
   printf '%-13s %-9s %-56s %-34s %-6s %s\n' "$action" "$state" "$wt" "$branch" "$unpushed" "$flags"
-
   if [ "$action" = "skip-unpushed" ] && [ "$unpushed" != "?" ]; then
     echo "    不可刪的理由 —— 以下 commit 不在任何 base 上（最多列 5 筆）："
     git -C "$wt" log --oneline -n 5 "$head_sha" --not $bases 2>/dev/null | sed 's/^/      /' || true
+  fi
+  if [ "$state" = "detached" ] && [ "$remote_refs" = "remote=0" ] && [ -z "$dirty" ]; then
+    echo "    保留理由 —— detached HEAD 不在任何 remote branch 上（branch -r --contains = 0）"
   fi
   if [ -n "$blocked" ]; then
     echo "    佔用行程（etime 以天計＝某次 session 沒收乾淨的遺留）："
     printf '%s\n' "$blockers" | sed 's/^/      /'
   fi
+  return 0
+}
 
+# 目錄已不存在、只剩 metadata：不是可刪對象（沒有東西可刪），只提示 prune。
+report_orphan() {
+  n_orphan=$((n_orphan + 1))
+  printf '%-13s %-9s %-56s %-34s %-6s %s\n' "orphan" "-" "$wt" "$branch" "-" "目錄已不存在（metadata 殘留）"
+  printf '%s\n' "$parent" >> "$TMP/orphan_repos.txt"
+}
+
+report_orphans() {
+  [ "$n_orphan" -gt 0 ] || return 0
+  echo "orphan ${n_orphan} 個不列入可移除。要清 metadata 請逐一手動執行（本腳本不代跑）："
+  sort -u "$TMP/orphan_repos.txt" | while IFS= read -r r; do echo "  git -C \"$r\" worktree prune"; done
+}
+
+# ── 盤點 ──────────────────────────────────────────────────────────────────────────
+scan_processes
+
+discover_repos | list_worktrees > "$TMP/worktrees.tsv"
+: > "$TMP/orphan_repos.txt"
+
+# 只 fetch 真的有 linked worktree 的 repo；ROOT 下沒 worktree 的 repo 不必動。
+if [ "$DO_FETCH" -eq 1 ]; then
+  cut -f2 "$TMP/worktrees.tsv" | sort -u | while IFS= read -r parent; do
+    echo "fetch: $parent"
+    git -C "$parent" fetch --quiet --prune origin </dev/null || echo "  ! fetch 失敗（後續判斷會用 stale ref）" >&2
+  done
+fi
+
+printf '\n%-13s %-9s %-56s %-34s %-6s %s\n' 動作 PR狀態 路徑 分支 未推送 標記
+printf '%s\n' "$(printf -- '-%.0s' $(seq 1 150))"
+
+removable_list="$TMP/removable.txt"; : > "$removable_list"
+total=0; unknown=0; n_remove=0; n_keep=0; n_branch=0; n_detached=0; n_orphan=0
+
+# 用 fd 3 讀清單：迴圈內的 git / gh 若意外讀 stdin，不會把剩下的清單吃掉。
+while IFS=$'\t' read -r wt parent branch wstate <&3; do
+  total=$((total + 1))
+  if [ "$wstate" = "prunable" ] || [ ! -d "$wt" ]; then report_orphan; continue; fi
+  inspect_common
+  if [ "$branch" = "$DETACHED" ]; then inspect_detached; else inspect_branch; fi
+  # locked 的 worktree `git worktree remove` 本來就會拒絕，先降級避免 apply 階段一排失敗。
+  [ "$action" = "remove" ] && [ "$wstate" = "locked" ] && action="skip-locked"
+  report_row
   if [ "$action" = "remove" ]; then
     n_remove=$((n_remove + 1))
     printf '%s\t%s\t%s\n' "$wt" "$parent" "$branch" >> "$removable_list"
   else
     n_keep=$((n_keep + 1))
   fi
-done < <(find "$ROOT" -maxdepth 2 -name ".git" -type f 2>/dev/null)
+done 3< "$TMP/worktrees.tsv"
 
 echo
-[ "$total" -eq 0 ] && { echo "$ROOT 底下找不到 sibling worktree"; exit 0; }
+[ "$total" -eq 0 ] && { echo "$ROOT 底下的 repo 找不到任何 linked worktree"; exit 0; }
 
 # 硬規則 4：整排 fallback 值＝管線壞了。把壞掉的清單交給人確認，人無從得知它是壞的。
-if [ "$unknown" -gt 0 ] && [ "$unknown" -ge $((total * 2 / 3)) ]; then
-  echo "中止：$total 個 worktree 有 $unknown 個 PR 狀態查不到。整排 fallback 值代表 gh 查詢壞掉" >&2
+# 分母只算有 branch、真的查了 PR 的；把 detached / orphan 算進去會稀釋比例，讓故障躲過偵測。
+if [ "$unknown" -gt 0 ] && [ "$unknown" -ge $((n_branch * 2 / 3)) ]; then
+  echo "中止：${n_branch} 個有 branch 的 worktree 有 ${unknown} 個 PR 狀態查不到。整排 fallback 值代表 gh 查詢壞掉" >&2
   echo "      （認證過期 / PATH / repo 解析失敗），不是真的沒有 PR。先修查詢再跑一次。" >&2
   exit 3
 fi
 
 # 變數一律用 ${} 包起來：bash 3.2 是 byte-oriented，`$var、` 會把「、」的位元組吃進變數名。
-echo "盤點：共 ${total} 個，判定可移除 ${n_remove}、保留 ${n_keep}"
+echo "盤點：共 ${total} 個（含 detached ${n_detached}、orphan ${n_orphan}），判定可移除 ${n_remove}、保留 ${n_keep}"
+report_orphans
 
 if [ "$APPLY" -eq 0 ]; then
   echo

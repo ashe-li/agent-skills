@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **成本預估簡化為「預期模型 × 複雜度量級」，不再寫具體 token 數字**：`rules/teammate-fleet.md` 的 HITL 閘門改為每路只寫模型與量級（小／中／大，新增量級判準表），停損條件從「超出預估 2 倍」改為「實際跑成比預估高一級的形狀」；`/dispatch-loop` Token 紀律、`/design` 第 12 項與決策批次表、`/rca` Step 1、`/evidence-check` Step 0、README 同步。依據：2026-10-29 對照 120 天 1,199 個 subagent 實際用量（`~/.claude/projects/*/*/subagents/*.jsonl` 最後一輪 context＋output），過去寫進 skill 的數字系統性偏低（`/evidence-check` 寫 2 路共 16–30K，Haiku 單路中位數約 74K；`/design` 分診寫 5–15K），且同模型 p25 到 p90 差約 3 倍，具體數字只是假精度。
+
 ### Fixed
 - **`scripts/worktree-cleanup.sh`：盤點不再無聲漏掉 detached HEAD、ROOT 外與第三層巢狀的 worktree**：2026-10-28 跑 `--fetch --du` 報「共 46 個」，逐 repo `git worktree list` 對帳後還有 19 個從未出現在輸出。成因三個：detached HEAD 在 `symbolic-ref` 失敗後被 `continue` 掉；`find "$ROOT" -maxdepth 2 -name .git -type f` 看不到 `/private/tmp/claude-501/...`；`<repo>-wt/<name>/.git` 是第三層。修法：主 repo 集合改為「ROOT 下 `.git` 目錄」∪「ROOT 下 `.git` 檔反查 `--git-common-dir`」（深度 3），再對每個主 repo 跑 `git worktree list --porcelain` 列出全部 worktree，不論路徑；主 worktree 排除、路徑去重。`prunable` 或目錄不存在的列為 `orphan`，只提示 `git worktree prune`、不列入可移除。detached HEAD 沒有 PR 可查，判 remove 須同時滿足工作區乾淨、`git branch -r --contains HEAD` ≥1、無行程以它為 cwd；=0 一律 keep，PR 欄顯示 `detached`。另外：`locked` 降級為 `skip-locked`；`git status` 查詢失敗不再視為乾淨；硬規則 4（整排 unknown 中止）的分母改為有 branch 的 worktree 數，避免被 detached／orphan 稀釋。檔頭五條硬規則與既有判斷不變。測試：新增 `scripts/tests/test_worktree_cleanup.py`（12 個，假 repo + bare remote + PATH 前置 gh stub），舊版腳本跑同一組為 7 項失敗。live dry-run（唯讀）共 35 個，與逐 repo 對帳差集 0。來源：KB `wiki/learned/worktree-cleanup-script-silently-skips-detached-head-tmp-and-nested-worktrees.md`。
 

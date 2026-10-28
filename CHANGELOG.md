@@ -6,6 +6,7 @@
 
 ### Added
 - **公開 repo 字樣守衛**：`scripts/check-banned-terms.sh`（`--staged`／`--range`／`--all`，黑名單由環境變數或本機檔案提供、不進 repo，命中只印 `path:line` 或 commit sha）、`.githooks/pre-commit`（`git config core.hooksPath .githooks` 啟用）、`.github/workflows/banned-terms.yml`（讀 secret，fork PR 無 secret 時跳過）與 `scripts/tests/test_check_banned_terms.py`。
+- **新增 `rules/merge-by-human-preview-first.md`**：agent 不可自己 merge 進 prod 等價分支（如 web-app `hotfix`），每個 PR 先 preview／staging 驗證再交人 merge，stacked PR 不可借用前一個 PR 的驗證。`plan-run` 的 Step 3.6 與 `dispatch-loop` 的派工通用規則各補一句指向它。來源：2026-10-28 agent 自行 merge 三個 PR 進 hotfix 被使用者喊停。
 
 ### Changed
 - **文件內的特定公司、內部 repo 與票號名稱改為通用描述**：fixtures、規則與 CHANGELOG 只換名稱，案例邏輯與數字不動。`/pr` 的 ticket 強制帶入規則改為通用 Linear 票號 `<TEAM>-<number>`：team key 從 branch 名 `<type>/<team>-<number>-<slug>` 或 repo 既有 commit 推斷，推斷不出來就問使用者；強制帶票號、放標題尾巴、branch 命名與已推上遠端不改名的行為語意不變。

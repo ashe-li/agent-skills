@@ -540,6 +540,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 | `rules/worktree-prompt.md` / `rules/debug-triage-order.md` | 情境型：不 symlink 常駐，改由 `scripts/hooks/` 的 `UserPromptSubmit` hook 命中情境才注入（見上方「情境型 rules 的觸發式安裝」）；`/design` Step 6 另引用 worktree-prompt 的跳過條件與路徑慣例 |
 | [`rules/design-token-reuse-first.md`](rules/design-token-reuse-first.md) | 情境型：改 UI 樣式對應 Figma token 時先 grep 現成 utility／token 再手寫值；不 symlink 常駐，實作設計稿時按需讀 |
 | [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md) | `TodoWrite` / `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` 自 Claude Code v2.1.233 起在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上**預設不註冊**：官方立場、三條有效 opt-in 途徑、以及「SKILL.md frontmatter 的 `allowed-tools` 不構成 opt-in」這個實測結論；含本 repo 撰寫守則（主線不得依賴 Task 工具、不得拿 task 數當完成率分母）與可觀察的驗證指令 |
+| [`rules/merge-by-human-preview-first.md`](rules/merge-by-human-preview-first.md) | 情境型：merge 進 prod 等價分支（如 web-app `hotfix`）一律由人執行，且每個 PR 先 preview／staging live 驗證；stacked PR 不可借用前一個 PR 的驗證。不 symlink 常駐 |
 | [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附「模型 × 複雜度量級」預估，不寫具體 token 數字），含量級判準、編隊守則與資源紀律（HITL 做法比照 Task Tracking，但本身不依賴 Task 工具）。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
 | [`rules/refactor/remove-architect-pipeline.md`](rules/refactor/remove-architect-pipeline.md) | 禁用規則：不可使用已退化的 `architect` agent，`/design` 一律改用內建 `Plan` agent |
 

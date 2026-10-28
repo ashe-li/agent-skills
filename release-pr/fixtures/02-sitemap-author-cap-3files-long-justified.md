@@ -1,7 +1,7 @@
 ---
 fixture_id: "02"
 kind: negative-control
-pr: example-org/web-app#8121
+pr: web-app PR 8121
 title: "Release：article sitemap 每作者每日 20 篇上限，擋灌量帳號死連結"
 scale:
   content_commits: 1

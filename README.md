@@ -115,7 +115,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 2c 自動檢查已完成的 plan 並歸檔至 `plans/completed/`
 - 自動偵測是否已有 open PR，決定建立或更新
 - PR description 包含 Summary、Context、Changes、Test plan
-- **PDT ticket 強制帶入**：從對話、branch 名、commit message、既有 PR 偵測 `PDT-<number>`，PR 標題必須帶字面編號（預設 `(TICKET-6908)` 放尾巴）；branch 名走 `<type>/pdt-<number>-<slug>`（Step 3.5），已推上遠端的 branch 不改名
+- **Linear ticket 強制帶入**：從對話、branch 名、commit message、既有 PR 偵測 `<TEAM>-<number>`（team key 從 branch 名 `<type>/<team>-<number>-<slug>` 或 repo 既有 commit 推斷），PR 標題必須帶字面編號（預設 `(ABC-1234)` 放尾巴）；branch 名走 `<type>/<team>-<number>-<slug>`（Step 3.5），已推上遠端的 branch 不改名
 - **Step 5.5 截圖驗收 gate**：PR 建立/更新後依變更類型分類（UI 互動 → 截圖；純移除/重構 → 量測；API → 測試輸出），需要時用 AskUserQuestion 問使用者要不要現在跑 `/pr-evidence-comment`，跑完把逐項 PASS/FAIL 回填 Test plan。從 `/update` 串接跳過 Step 2 時，此判定不隨之跳過
 
 </details>
@@ -512,6 +512,16 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 ```
 
 </details>
+
+---
+
+## 開發：公開 repo 字樣守衛
+
+本 repo 是公開的，不該出現特定公司、內部 repo／infra 名稱與內部票號。黑名單本身不進 repo，由使用者自行提供（Python `re` 語法、不分大小寫）；沒設定黑名單時所有檢查直接放行，fork 與一般使用者不受影響。
+
+- **掃描腳本**：`scripts/check-banned-terms.sh`，模式 `--staged`（暫存區新增行）、`--range <base>..<head>`（範圍內新增行與 commit message）、`--all`（整個 tree）。黑名單來自環境變數 `BANNED_TERMS_REGEX`，沒有就讀 `${BANNED_TERMS_FILE:-$HOME/.config/agent-skills/banned-terms.regex}`。命中時只印 `path:line`（commit message 印 sha），不印命中內容。
+- **本機 hook**：clone 後執行一次 `git config core.hooksPath .githooks` 啟用 `.githooks/pre-commit`（commit 前跑 `--staged`）。
+- **CI**：`.github/workflows/banned-terms.yml` 讀 repo secret `BANNED_TERMS_REGEX`；secret 不存在（例如 fork PR）時跳過並留 notice。
 
 ---
 

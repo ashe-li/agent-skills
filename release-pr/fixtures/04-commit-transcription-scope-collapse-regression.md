@@ -1,7 +1,7 @@
 ---
 fixture_id: "04"
 kind: regression
-pr: example-org/web-app#7969（另附 #8092 補充案例，該案例 scale 未記載於 KB）
+pr: web-app PR 7969（另附 #8092 補充案例，該案例 scale 未記載於 KB）
 scale:
   content_commits: 28
   files: 64

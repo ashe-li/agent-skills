@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`scripts/worktree-cleanup.sh`：盤點不再無聲漏掉 detached HEAD、ROOT 外與第三層巢狀的 worktree**：2026-10-28 跑 `--fetch --du` 報「共 46 個」，逐 repo `git worktree list` 對帳後還有 19 個從未出現在輸出。成因三個：detached HEAD 在 `symbolic-ref` 失敗後被 `continue` 掉；`find "$ROOT" -maxdepth 2 -name .git -type f` 看不到 `/private/tmp/claude-501/...`；`<repo>-wt/<name>/.git` 是第三層。修法：主 repo 集合改為「ROOT 下 `.git` 目錄」∪「ROOT 下 `.git` 檔反查 `--git-common-dir`」（深度 3），再對每個主 repo 跑 `git worktree list --porcelain` 列出全部 worktree，不論路徑；主 worktree 排除、路徑去重。`prunable` 或目錄不存在的列為 `orphan`，只提示 `git worktree prune`、不列入可移除。detached HEAD 沒有 PR 可查，判 remove 須同時滿足工作區乾淨、`git branch -r --contains HEAD` ≥1、無行程以它為 cwd；=0 一律 keep，PR 欄顯示 `detached`。另外：`locked` 降級為 `skip-locked`；`git status` 查詢失敗不再視為乾淨；硬規則 4（整排 unknown 中止）的分母改為有 branch 的 worktree 數，避免被 detached／orphan 稀釋。檔頭五條硬規則與既有判斷不變。測試：新增 `scripts/tests/test_worktree_cleanup.py`（12 個，假 repo + bare remote + PATH 前置 gh stub），舊版腳本跑同一組為 7 項失敗。live dry-run（唯讀）共 35 個，與逐 repo 對帳差集 0。來源：KB `wiki/learned/worktree-cleanup-script-silently-skips-detached-head-tmp-and-nested-worktrees.md`。
+
 ## [v3.5.2] - 2026-10-28
 
 ### Fixed

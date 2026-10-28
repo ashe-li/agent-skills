@@ -1,6 +1,6 @@
 # Merge By Human, Preview First
 
-Scope: Apply when a plan, skill run, or agent session is about to merge a PR into a branch that deploys to production or a prod-connected cluster (e.g. web-app `hotfix`), or writes a plan step that does so.
+Scope: Apply when a plan, skill run, or agent session is about to merge a PR into a branch that deploys to production or a prod-connected cluster (e.g. a `hotfix` branch that deploys to prod), or writes a plan step that does so.
 
 ## 規則
 

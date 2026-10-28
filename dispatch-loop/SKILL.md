@@ -82,7 +82,7 @@ plan_runner.py complete plans/active/foo.md S3.2 \
 - 派工同時想好「我要怎麼驗它的回報」；**驗法不明的派工先不要發**
 - 互相獨立的多個派工在同一則訊息並行發出
 - 派工 prompt **明寫「親自執行，禁止再委派」**（原因見下方實證教訓）
-- 派工 prompt **不得包含 merge 進 prod 等價分支的動作**（如 web-app `hotfix`）；agent 只備好 PR 並回報，merge 由人執行（見 [`rules/merge-by-human-preview-first.md`](../rules/merge-by-human-preview-first.md)）
+- 派工 prompt **不得包含 merge 進 prod 等價分支的動作**（例如會部署到 prod 的 `hotfix` 分支）；agent 只備好 PR 並回報，merge 由人執行（見 [`rules/merge-by-human-preview-first.md`](../rules/merge-by-human-preview-first.md)）
 
 派工後主模型的義務：收到回報先驗格式（驗收條件有無逐條 PASS/FAIL、宣稱有無出處），缺就退回重報不腦補；涉及 commit 的親眼 `git diff` 比對；失敗的派工記下軌跡（prompt + 輸出 + fail 原因）再升級。
 

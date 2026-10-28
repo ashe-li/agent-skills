@@ -149,7 +149,7 @@ step 標了 `Requires-Approval: true` 就要等人核准才會被指派。這個
 
 runner 沒辦法驗證 `approve` 是不是人下的，這個限制只靠上面這條規則。另外，只要不經過 `start` 就動手做，這個關卡也攔不住。
 
-**merge 進 prod 等價分支（如 web-app `hotfix`）的 step 一律是這個關卡的對象**：Agent 欄寫「使用者」，前置 step 必含該 PR 的 preview／staging 驗證，推進到這裡只回報「已具備 merge 條件」與證據路徑，不跑 `gh pr merge`（見 [`rules/merge-by-human-preview-first.md`](../rules/merge-by-human-preview-first.md)）。
+**merge 進 prod 等價分支（例如會部署到 prod 的 `hotfix` 分支）的 step 一律是這個關卡的對象**：Agent 欄寫「使用者」，前置 step 必含該 PR 的 preview／staging 驗證，推進到這裡只回報「已具備 merge 條件」與證據路徑，不跑 `gh pr merge`（見 [`rules/merge-by-human-preview-first.md`](../rules/merge-by-human-preview-first.md)）。
 
 ## Sandbox 與範圍外指令
 

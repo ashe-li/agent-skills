@@ -32,7 +32,7 @@ notes: 跨叢集共用 Prometheus 陷阱（預設 context 是 stg 健康 pod，�
 
 ## Expected RCA 結論
 
-- **分類：real regression**（root cause 鎖定，fix 已交付 PR infra repo PR 272）。
+- **分類：real regression**（root cause 鎖定，fix 已交付 infra repo PR 272）。
 - **關鍵驗證**：必先用 job/uid label 區分 prod vs stg 再切對應 kubectl context（否則誤判 benign）。
 - **Guardrail（real 路徑）**：限縮 dashboard query range / 對 unwrap range 設上限 / Loki `limits_config` query 成本上限。deployment-eks 屬後端 → HITL G3：產建議/協作 PR，不直接改。
 - 不接受 LOW 信心下 real 判定——本案 live 證據充分，HIGH。

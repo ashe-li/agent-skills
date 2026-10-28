@@ -1,7 +1,7 @@
 ---
 fixture_id: "01"
 kind: regression
-pr: example-org/web-app#8124
+pr: web-app PR 8124
 title: "Release：啟用 prod SSR warm-up kill switch（WARM_ENABLED Day 2）"
 scale:
   content_commits: 1

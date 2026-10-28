@@ -1,0 +1,57 @@
+name: Banned Terms Guard
+# 擋下不該進公開 repo 的字樣。黑名單本身放在 repo secret BANNED_TERMS_REGEX，
+# 不進 repo；fork PR 拿不到 secret 時整個 job 跳過並留 notice。
+# 掃描腳本只輸出 path:line 與 commit sha，不會把命中內容或 regex 印進公開 log。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  banned-terms:
+    runs-on: ubuntu-latest
+    env:
+      BANNED_TERMS_REGEX: ${{ secrets.BANNED_TERMS_REGEX }}
+    steps:
+      - name: Check secret availability
+        id: gate
+        run: |
+          if [ -n "$BANNED_TERMS_REGEX" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::BANNED_TERMS_REGEX secret 不存在（例如 fork PR），略過 banned-terms 檢查"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          fetch-depth: 0
+      - name: Scan whole tree
+        if: steps.gate.outputs.enabled == 'true'
+        run: bash scripts/check-banned-terms.sh --all
+      - name: Scan new lines and commit messages
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${PR_BASE}...${PR_HEAD}"
+          elif git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+            RANGE="${PUSH_BEFORE}..${PUSH_AFTER}"
+          else
+            echo "::notice::push 沒有可用的 before commit（新 branch 或 force-push），以整棵 tree 掃描為準"
+            exit 0
+          fi
+          bash scripts/check-banned-terms.sh --range "$RANGE"
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck guard scripts
+        run: shellcheck scripts/check-banned-terms.sh .githooks/pre-commit

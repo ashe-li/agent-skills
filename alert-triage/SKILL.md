@@ -82,7 +82,7 @@ grep -riE "<keywords>" wiki/patterns/
 | imgproxy 422 | `2026-05-27-imgproxy-422-alert-rca-two-classes-marker-flaw-recurrence`、`2026-05-13-imgproxy-security-error-calc-audit` | **mixed**（two-classes）| 區分 marker-flaw recurrence(real) vs 已知良性來源；**不可純二元**，拆 sub-signal |
 | Loki Discarded Samples / Replay too_far_behind（prod）| `2026-09-10-loki-discarded-samples-prod-helm-rollout-replay-4th-recurrence`、`2026-09-29-alert-triage-batch-0917-0929-loki-rate-limited-fp-imgproxy-svgload-recur`、`loki-side-rate-limited-discard-is-not-loss-check-producer-dropped-reason`(learned) | **benign**（alloy 重播）| alloy pod startTime 是否對上拒收尖峰；**Loki 端 `rate_limited` 不等於遺失**（alloy 會重試 429），判遺失看 producer 端 `loki_write_dropped_entries_total{reason="rate_limited"}` |
 | imgproxy Pod Crashing / Native Decoder Crash（exit 2）| `imgproxy-exit-code-2-sigabrt-in-cgo-is-decoder-crash-not-oom`(learned)、`2026-09-29-alert-triage-batch-0917-0929-loki-rate-limited-fp-imgproxy-svgload-recur` | **real**（低頻，已知成因）| 先看 `lastState.exitCode`：2 = decoder crash、137 = OOM；**立刻存 `logs --previous`**；svgload 則是 HTML 偽圖（內嵌 `<svg>`），imgproxy 設定擋不住，資料端清理 |
-| imgproxy bypass / allowed-sources | `2026-05-25-pdt9895-imgproxy-unsplash-allowed-sources-vs-bypass`、`2026-05-22-imgproxy-bypass-salon-products-fix` | **real**(config gap) | 來源是否該進 allowed-sources vs 該走 bypass；privacy 影響 |
+| imgproxy bypass / allowed-sources | `2026-05-25-ticket9895-imgproxy-unsplash-allowed-sources-vs-bypass`、`2026-05-22-imgproxy-bypass-salon-products-fix` | **real**(config gap) | 來源是否該進 allowed-sources vs 該走 bypass；privacy 影響 |
 | CF 日報 managed_challenge 攀升 /「100% 集中單一路徑」/「skip 規則從無變有」 | `2026-09-30-cf-managed-challenge-spike-single-ip-curl-burst-digest-limit100-truncation`、`top-n-grouped-query-summed-as-total-makes-dod-and-concentration-lie`(learned) | **mixed**（日報數字先當截斷假象驗，流量面另判）| 先用不帶 path / country 維度的查詢重跑真實總數，再談 DoD；「規則新增」看 ruleset `last_updated` / version 而非事件有無；分項加總大於總數代表母體不同；流量面看 IP / ASN 集中度、逐分鐘曲線、solved 數、origin 5xx；Grafana MCP 查不到 CF 資料，走 CF GraphQL API 唯讀 token |
 
 > 對照表是 grounding 範例，**不是查表照抄**——每次仍 grep 最新 KB，且 live 證據優先於先驗。
@@ -215,7 +215,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
    - Loki query 成本 → 限 range / 降頻 / unwrap 上限。
    - alert flap → Query A 補 `sum()/avg()`（修 alert rule 經 `mcp__grafana__alerting_manage_rules`，或走 Grafana-as-code PR）。**alert rule 一律不自動 apply**：先附 backfit query 建議交 G1 確認；update 草案須帶**完整既有 payload（含 `notification_settings` + `org_id`）**，漏帶會清空 routing（memory `grafana-alert-update-notification-settings`）。
    - config gap（allowed-sources）→ 補設定 + regression test。
-3. **開 PR**：繁體中文 body（memory `pr-traditional-chinese`），附 RCA report 連結 + 證據；external system 用全名引用（`Linear PDT-xxxx`、`Sentry Issue N`），不用裸 `#數字`。
+3. **開 PR**：繁體中文 body（memory `pr-traditional-chinese`），附 RCA report 連結 + 證據；external system 用全名引用（`Linear ABC-1234`、`Sentry Issue N`），不用裸 `#數字`。
 
 ## HITL Gates（G1–G4）
 

@@ -248,7 +248,7 @@ pointer 由 `init --attach` / `attach` 顯式建立，key 是 `sha256(realpath(c
 | plan 已 all_done | 首次 block 一次（AC 對照 + `/plan-archive` 提示）→ 設 `completion_announced` → 下次直接刪 pointer 並靜默 |
 | state 損毀 / schema 不符 | allow + 一次性 `systemMessage`（設 `warned_at` 避免每輪吵），**不刪 pointer**（可能只是暫時性 I/O 錯誤） |
 | cwd 在 worktree 內 | 除了 cwd 及其祖先，另試 `git rev-parse --git-common-dir` 的 parent，讓 worktree 內的 session 找得到主 repo 的 pointer；git 呼叫失敗即忽略 |
-| cwd 不是 plan 所在 repo | 正常運作。pointer 記的是**絕對 plan 路徑**，本來就支援「plan 在 knowledge-base、實作在 vocus-web-ui」這種跨 repo 情境（測試素材正是如此） |
+| cwd 不是 plan 所在 repo | 正常運作。pointer 記的是**絕對 plan 路徑**，本來就支援「plan 在 knowledge-base、實作在 web-app」這種跨 repo 情境（測試素材正是如此） |
 | plan 長期沒動 | `state.updated_at` 逾 7 天 → 靜默 allow + 一次性提示 |
 | 同 cwd 兩個 session | lease 仲裁：pointer 記 `driver_session_id` 與 `driver_transcript_path`；非 driver 的 session 若偵測到 driver 的 transcript mtime 距今 < 120s（或 `last_seen_at` < 900s）就不 block，避免兩個 session 同時推同一個 plan |
 

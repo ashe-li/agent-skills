@@ -1,7 +1,7 @@
 ---
 fixture_id: "03"
 kind: negative-control
-pr: sosreader/vocus-web-ui#7969
+pr: web-app PR 7969
 scale:
   content_commits: 28
   files: 64

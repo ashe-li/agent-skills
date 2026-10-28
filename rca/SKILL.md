@@ -81,7 +81,7 @@ INFRA 判斷「跟這次告警無關」時，要寫出排除依據（例如：�
    - `REAL DEFECT → FIX`：程式碼或設定本身有缺陷。
    - `EXTERNAL／BENIGN → RECORD`：第三方、使用者環境（瀏覽器擴充套件等）、或 by-design，只記錄，不開 PR。
    這一步要說明為什麼不是其他三類。**特別注意**：看到 drift 時，預設問題是「這個 drift 是不是該寫進 terraform 的正確狀態」，不是「要不要 apply 回去」。以前吃過虧：把本來該 commit 進 terraform 的 drift 直接當成正常狀態套用了。
-5. **修復 PR 草稿＋rollback checklist**：寫成草稿檔，不開 PR（開 PR 要經過 HITL G1）。草稿包含 repo、base branch（`vocus-web-ui` 用 `hotfix`）、改動的 diff 或具體檔案:行號、繁體中文 PR body、驗收方式（要可觀察：哪一條 query 的數字降到多少）。rollback checklist 包含：觸發條件（哪個數字回升到多少）、每一步的指令、每一步的預期輸出、資料／狀態是否可逆、通知誰。
+5. **修復 PR 草稿＋rollback checklist**：寫成草稿檔，不開 PR（開 PR 要經過 HITL G1）。草稿包含 repo、base branch（`web-app` 用 `hotfix`）、改動的 diff 或具體檔案:行號、繁體中文 PR body、驗收方式（要可觀察：哪一條 query 的數字降到多少）。rollback checklist 包含：觸發條件（哪個數字回升到多少）、每一步的指令、每一步的預期輸出、資料／狀態是否可逆、通知誰。
 
 6. **Action Items**：報告最後一節固定為 `## Action Items`，用下面這張固定 schema 的表格列出所有後續待辦（修復 PR、CODIFY 寫回 IaC、監控補強、要使用者決定的事）：
 

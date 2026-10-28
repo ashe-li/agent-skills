@@ -77,12 +77,12 @@ grep -riE "<keywords>" wiki/patterns/
 | Alert flapping on single replica | `grafana-alert-query-aggregation-per-series-trap`(learned) | **benign**(alert rule 設計缺陷) | Query A 是否漏 `sum()/avg()`，per-series 在單 replica transient 上抖動 → 修 rule 而非修服務 |
 | CF Tunnel 404 / prefetch noise | `2026-05-27-cf-tunnel-404-fallback-stale-client-prefetch-not-cdn-cache`、`2026-05-15-cf-tunnel-alert-prefetch-404-regression`、`2026-05-22-cf-tunnel-alert-multi-build-cdn-noise` | **benign**(多數) | **實測 HTML response header**：若 `no-store`/`DYNAMIC` 則非 CDN cache，是 client stale prefetch 自癒；runbook 若寫「CDN HTML cache」是 **attribution 錯誤**，要標示 |
 | CF Tunnel `TUNNEL_STATUS_TYPE_DOWN`（observability / remote_write tunnel，如 `prometheus-remote-write` c68076d9）| `2026-06-08-prometheus-remote-write-tunnel-down-alloy-530-1033-rca` | **real-but-often-transient**（非 benign noise，但常數分鐘自癒）| **權威信號是 producer 自己的 remote_write 錯誤**（alloy log `HTTP 530 / error 1033` = Argo Tunnel down），**不是自端 `curl`**——curl Access-protected host 只撞 CF Access gate(403/302)、對 tunnel 健康無定論。先看是否自癒（CF DOWN→HEALTHY webhook + producer 錯誤停止 + `resharding` flush WAL）。EC2 box 多半 `running`、掛的是其上 cloudflared；該 legacy box 常**無 SSM**→補救只能上機（跨界 HITL G3）。結構：單 cloudflared/EC2/tunnel = metrics pipeline SPOF |
-| imgproxy OOM | `2026-05-11-imgproxy-pod-oom-rca`、`2026-05-18-imgproxy-prod-oom-rca`、`2026-05-21-vocus-imgproxy-hpa-smoothing` | **real** | `OOMKilled` events、memory working set 趨勢 → 需 resource/HPA guardrail |
+| imgproxy OOM | `2026-05-11-imgproxy-pod-oom-rca`、`2026-05-18-imgproxy-prod-oom-rca`、`2026-05-21-app-imgproxy-hpa-smoothing` | **real** | `OOMKilled` events、memory working set 趨勢 → 需 resource/HPA guardrail |
 | Loki OOM（dashboard query 成本）| `2026-05-25-prod-loki-oom-sw-cache-dashboard-range-unwrap` | **real** | unwrap/range query 成本爆量 → 需 query 成本 guardrail（限 range / 降頻）|
 | imgproxy 422 | `2026-05-27-imgproxy-422-alert-rca-two-classes-marker-flaw-recurrence`、`2026-05-13-imgproxy-security-error-calc-audit` | **mixed**（two-classes）| 區分 marker-flaw recurrence(real) vs 已知良性來源；**不可純二元**，拆 sub-signal |
 | Loki Discarded Samples / Replay too_far_behind（prod）| `2026-09-10-loki-discarded-samples-prod-helm-rollout-replay-4th-recurrence`、`2026-09-29-alert-triage-batch-0917-0929-loki-rate-limited-fp-imgproxy-svgload-recur`、`loki-side-rate-limited-discard-is-not-loss-check-producer-dropped-reason`(learned) | **benign**（alloy 重播）| alloy pod startTime 是否對上拒收尖峰；**Loki 端 `rate_limited` 不等於遺失**（alloy 會重試 429），判遺失看 producer 端 `loki_write_dropped_entries_total{reason="rate_limited"}` |
 | imgproxy Pod Crashing / Native Decoder Crash（exit 2）| `imgproxy-exit-code-2-sigabrt-in-cgo-is-decoder-crash-not-oom`(learned)、`2026-09-29-alert-triage-batch-0917-0929-loki-rate-limited-fp-imgproxy-svgload-recur` | **real**（低頻，已知成因）| 先看 `lastState.exitCode`：2 = decoder crash、137 = OOM；**立刻存 `logs --previous`**；svgload 則是 HTML 偽圖（內嵌 `<svg>`），imgproxy 設定擋不住，資料端清理 |
-| imgproxy bypass / allowed-sources | `2026-05-25-pdt9895-imgproxy-unsplash-allowed-sources-vs-bypass`、`2026-05-22-imgproxy-bypass-salon-products-fix` | **real**(config gap) | 來源是否該進 allowed-sources vs 該走 bypass；privacy 影響 |
+| imgproxy bypass / allowed-sources | `2026-05-25-ticket9895-imgproxy-unsplash-allowed-sources-vs-bypass`、`2026-05-22-imgproxy-bypass-salon-products-fix` | **real**(config gap) | 來源是否該進 allowed-sources vs 該走 bypass；privacy 影響 |
 | CF 日報 managed_challenge 攀升 /「100% 集中單一路徑」/「skip 規則從無變有」 | `2026-09-30-cf-managed-challenge-spike-single-ip-curl-burst-digest-limit100-truncation`、`top-n-grouped-query-summed-as-total-makes-dod-and-concentration-lie`(learned) | **mixed**（日報數字先當截斷假象驗，流量面另判）| 先用不帶 path / country 維度的查詢重跑真實總數，再談 DoD；「規則新增」看 ruleset `last_updated` / version 而非事件有無；分項加總大於總數代表母體不同；流量面看 IP / ASN 集中度、逐分鐘曲線、solved 數、origin 5xx；Grafana MCP 查不到 CF 資料，走 CF GraphQL API 唯讀 token |
 
 > 對照表是 grounding 範例，**不是查表照抄**——每次仍 grep 最新 KB，且 live 證據優先於先驗。
@@ -207,7 +207,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 ## Step 6 — Guardrail Fix 草案（僅 real）
 
 1. **定位該修的 repo + base 規則**：
-   - `vocus-web-ui`：PR base **一律 hotfix**（memory `vocus-web-ui-pr-base-hotfix`）。
+   - `web-app`：PR base **一律 hotfix**（memory `web-app-pr-base-hotfix`）。
    - `deployment-eks`：後端團隊負責，**不直接改**（memory `repo-ownership`）→ 只產建議 / 開 issue（HITL G3）。
    - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（memory `helm-persist-before-apply`）。
 2. **產 guardrail**（對症）：
@@ -215,7 +215,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
    - Loki query 成本 → 限 range / 降頻 / unwrap 上限。
    - alert flap → Query A 補 `sum()/avg()`（修 alert rule 經 `mcp__grafana__alerting_manage_rules`，或走 Grafana-as-code PR）。**alert rule 一律不自動 apply**：先附 backfit query 建議交 G1 確認；update 草案須帶**完整既有 payload（含 `notification_settings` + `org_id`）**，漏帶會清空 routing（memory `grafana-alert-update-notification-settings`）。
    - config gap（allowed-sources）→ 補設定 + regression test。
-3. **開 PR**：繁體中文 body（memory `pr-traditional-chinese`），附 RCA report 連結 + 證據；external system 用全名引用（`Linear PDT-xxxx`、`Sentry Issue N`），不用裸 `#數字`。
+3. **開 PR**：繁體中文 body（memory `pr-traditional-chinese`），附 RCA report 連結 + 證據；external system 用全名引用（`Linear ABC-1234`、`Sentry Issue N`），不用裸 `#數字`。
 
 ## HITL Gates（G1–G4）
 

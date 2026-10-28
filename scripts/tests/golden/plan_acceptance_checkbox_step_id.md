@@ -1,6 +1,6 @@
 # Implementation Plan: SW Fallback Marker And Contents Retry Loop (minimal golden)
 
-> 縮自 2026-10-27 vocus-web-ui `sw-fallback-marker-and-contents-retry-loop` plan（33 steps）。
+> 縮自 2026-10-27 web-app `sw-fallback-marker-and-contents-retry-loop` plan（33 steps）。
 > 只留重現所需的區段：真 step 用粗體 step id、有 Dependencies；
 > Acceptance Criteria 裡有兩行以 step id 開頭的 checkbox（原文照搬），
 > 舊版 parser 會把它們當成 step header 註冊並覆蓋真 step。

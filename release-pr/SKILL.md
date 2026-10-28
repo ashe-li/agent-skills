@@ -73,7 +73,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 大型批次（>20 commits 或 >40 檔）派一個 agent 全包查核，prompt 必含兩句：**「commit message 的自述不能當證據，commit 與 diff 衝突時 diff 是真相」**、**「逐條給 正確／錯誤／無法佐證 三分類，diff 沒有直接證據一律歸『無法佐證』，不要為了讓 body 看起來對而放寬」**。
 
-（依據：vocus-web-ui #7969 實測，28 commits / 64 檔，~62 條 claim 錯 2 條、誤導 5 條，且**檔案路徑與符號名稱 0/30 錯**——查核預算要放在否定式敘述與跨 PR 一致性，不是路徑。詳見 KB `wiki/learned/release-notes-transcribed-from-commits-inherit-their-errors.md`、`intra-batch-self-correction-is-not-a-bug-fix.md`）
+（依據：web-app #7969 實測，28 commits / 64 檔，~62 條 claim 錯 2 條、誤導 5 條，且**檔案路徑與符號名稱 0/30 錯**——查核預算要放在否定式敘述與跨 PR 一致性，不是路徑。詳見 KB `wiki/learned/release-notes-transcribed-from-commits-inherit-their-errors.md`、`intra-batch-self-correction-is-not-a-bug-fix.md`）
 
 ## Step 3：產生 description
 

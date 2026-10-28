@@ -21,7 +21,7 @@ notes: two-classes — 兩個子根因都是 real（非 benign），但修法不
 | rule_uid | cfixsxflpdz40f（>5% 門檻）|
 | severity | warning |
 | state | firing（~14:25 UTC+8）|
-| namespace / service | vocus / imgproxy（images.vocus.cc，bucket sosreader-images-production）|
+| namespace / service | app / imgproxy（images.example.com，bucket example-images-production）|
 | datasource | Loki Production |
 | stated_cause（runbook doc 119）| oversized source → copy-to-self 壓縮自癒 |
 

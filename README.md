@@ -115,7 +115,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - Step 2c 自動檢查已完成的 plan 並歸檔至 `plans/completed/`
 - 自動偵測是否已有 open PR，決定建立或更新
 - PR description 包含 Summary、Context、Changes、Test plan
-- **PDT ticket 強制帶入**：從對話、branch 名、commit message、既有 PR 偵測 `PDT-<number>`，PR 標題必須帶字面編號（預設 `(PDT-6908)` 放尾巴）；branch 名走 `<type>/pdt-<number>-<slug>`（Step 3.5），已推上遠端的 branch 不改名
+- **Linear ticket 強制帶入**：從對話、branch 名、commit message、既有 PR 偵測 `<TEAM>-<number>`（team key 從 branch 名 `<type>/<team>-<number>-<slug>` 或 repo 既有 commit 推斷），PR 標題必須帶字面編號（預設 `(ABC-1234)` 放尾巴）；branch 名走 `<type>/<team>-<number>-<slug>`（Step 3.5），已推上遠端的 branch 不改名
 - **Step 5.5 截圖驗收 gate**：PR 建立/更新後依變更類型分類（UI 互動 → 截圖；純移除/重構 → 量測；API → 測試輸出），需要時用 AskUserQuestion 問使用者要不要現在跑 `/pr-evidence-comment`，跑完把逐項 PASS/FAIL 回填 Test plan。從 `/update` 串接跳過 Step 2 時，此判定不隨之跳過
 
 </details>
@@ -328,7 +328,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 修復 PR 只擬草稿，附 rollback checklist；開 PR 前（G1）、動到後端資源時（G3）、根因信心 LOW 時（G4），一律停下來等使用者確認
 - 與 `alert-triage` 互補：只需判斷一則 Grafana 告警是 benign 還是 real 時，用 `alert-triage` 就夠
 
-**首跑實例（2026-09-22）**：Sentry `item with id nmsd must have "output" method`，258 個 issue、4,135 次事件，查出來是廣告素材注入的第三方驗證腳本。降噪 PR 已 merge（vocus-web-ui PR 8228）。
+**首跑實例（2026-09-22）**：Sentry `item with id nmsd must have "output" method`，258 個 issue、4,135 次事件，查出來是廣告素材注入的第三方驗證腳本。降噪 PR 已 merge（web-app PR 8228）。
 
 </details>
 

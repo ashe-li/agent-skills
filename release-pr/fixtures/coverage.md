@@ -17,7 +17,7 @@
 
 以下是這次盤點過程中發現、但本輪未寫 fixture 的失效模式，誠實列出：
 
-- **merge commit 數的拆分判準**（`wiki/learned/merge-commit-detection-by-parent-count-not-message-prefix.md`）——用 commit message 前綴判定「N commits：X merge + Y non-merge」會兩個方向都錯（vocus-web-ui #7981 實測：寫成「6 non-merge + 5 merge」，`.parents|length` 重數後是「7 merge + 4 non-merge」），且 KB 該篇明講「commit 數根本不是歸因單位，檔案聯集才是」。與 fixture 08（squash-merge 枚舉）主題相鄰但判準不同（parents count vs. merge commit 存在與否），值得獨立成一個 fixture。
+- **merge commit 數的拆分判準**（`wiki/learned/merge-commit-detection-by-parent-count-not-message-prefix.md`）——用 commit message 前綴判定「N commits：X merge + Y non-merge」會兩個方向都錯（web-app #7981 實測：寫成「6 non-merge + 5 merge」，`.parents|length` 重數後是「7 merge + 4 non-merge」），且 KB 該篇明講「commit 數根本不是歸因單位，檔案聯集才是」。與 fixture 08（squash-merge 枚舉）主題相鄰但判準不同（parents count vs. merge commit 存在與否），值得獨立成一個 fixture。
 - **驗收清單與正文互斥，生出假 bug 回報**（`wiki/learned/release-notes-acceptance-list-is-executable-not-prose.md`）——release notes 正文的範圍宣告（例：「四支內容頁」）若與驗收重點列的範圍不一致（例：驗收清單多列了作者頁／標籤頁／沙龍頁），會有人照驗收清單去查一個正文根本沒宣稱涵蓋的範圍，回報成不存在的 bug。這個失效模式在 `/release-pr` SKILL.md 目前的 Step 2.5／3.5／4.5 都沒有對應檢查點，補這個 fixture 前建議先確認 SKILL.md 是否要新增對應 step，否則 fixture 會測到 skill 本身尚未涵蓋的行為。
 
 兩者都不在本次交辦的 7 條清單內，未動手；若要補齊，建議下一輪連同 SKILL.md 是否需要新增對應查核步驟一併評估。

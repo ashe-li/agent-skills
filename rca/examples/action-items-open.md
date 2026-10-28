@@ -2,7 +2,7 @@
 title: web-ui 前端 5xx 升高 RCA：dependency 升版造成 SSR 例外（REAL DEFECT → FIX）
 date: 2026-10-14
 type: incident-rca
-tags: [rca, vocus-web-ui, ssr]
+tags: [rca, web-app, ssr]
 status: verified
 action_items_open: 2
 ---

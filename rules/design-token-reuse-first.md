@@ -5,7 +5,7 @@ Scope: Apply when writing or modifying UI styles that correspond to a design-spe
 ## 規則
 
 1. **手寫任何樣式值之前，先 grep 現成 token/utility**。至少查：
-   - Tailwind `@utility` 定義檔（如 `styles/vocus-typography.css`、`styles/global.css`）
+   - Tailwind `@utility` 定義檔（如 `styles/app-typography.css`、`styles/global.css`）
    - theme / design-token config（CSS variables、`tailwind.config.*`、`@theme` 區塊）
    - 查法：拿 Figma token 名（如 `Label3-Medium`）的關鍵字全 repo `grep -ri "label3"`，不要只看正在編輯的檔案
 
@@ -19,9 +19,9 @@ Scope: Apply when writing or modifying UI styles that correspond to a design-spe
    - 註解標明對應的 Figma token 名與「為什麼不能用 utility」
    - 在 PR description 標為 tech debt，指向未來收斂路徑（如 styled-migration）
 
-## 具體 case（2026-08-11，vocus-web-ui PDT-10625）
+## 具體 case（2026-08-11，web-app TICKET-10625）
 
-投票元件照 Figma 稿改樣式時，`contexts/lexical/styles/PollNode.style.js`（styled-components template literal）把 `Label3-Medium` 的四個值（14px / 500 / 16px / letter-spacing 1px）手抄進 `.Poll__optionTextVotesCount`，附註解引 Figma token 名。事後發現 repo 早有一模一樣的 `@utility label3-medium`（`styles/vocus-typography.css`）。
+投票元件照 Figma 稿改樣式時，`contexts/lexical/styles/PollNode.style.js`（styled-components template literal）把 `Label3-Medium` 的四個值（14px / 500 / 16px / letter-spacing 1px）手抄進 `.Poll__optionTextVotesCount`，附註解引 Figma token 名。事後發現 repo 早有一模一樣的 `@utility label3-medium`（`styles/app-typography.css`）。
 
 實作者的推理是「styled-components 不走 Tailwind 處理器，`@apply` 展不開」——這只對了一半：**template literal 裡面確實用不了，但 markup 上掛 class 完全可行**，兩套系統本來就並存。正確做法是在 `PollComponent.tsx`（CSR）與 `formatDom.js`（SSR 靜態副本）的對應元素掛 `label3-medium`，CSS-in-JS 只留 utility 蓋不到的部分。
 

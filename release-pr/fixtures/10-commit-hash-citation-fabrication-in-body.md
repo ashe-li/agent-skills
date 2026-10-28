@@ -1,7 +1,7 @@
 ---
 fixture_id: "10"
 kind: regression
-pr: "延伸案例：2026-05-06 kb-review batch 2（vocus-web-ui，非 release PR 情境，是 kb-compile 產出的 wiki 頁）"
+pr: "延伸案例：2026-05-06 kb-review batch 2（web-app，非 release PR 情境，是 kb-compile 產出的 wiki 頁）"
 scale:
   note: KB 原情境非單一 release PR，不填 files/additions；本 fixture 將偵測技術套用到 Step 4.5 的 fact-check 擋門
 source_kb: wiki/learned/commit-hash-hex-validity-fabrication-detector.md

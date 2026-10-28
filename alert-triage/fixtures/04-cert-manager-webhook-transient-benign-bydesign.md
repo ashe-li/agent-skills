@@ -20,7 +20,7 @@ notes: transient by-design；status.history 已自癒；stg 1 replica 刻意 →
 | alertname | kustomize-controller（Slack）— Certificate/arc-system/buildkitd-amd64-tls dry-run failed |
 | reason | no endpoints available for service "cert-manager-webhook" |
 | state | firing（顯示 03:56 TPE = UTC 2026-05-22 19:56）|
-| cluster / namespace | vocus-stg / arc-system（webhook 在 cert-manager）|
+| cluster / namespace | app-stg / arc-system（webhook 在 cert-manager）|
 | stated_cause | webhook 無 endpoint（看似 webhook 壞）|
 
 ## Recorded Live Evidence（回放用，當時真實證據）

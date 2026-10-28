@@ -16,7 +16,7 @@ redundancy-peers: [plan-run]
 
 **規劃階段（Step 1–4）不為 task tracking 單獨發 AskUserQuestion。** 且 **session 沒有 Task 工具時，Step 6 批次詢問的「Task 追蹤」題直接剔除**——不要問一個當下開不了的開關（env var 要重啟 session 才生效）。只有 session 確實有 Task 工具（使用者設了 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` 或 `--allowedTools`）時才併入該批次詢問。使用者已明示啟用 → 逕行以 TaskCreate 建子任務（含 activeForm、必要時 addBlockedBy），完成後 TaskUpdate 為 completed；**呼叫失敗即 continue，不中止流程**。
 
-> **為什麼延後**：HITL 等待是 /design→實作全程 wall-clock 的最大成本。2026-07-16 PDT-10398 session 實測：3.5h 全程中 ~85–100 min 在等使用者回覆，其中 ~40 min 來自 4 個「分散在流程各處、各自 block」的 AskUserQuestion（Task 追蹤、Worktree、推進方式、編隊授權）。這四題彼此獨立、答案都在「怎麼執行」這一類，合併成 plan 寫入後的一次詢問即可——分散問則每一題都可能撞上使用者離開的空窗。
+> **為什麼延後**：HITL 等待是 /design→實作全程 wall-clock 的最大成本。2026-07-16 某次 session 實測：3.5h 全程中 ~85–100 min 在等使用者回覆，其中 ~40 min 來自 4 個「分散在流程各處、各自 block」的 AskUserQuestion（Task 追蹤、Worktree、推進方式、編隊授權）。這四題彼此獨立、答案都在「怎麼執行」這一類，合併成 plan 寫入後的一次詢問即可——分散問則每一題都可能撞上使用者離開的空窗。
 
 ## Step 1: 盤點可用資源
 
@@ -58,7 +58,7 @@ haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（�
 | **中等以上** | 跨檔案且有架構影響、或修法方向需要取捨 | Step 3（含架構決策）→ Step 4（含架構審查）|
 | **多 session** | 需跨 session 持續推進的大型計畫（遷移框架、多天重架構） | 走標準流程產出 plan，跨 session 推進交給 `/plan-run`（state 持久化於 `plans/active/.plan-state/`） |
 
-> **快速路徑的存在理由**（2026-07-10 PDT-10428 前例）：一個 P2 顯示 bug 走完整儀式，產出業界參照表、社群共識表、RTM、threat model 後，再被 61K-token 審查 agent 以「缺效能評估段落」「缺文件影響章節」等格式官僚項目打回重修——4 個 FAIL 沒有一個改變實作方向。儀式成本要與風險×不可逆性成比例，不與流程完整度成比例。**檔案數不是唯一判準**：bug fix 常跨 2-3 檔（util + 元件 + 測試）但仍是單一決策，屬快速路徑；反之單檔但涉及方案取捨（快取策略、狀態管理選型）走中等。
+> **快速路徑的存在理由**（2026-07-10 前例）：一個 P2 顯示 bug 走完整儀式，產出業界參照表、社群共識表、RTM、threat model 後，再被 61K-token 審查 agent 以「缺效能評估段落」「缺文件影響章節」等格式官僚項目打回重修——4 個 FAIL 沒有一個改變實作方向。儀式成本要與風險×不可逆性成比例，不與流程完整度成比例。**檔案數不是唯一判準**：bug fix 常跨 2-3 檔（util + 元件 + 測試）但仍是單一決策，屬快速路徑；反之單檔但涉及方案取捨（快取策略、狀態管理選型）走中等。
 
 如果需求過於模糊無法判斷複雜度，使用 AskUserQuestion 請使用者補充具體資訊。
 

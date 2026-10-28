@@ -21,7 +21,7 @@ notes: 粗層 fallback alert；精準層沒 fire = 純 prefetch noise；runbook�
 | rule_uid | efm4kkn10h6o0f（sustained 404 > 24/s for 90m，coarse fallback）|
 | severity | warning |
 | state | firing → 自行 RESOLVED（2026-05-26 ~18:00 TPE / UTC 10:00）|
-| service | vocus-prod frontend（envoy_proxy）|
+| service | app-prod frontend（envoy_proxy）|
 | datasource | Loki Production ffhwhnr95ygaof |
 | stated_cause（runbook）| route regression / CDN HTML cache 吐 stale buildId |
 

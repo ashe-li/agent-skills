@@ -8,7 +8,7 @@ redundancy-peers: [plan-run]
 
 # /dispatch-loop — 委派推進迴圈
 
-來源：2026-07-10 simpleinfo-f2e session 實證有效的互動模式（28 steps、~5M subagent tokens 完整走完 Phase 0–5）。核心：**主模型不下場，只指揮、裁決、抽查**。
+來源：2026-07-10 client-f2e session 實證有效的互動模式（28 steps、~5M subagent tokens 完整走完 Phase 0–5）。核心：**主模型不下場，只指揮、裁決、抽查**。
 
 ## 角色分工
 

@@ -11,7 +11,7 @@ notes: KB 原文情境是「清點某期間有哪些 release PR」，非「彙�
 
 ## 情境
 
-**KB 原情境**：查「X 月 X 日前後有哪些 release / 上線了什麼」，用 `git log origin/master --merges --grep "from sosreader/hotfix"` 掃 merge commit。
+**KB 原情境**：查「X 月 X 日前後有哪些 release / 上線了什麼」，用 `git log origin/master --merges --grep "from example-org/hotfix"` 掃 merge commit。
 
 **本 fixture 的延伸**：Step 2.5「驗證彙整了哪 N 個 PR」也是同一種枚舉動作——取 N 個 merge commit 的檔案聯集，對照 compare 的檔案數。若批次內有 feature PR 是**squash-merge** 進 head 的，它不會留下 merge commit，枚舉 merge commit 數就會少算，body 的「彙整 N 個 PR」與「這幾個 PR 的清單」都可能漏掉它。
 
@@ -32,7 +32,7 @@ gh pr list --base master --state merged --limit 100 \
   -q '.[] | "\(.mergedAt)  #\(.number)  [\(.headRefName)]  \(.title)"' | sort
 ```
 
-要點：`--base` 才是「上線」的定義判準，不是看 commit message 裡的 `from sosreader/xxx`（`hotfix → develop` 這類整合／回流會用同樣字串但不是 release）；`mergedAt` 是 UTC，台北 +8 跨日常見，查「某天有沒有 release」時視窗要往前多抓一天。延伸到 Step 2.5：對批次內宣稱彙整的每個 feature PR，逐一用 `gh pr view <N> --json mergedAt,baseRefName` 現查，而不是只數 merge commit 數量。
+要點：`--base` 才是「上線」的定義判準，不是看 commit message 裡的 `from example-org/xxx`（`hotfix → develop` 這類整合／回流會用同樣字串但不是 release）；`mergedAt` 是 UTC，台北 +8 跨日常見，查「某天有沒有 release」時視窗要往前多抓一天。延伸到 Step 2.5：對批次內宣稱彙整的每個 feature PR，逐一用 `gh pr view <N> --json mergedAt,baseRefName` 現查，而不是只數 merge commit 數量。
 
 ## 判定規則
 

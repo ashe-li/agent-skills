@@ -20,7 +20,7 @@ notes: INFO severity diagnostic；5 分鐘自行 RESOLVED；對照 KubeDeploymen
 | alertname | KubePodNotReady（INFO / diagnostic）|
 | severity | info |
 | state | 12:30 FIRING:3 → 12:35 RESOLVED:3（5 分鐘）|
-| cluster / namespace | vocus-stg / arc-system |
+| cluster / namespace | app-stg / arc-system |
 | pods | arc-arm64-2sdjn-runner-*（ephemeral CI runner）|
 | stated_cause | pod not ready > 15m |
 

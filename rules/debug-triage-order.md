@@ -24,7 +24,7 @@ regression spec 寫好之後，驗收 = 一個 fresh context（主對話或單�
 
 ## Why
 
-2026-07-16 vocus 投票 RCA session 複盤，三個浪費點合計約佔 session 30-40% 時間與 3 輪可避免的 agent 派工：
+2026-07-16 app 投票 RCA session 複盤，三個浪費點合計約佔 session 30-40% 時間與 3 輪可避免的 agent 派工：
 
 1. prod-only hydration 失敗，卻先在 dev 窮舉 5 種導覽條件（整輪 repro agent 註定無法重現）；後補的 prod 唯讀探測第一輪就拿到 React #418×28 的決定性訊號。
 2. repro agent 的 grep 已證明 infinity-roll 是 dead code，仍再派一整輪 Explore 重查同一問題（inline `git log --grep` 一分鐘可定案）。

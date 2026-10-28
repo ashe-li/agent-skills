@@ -1,7 +1,7 @@
 ---
 fixture_id: "06"
 kind: regression
-pr: "sosreader/vocus-web-ui#7981（同型：#8081、#7994）"
+pr: "web-app PR 7981（同型：#8081、#7994）"
 scale:
   note: KB 未記載 #7981/#8081/#7994 的檔案數與 +/− 規模，此欄位不填數字，標 provisional
 source_kb: wiki/learned/release-pr-body-goes-stale-while-open.md

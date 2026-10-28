@@ -1,7 +1,7 @@
 ---
 fixture_id: "09"
 kind: regression
-pr: "sosreader/vocus-web-ui（案例一：base=develop 的重構 PR；案例二：PDT-10581，base=hotfix）"
+pr: "example-org/web-app（案例一：base=develop 的重構 PR；案例二：TICKET-10581，base=hotfix）"
 scale:
   note: KB 未記載這兩個案例的檔案數與 +/− 規模，此欄位不填數字
 source_kb: wiki/learned/ci-workflow-branch-filter-makes-checks-vacuous.md
@@ -17,7 +17,7 @@ Step 2.5 規則 2 對「本機測試通過」這類數字的處置是「不轉�
 
 **案例一**：一條 base 為 `develop` 的重構 PR，`gh pr checks` 回 exit 0、唯一一列 `CodeRabbit pass`，看起來像通過。實際上 `.github/workflows/ci.yaml` 的 trigger 是 `branches: [master, hotfix]`——develop 不在裡面，lint／unit-test／trivy 一個都沒跑。`gh pr checks` 的 exit code 只回報「現有 check 的狀態」，沒有 check 就沒有 failing check，exit 0，這與「全部通過」在輸出上幾乎無法區分。
 
-**案例二**：PDT-10581（base=`hotfix`）看到 **9 個 check 全綠**，逐支反查發現 `ci.yaml`／`styled-migration-progress.yaml`／`lint-workflows.yaml` 確實涵蓋 `hotfix`，但 `playwright.yml`（E2E）的 filter 只有 `[master]`——**主 CI 綠是真的跑過，但「E2E 有跑」是假的**，同一個 repo 內不同 workflow 的 filter 各自演化，不能查一支就下結論。
+**案例二**：TICKET-10581（base=`hotfix`）看到 **9 個 check 全綠**，逐支反查發現 `ci.yaml`／`styled-migration-progress.yaml`／`lint-workflows.yaml` 確實涵蓋 `hotfix`，但 `playwright.yml`（E2E）的 filter 只有 `[master]`——**主 CI 綠是真的跑過，但「E2E 有跑」是假的**，同一個 repo 內不同 workflow 的 filter 各自演化，不能查一支就下結論。
 
 **延伸案例**：`preview-deploy.yaml` 用 `types: [labeled, synchronize, reopened]`，沒有 `opened`——剛開好的 PR 完全不會出現 preview 這一列 check，比「缺 synchronize」更難察覺，因為連 workflow 存在的痕跡都看不到。
 

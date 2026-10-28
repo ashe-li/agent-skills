@@ -14,7 +14,7 @@ Scope: Apply when a task can be decomposed into ≥2 independent investigation/p
 
 - **背景為預設**：Agent 預設背景執行、完成時 harness 自動通知主對話。只有「沒這個結果就走不下去」的派工才同步等（`run_in_background: false`）。
 - **派出即繼續**：派出後不空等，回頭做與派工**不重疊**的 inline 小事（≤3 檔快查、讀 PR comment、跑單條指令）；派出去的調查不要自己同時做一遍。
-- **具名 + 續問**：派工時用 `name` 取名（例：`scan-vocus-styles`）；追問、補需求 → SendMessage 續用同一 teammate 的 context，不重派新 agent 從零讀起。
+- **具名 + 續問**：派工時用 `name` 取名（例：`scan-app-styles`）；追問、補需求 → SendMessage 續用同一 teammate 的 context，不重派新 agent 從零讀起。
 - **等待不輪詢**：禁止 sleep / 迴圈 poll；完成通知是主訊號，保險用長間隔喚醒（≥20 分鐘）或直接結束 turn 等通知。環境沒有這些工具就單純等通知。
 - **收攏**：teammate 只回結論與 `檔案:行號` 證據，長產物落檔回傳路徑；主對話只留結論與衝突點，跨路矛盾列給使用者裁決，不默默取捨。
 

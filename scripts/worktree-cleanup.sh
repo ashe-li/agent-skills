@@ -43,7 +43,7 @@ set -euo pipefail
 ROOT="${HOME}/Documents"
 APPLY=0; DO_FETCH=0; DO_DU=0; KILL_BLOCKERS=0
 
-# 算 rev-list 要列舉所有可能的 base：base 不是 master/main 的 repo 存在（vocus-trends 用 dev-v2）。
+# 算 rev-list 要列舉所有可能的 base：base 不是 master/main 的 repo 存在（trends-app 用 dev-v2）。
 # 漏列會把已 merge 的誤判成未 merge（保守方向，可接受），但只列一條就會整個判不準。
 # 來源：worktree-cleanup-base-branch-detection-fallback.md
 BASE_CANDIDATES="master main hotfix develop develop-v2 develop-v3 develop-v4 dev-v2 dev"
@@ -250,7 +250,7 @@ inspect_branch() {
 
 # detached HEAD：沒有 branch 就沒有 PR 可查，PR 關卡改成「HEAD 是否已在某條 remote branch 上」。
 # 舊版在這裡直接 continue，驗證／baseline 用的 detached worktree 永遠不會出現在輸出。
-# branch -r --contains = 0 一律保留：可能是本機 merge 試驗（vocus-web-ui-rca-merge）。
+# branch -r --contains = 0 一律保留：可能是本機 merge 試驗（web-app-rca-merge）。
 # 查詢失敗（pipefail）也落到 0 → 保留，故障只會往保守方向偏。
 inspect_detached() {
   local n_remote

@@ -151,8 +151,9 @@ DETACHED="(detached)"   # TSV 佔位：bash 的 tab IFS 會把空欄位吃掉，
 # 印出主 repo 路徑（每行一個，未去重）。--path-format=absolute 讓兩側都正規化成同一種寫法。
 discover_repos() {
   local d
-  find "$ROOT" -maxdepth "$SCAN_DEPTH" \( -name .git -type d -prune -o -name .git -type f \) \
-       -print 2>/dev/null | while IFS= read -r d; do
+  # find 碰到讀不到的目錄會回 1；pipefail + set -e 下整支腳本會零輸出結束，所以吞掉它的 rc。
+  { find "$ROOT" -maxdepth "$SCAN_DEPTH" \( -name .git -type d -prune -o -name .git -type f \) \
+         -print 2>/dev/null || true; } | while IFS= read -r d; do
     git -C "$(dirname "$d")" rev-parse --path-format=absolute --git-common-dir 2>/dev/null \
       | sed 's|/\.git$||' || true
   done

@@ -208,6 +208,29 @@ class DryRunClassificationTest(unittest.TestCase):
         return [r[2] for r in (ln.split() for ln in self.out.splitlines()) if r[:1] == ["remove"]]
 
 
+@unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root 讀得到 chmod 000 目錄")
+class UnreadableDirTest(unittest.TestCase):
+    """ROOT 下有讀不到的目錄時 find 回 1；pipefail + set -e 曾讓腳本 rc=1 且零輸出。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.world = World(Path(os.path.realpath(self._tmp.name)))
+        self.locked = self.world.root / "no-perm" / "inner"
+        self.locked.mkdir(parents=True)
+        self.locked.chmod(0o000)
+
+    def tearDown(self) -> None:
+        self.locked.chmod(0o755)
+        self._tmp.cleanup()
+
+    def test_unreadable_dir_does_not_abort_scan(self) -> None:
+        result = self.world.run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for key in ("det_pushed", "outside", "nested", "merged"):
+            self.assertIsNotNone(row_for(result.stdout, self.world.paths[key]), key)
+        self.assertIn("共 7 個", result.stdout)
+
+
 class ApplyTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

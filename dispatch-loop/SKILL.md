@@ -87,14 +87,10 @@ plan_runner.py complete plans/active/foo.md S3.2 \
 
 ## Token 紀律（本 skill 的存在理由）
 
-- plan 內每 step 標【預期 agent 數 × 模型層級 × 預估 token】，phase 小計 + 全 plan 總計
-- 單 step 超預算 2 倍 → 停下重估，不加派補洞
+- plan 內每 step 標【預期 agent 數 × 模型層級 × 複雜度量級（小／中／大）】，不寫具體 token 數字；量級判準見 [`rules/teammate-fleet.md`](../rules/teammate-fleet.md)
+- 單 step 實際跑成比預估高一級的形狀 → 停下重估，不加派補洞
 - review 關卡按「風險 × 不可逆性」裁剪：低風險 step 單一驗證即可，只有核心邏輯/不可逆操作才疊多重審查
-- 量級參考（2026-07-10 實測，小型 landing page 專案）：
-  - 單一實作 step ≈ 60–130K subagent tokens
-  - headed 驗證 step ≈ 100–200K
-  - **30-agent 編隊 code review ≈ 1.6M**——對小 repo 過度設計，約等於全部實作 step 總和的一半
-  - repo <5K 行時，review 用單一 reviewer agent 或 ≤4 角度小編隊即可
+- 量級參考（2026-07-10 實測，小型 landing page 專案）：實作 step 屬「中」、headed 驗證屬「大」；**30-agent 編隊 code review 約等於全部實作 step 總和的一半**——對小 repo 過度設計，repo <5K 行時 review 用單一 reviewer agent 或 ≤4 角度小編隊即可
 - 追問既有 agent 用 SendMessage（附 agentId），不重派
 
 ## 實證教訓（本模式下的已知坑）

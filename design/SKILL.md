@@ -46,7 +46,7 @@ haiku 即低成本層級。依 `agents/complexity-triage.md` 的定義執行（�
 - **輸入**：`$ARGUMENTS` + 對話中的需求脈絡（`/notion-plan` 來源含整理後的 Markdown）+ 專案根目錄路徑
 - **動作**：只允許 Glob/Grep/Read 粗估影響面（找出可能要改的檔案、判斷有無方案取捨），**不深讀、不設計方案**；輸出契約見 `agents/complexity-triage.md` 的「輸出格式」章節（唯一權威，不在此重複 JSON schema）
 - **主模型裁決**：對照下表採納或否決——分診結果與主模型判斷衝突時，**取較高複雜度**（分診只准降級失敗、不准升級失敗）；`ambiguous_requirements=true` → 先 AskUserQuestion 補需求再重分診
-- 分診 agent 約 5-15K tokens，換到的是：低複雜度任務跳過 Plan agent 全儀式 + 61K-token 審查 agent 的成本
+- 分診 agent 是 Haiku・小，換到的是：低複雜度任務跳過 Plan agent 全儀式 + 完整審查 agent 的成本
 
 ### Step 2b: 路徑判定
 
@@ -95,7 +95,7 @@ Agent(subagent_type="Plan")
 9. **Security / Threat Model**（主動觸發，依 [`rules/security-guidance/skill-integration.md`](../rules/security-guidance/skill-integration.md) 的觸發閘）— 先判斷 plan 是否觸及安全敏感面（認證/輸入/endpoint/DB/反序列化/檔案/shell/SSRF/DOM/加密）：**觸及** → 必含「Security / Threat Model」章節，逐條對照 `~/.claude/claude-security-guidance.md`（與 plugin 同一份判準），且實作後步驟須納入 `/security-review`；**未觸及** → 一句話「無安全敏感面，跳過」，不空列
 10. **驗收標準** — 怎樣算完成
 11. **測試覆蓋**（新功能/修 bug 且缺測試覆蓋時）— 相關步驟可引用 `agents/tdd-guide.md` 的紅－綠－重構流程，先寫失敗測試再實作，對齊全域 80% 覆蓋率規則
-12. **Token 預算** — 中等以上逐 step 標【預期 agent 數 × 模型層級 × 預估 token】；低複雜度縮為一行總估算
+12. **成本預估** — 中等以上逐 step 標【預期 agent 數 × 模型層級 × 複雜度量級（小／中／大）】，不寫具體 token 數字（量級判準見 `rules/teammate-fleet.md`）；低複雜度縮為一行
 
 **B 組 — 研究章節（僅在風險觸發時加入；預設整段省略）：**
 
@@ -250,10 +250,10 @@ plan 寫入後，把所有「怎麼執行」的決策**合併成一次 AskUserQu
 
 | 題目 | 選項（第一選項 = Recommended） | 何時從批次剔除（答案已知就不問） |
 |---|---|---|
-| Task 追蹤（**僅當 session 有 Task 工具**） | 啟用 (Recommended)（附 token 預估）/ 不啟用 | **session 沒有 Task 工具即剔除**（預設模型即如此，見 `rules/task-tracking-availability.md`，改用文字清單）；使用者已明示偏好；低複雜度單一 fix 逕行不問 |
+| Task 追蹤（**僅當 session 有 Task 工具**） | 啟用 (Recommended)（附模型 × 量級預估）/ 不啟用 | **session 沒有 Task 工具即剔除**（預設模型即如此，見 `rules/task-tracking-availability.md`，改用文字清單）；使用者已明示偏好；低複雜度單一 fix 逕行不問 |
 | Worktree | 是，建 sibling worktree (Recommended) / 否，當前目錄 | `rules/worktree-prompt.md` 跳過條件：已表態、已在 worktree、小型任務 |
 | 推進方式 | 依複雜度推薦（下表） | 使用者已在 `$ARGUMENTS` 或對話中明示偏好 |
-| 編隊授權 | 啟用並行 (Recommended)（附 token 預估）/ 單路序列 | plan 的 Dependencies DAG 無可並行分支；或使用者已表態 |
+| 編隊授權 | 啟用並行 (Recommended)（附模型 × 量級預估）/ 單路序列 | plan 的 Dependencies DAG 無可並行分支；或使用者已表態 |
 
 - 全部題目都被剔除 → 整個批次跳過，逕行開工。
 - 批次後**不再為這四類決策發第二次 AskUserQuestion**。實作中新發現的裁決（如 code review 挖出的 scope 問題）仍即時問，但**發問前先把不依賴該答案的工作派出去**（agent 跑著等答案，而不是所有人停著等）。

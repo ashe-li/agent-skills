@@ -282,7 +282,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 - 跨維度衝突偵測：AGREE / PARTIAL / CONFLICT / NO-DATA 判定
 - 整體 Verdict：WELL-SUPPORTED / CONDITIONALLY-SUPPORTED / WEAKLY-SUPPORTED / CONFLICTED / INSUFFICIENT-EVIDENCE
 - 輸出格式與 `/design` plan 相容(Industry & Standards Reference + Community Consensus 表格)，可直接貼入
-- Step 0 HITL：執行前告知預估 token 消耗(~16K-30K)，使用者確認後才啟動
+- Step 0 HITL：執行前告知成本預估（2 路 Haiku・中），使用者確認後才啟動
 - 與 `/design` 互補：/design 做 inline 驗證(驗證計畫中已有引述)，/evidence-check 做獨立深度調查
 
 **方法論依據：** EBSE 四類證據分類(Kitchenham et al., 2004)、ITIL CMDB Reconciliation、DAMA-DMBOK Completeness
@@ -391,7 +391,7 @@ Worktree 生命週期管理。統一存放至 `~/Documents/<repo>-<name>`。
 
 - **派工 prompt 六格骨架**：目標／動機／範圍／既有慣例／驗收條件／回報格式，缺一格不發；另附搜尋、實作、重構、研究、審查五種型態的 agent + model 微調
 - **抽查驗收**：不信任 subagent 自報——`ls` 驗檔案、`grep` 驗內容、`git log` 比對、測試親跑一次，過了才 `complete`
-- **Token 預算**：每 step 標【agent 數 × 模型層級 × 預估 token】，超預算 2 倍停下重估；附 2026-07-10 實測量級（實作 step 60–130K、headed 驗證 100–200K、30-agent 編隊 review 1.6M——對小 repo 過度設計）
+- **成本預估**：每 step 標【agent 數 × 模型層級 × 複雜度量級（小／中／大）】，不寫具體 token 數字；實際跑成高一級的形狀就停下重估；附 2026-07-10 實測教訓（30-agent 編隊 review 約等於全部實作 step 總和的一半——對小 repo 過度設計）
 - **回收前 KB gate**：順序固定不可反過來——(a) 教訓寫進知識庫（`_pending/`，成熟落 `wiki/learned/`），(b) 用 `plan_runner.py complete --summary --evidence` 寫摘要並標記完成；摘要撰寫指引規定四項必寫（做了什麼／偏離 plan 之處／接受的副作用／延後待辦），上限 500 字元超過即拒絕不截斷
 - **實證教訓**：派工必寫「禁止再委派」（轉派產生的孤兒 agent 會讓任務靜默蒸發）、視覺裁決不可用縮圖、稀缺配額 MCP 不下放 agent
 
@@ -540,7 +540,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 | `rules/worktree-prompt.md` / `rules/debug-triage-order.md` | 情境型：不 symlink 常駐，改由 `scripts/hooks/` 的 `UserPromptSubmit` hook 命中情境才注入（見上方「情境型 rules 的觸發式安裝」）；`/design` Step 6 另引用 worktree-prompt 的跳過條件與路徑慣例 |
 | [`rules/design-token-reuse-first.md`](rules/design-token-reuse-first.md) | 情境型：改 UI 樣式對應 Figma token 時先 grep 現成 utility／token 再手寫值；不 symlink 常駐，實作設計稿時按需讀 |
 | [`rules/task-tracking-availability.md`](rules/task-tracking-availability.md) | `TodoWrite` / `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` 自 Claude Code v2.1.233 起在 Opus 4.8、Sonnet 5、Fable 5、Mythos 5 及更新模型上**預設不註冊**：官方立場、三條有效 opt-in 途徑、以及「SKILL.md frontmatter 的 `allowed-tools` 不構成 opt-in」這個實測結論；含本 repo 撰寫守則（主線不得依賴 Task 工具、不得拿 task 數當完成率分母）與可觀察的驗證指令 |
-| [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附 token 預估，比照 Task Tracking），含編隊守則與資源紀律（HITL 附 token 預估的做法比照 Task Tracking，但本身不依賴 Task 工具）。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
+| [`rules/teammate-fleet.md`](rules/teammate-fleet.md) | Teammate 編隊委派：預計並行 ≥2 個背景 subagent 時先 HITL 詢問啟用（附「模型 × 複雜度量級」預估，不寫具體 token 數字），含量級判準、編隊守則與資源紀律（HITL 做法比照 Task Tracking，但本身不依賴 Task 工具）。可攜版本，**不預設 symlink 常駐**（本機若已有 CLAUDE.md 觸發行＋playbook 詳版，再 symlink 會重複載入）；新環境接線：CLAUDE.md 加一行指到本檔，或 symlink 進 `~/.claude/rules/` |
 | [`rules/refactor/remove-architect-pipeline.md`](rules/refactor/remove-architect-pipeline.md) | 禁用規則：不可使用已退化的 `architect` agent，`/design` 一律改用內建 `Plan` agent |
 
 ---

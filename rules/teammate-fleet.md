@@ -6,9 +6,19 @@ Scope: Apply when a task can be decomposed into ≥2 independent investigation/p
 
 預計並行 ≥2 個背景 teammate 時，先用 AskUserQuestion 問是否啟用編隊模式：
 
-- 附 token 預估（每路約略估算＋總和）
+- 附成本預估：每路只寫「預期模型 × 複雜度量級」，例「4 路 Sonnet・中 + 1 路 Opus・中」；不算具體 token 數字（量級判準見下）
 - 第一選項「啟用 (Recommended)」
 - 單路派工不問逕行；本 session 已同意過一次 → 同 session 後續同類 fan-out 不再問
+
+### 複雜度量級判準
+
+| 量級 | 任務形狀 |
+|---|---|
+| 小 | 定位／快查／分診：讀少量檔案、一兩輪就能回報 |
+| 中 | 單軸調查、一般實作 step、單一 reviewer |
+| 大 | 跨模組實作、深度審查、headed 驗證、需要多輪試錯 |
+
+成本以「模型層級 × 量級」做相對比較，不追求絕對數字。要校準量級時，拿過往 subagent 實際用量對照（`~/.claude/projects/*/*/subagents/*.jsonl` 的 usage），不在 HITL 問句裡寫數字。
 
 ## 編隊守則
 
@@ -42,7 +52,7 @@ Why: 本 session（teammate 編隊模式推進）實測至少 4 次交錯：①�
 - 搜尋/定位用唯讀 Explore 型 agent（讀摘錄不讀全檔）、機械活降小模型；不要每路都吃主模型。
 - worktree isolation 只給會改檔的並行 agent（有建置成本），唯讀調查不用。
 - 追問既有 teammate（SendMessage）優於重派 — 重派 = 重付整個 context 建置費。
-- 任一路超出 token 預估 2 倍、或連錯兩次 → 停下重估路線，不加派更多 agent 補洞。
+- 任一路實際跑成比預估高一級的形狀（例：預估單軸調查卻擴成跨模組）、或連錯兩次 → 停下重估路線，不加派更多 agent 補洞。
 - trivial 任務（單檔已知位置、單條指令可答）不開編隊。
 
-Why: 2026-07-08 Fable 主對話實測 — 背景編隊（具名 teammate、派出即繼續、SendMessage 續問）讓多路調查與主對話推進並行、等待時間歸零；但無閘門的大量委派會失控燒 token，故比照 Task Tracking 以 HITL 附 token 預估徵求啟用。本機另有 `~/.claude/playbooks/10-model-dispatch.md` §7.1 詳版與 CLAUDE.md 硬性偏好一行；本檔為 repo 可攜版本，供其他環境接線（不建議同時 symlink 進常駐，避免重複載入）。
+Why: 2026-07-08 Fable 主對話實測 — 背景編隊（具名 teammate、派出即繼續、SendMessage 續問）讓多路調查與主對話推進並行、等待時間歸零；但無閘門的大量委派會失控燒 token，故比照 Task Tracking 以 HITL 附成本預估徵求啟用。2026-10-29 改為只估「模型 × 量級」：對照 120 天 1,199 個 subagent 實際用量，過去寫進 skill 的具體數字多數偏低，最嚴重的 `/design` 分診（5–15K）與 `/evidence-check`（每路約 8–15K）對 Haiku 單路中位數約 74K 差約 5–15 倍，且同模型 p25 到 p90 差約 3 倍，單一數字代表不了實際用量。本機另有 `~/.claude/playbooks/10-model-dispatch.md` §7.1 詳版與 CLAUDE.md 硬性偏好一行；本檔為 repo 可攜版本，供其他環境接線（不建議同時 symlink 進常駐，避免重複載入）。

@@ -43,7 +43,7 @@ envelope 另外要定出：**告警時間窗**（first seen −2h 到 last seen�
 
 ## Step 1 — 平行派工（同一則訊息送出四個 Agent call）
 
-預計並行 ≥2 個 agent，照全域規則先用 AskUserQuestion 問要不要啟用編隊（附 token 預估：4 路 Sonnet 每路約 60–120k，SYNTHESIS 1 路 Opus 約 100k）。使用者已經在同一次請求裡答應的話就不重問。
+預計並行 ≥2 個 agent，照全域規則先用 AskUserQuestion 問要不要啟用編隊（附成本預估：4 路 Sonnet・中，SYNTHESIS 1 路 Opus・中）。使用者已經在同一次請求裡答應的話就不重問。
 
 每路 prompt 的共同骨架：envelope 全文、硬規則 1–6、`H=` helper 用法、輸出格式（見下）、**「結論先給，≤5 行」**。每路回報格式固定：
 

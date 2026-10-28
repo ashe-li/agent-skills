@@ -18,7 +18,7 @@ Scope: Apply when a task can be decomposed into ≥2 independent investigation/p
 | 中 | 單軸調查、一般實作 step、單一 reviewer |
 | 大 | 跨模組實作、深度審查、headed 驗證、需要多輪試錯 |
 
-模型層級與量級相乘才是成本的主訊號。要校準量級時，拿過往 subagent 實際用量對照（`~/.claude/projects/*/*/subagents/*.jsonl` 的 usage），不在 HITL 問句裡寫數字。
+成本以「模型層級 × 量級」做相對比較，不追求絕對數字。要校準量級時，拿過往 subagent 實際用量對照（`~/.claude/projects/*/*/subagents/*.jsonl` 的 usage），不在 HITL 問句裡寫數字。
 
 ## 編隊守則
 

@@ -1,7 +1,8 @@
 """scripts/check-banned-terms.sh 的行為測試。
 
-守住四件事：命中時 exit 1 且輸出只有 path:line（不洩漏命中字樣）、沒有黑名單時
-exit 0、--staged 只看新增行、--range 同時掃 diff 與 commit message。
+守住五件事：命中時 exit 1 且輸出只有 path:line（不洩漏命中字樣）、沒有黑名單時
+exit 0、--staged 只看新增行、--range 同時掃 diff 與 commit message、
+.githooks/pre-commit 會先串接全域 core.hooksPath 的 pre-commit 再跑字樣守衛。
 測試用的假黑名單一律用無關字樣，真名稱不得出現在 repo。
 
 Run: python3 -m unittest scripts.tests.test_check_banned_terms -v
@@ -11,12 +12,14 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "check-banned-terms.sh"
+HOOK = Path(__file__).resolve().parent.parent.parent / ".githooks" / "pre-commit"
 WORD = "forbiddenword"
 REGEX = r"(forbiddenword|\bsecret-[0-9]+)"
 
@@ -222,3 +225,89 @@ class TestUsage(BannedTermsBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPreCommitHookChain(BannedTermsBase):
+    """.githooks/pre-commit 先跑全域 core.hooksPath 的 pre-commit，再跑字樣守衛。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.repo / "scripts").mkdir()
+        (self.repo / ".githooks").mkdir()
+        shutil.copy(SCRIPT, self.repo / "scripts" / "check-banned-terms.sh")
+        shutil.copy(HOOK, self.repo / ".githooks" / "pre-commit")
+        (self.repo / ".githooks" / "pre-commit").chmod(0o755)
+        self.marker = self.root / "global-hook-ran"
+        self.gitconfig = self.root / "gitconfig"
+
+    def make_global_hook(self, exit_code: int, dirname: str = "global-hooks") -> Path:
+        hooks = self.root / dirname
+        hooks.mkdir(parents=True, exist_ok=True)
+        hook = hooks / "pre-commit"
+        hook.write_text(
+            f'#!/bin/sh\necho "$@" > "{self.marker}"\nexit {exit_code}\n',
+            encoding="utf-8",
+        )
+        hook.chmod(0o755)
+        return hooks
+
+    def set_global_hooks_path(self, value: str) -> None:
+        self.gitconfig.write_text(f"[core]\n\thooksPath = {value}\n", encoding="utf-8")
+
+    def run_hook(self, staged_text: str, *args: str):
+        self.write("doc.md", staged_text)
+        self.git("add", "doc.md")
+        env = self.env(BANNED_TERMS_REGEX=REGEX, GIT_CONFIG_GLOBAL=str(self.gitconfig))
+        return subprocess.run(
+            [str(self.repo / ".githooks" / "pre-commit"), *args], cwd=self.repo,
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+
+    def test_global_hook_runs_then_banned_terms_still_checked(self) -> None:
+        self.set_global_hooks_path(str(self.make_global_hook(0)))
+        proc = self.run_hook(f"line with {WORD}\n", "arg1")
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.marker.read_text().strip(), "arg1")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout.strip(), "doc.md:1")
+        self.assert_no_leak(proc)
+
+    def test_global_hook_ok_and_clean_staged_exits_0(self) -> None:
+        self.set_global_hooks_path(str(self.make_global_hook(0)))
+        proc = self.run_hook("nothing here\n")
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(proc.returncode, 0)
+
+    def test_global_hook_failure_exit_code_propagates_and_skips_check(self) -> None:
+        self.set_global_hooks_path(str(self.make_global_hook(3)))
+        proc = self.run_hook(f"line with {WORD}\n")
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(proc.returncode, 3)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_no_global_hooks_path_only_runs_banned_terms(self) -> None:
+        self.gitconfig.write_text("", encoding="utf-8")
+        proc = self.run_hook(f"line with {WORD}\n")
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout.strip(), "doc.md:1")
+
+    def test_tilde_in_global_hooks_path_is_expanded(self) -> None:
+        self.make_global_hook(0, dirname="home/hooks")
+        self.set_global_hooks_path("~/hooks")
+        proc = self.run_hook("nothing here\n")
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(proc.returncode, 0)
+
+    def test_global_hooks_path_pointing_at_repo_githooks_does_not_recurse(self) -> None:
+        self.set_global_hooks_path(str(self.repo / ".githooks"))
+        proc = self.run_hook("nothing here\n")
+        self.assertEqual(proc.returncode, 0)
+
+    def test_non_executable_global_hook_is_skipped(self) -> None:
+        hooks = self.make_global_hook(3)
+        (hooks / "pre-commit").chmod(0o644)
+        self.set_global_hooks_path(str(hooks))
+        proc = self.run_hook("nothing here\n")
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(proc.returncode, 0)

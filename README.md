@@ -520,7 +520,7 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 本 repo 是公開的，不該出現特定公司、內部 repo／infra 名稱與內部票號。黑名單本身不進 repo，由使用者自行提供（Python `re` 語法、不分大小寫）；沒設定黑名單時所有檢查直接放行，fork 與一般使用者不受影響。
 
 - **掃描腳本**：`scripts/check-banned-terms.sh`，模式 `--staged`（暫存區新增行）、`--range <base>..<head>`（範圍內新增行與 commit message）、`--all`（整個 tree）。黑名單來自環境變數 `BANNED_TERMS_REGEX`，沒有就讀 `${BANNED_TERMS_FILE:-$HOME/.config/agent-skills/banned-terms.regex}`。命中時只印 `path:line`（commit message 印 sha），不印命中內容。
-- **本機 hook**：clone 後執行一次 `git config core.hooksPath .githooks` 啟用 `.githooks/pre-commit`（commit 前跑 `--staged`）。
+- **本機 hook**：clone 後執行一次 `git config core.hooksPath .githooks` 啟用 `.githooks/pre-commit`（commit 前跑 `--staged`）。repo-local `core.hooksPath` 會蓋掉全域設定，所以這支 hook 會先執行全域 `core.hooksPath` 目錄下的 `pre-commit`（若存在且可執行；非 0 就直接中止），再跑字樣守衛；全域目錄指向本 repo 的 `.githooks` 時不重複執行。
 - **CI**：`.github/workflows/banned-terms.yml` 讀 repo secret `BANNED_TERMS_REGEX`；secret 不存在（例如 fork PR）時跳過並留 notice。
 
 ---

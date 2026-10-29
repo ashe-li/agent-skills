@@ -1,7 +1,28 @@
 #!/usr/bin/env bash
-# 啟用：git config core.hooksPath .githooks
+# 啟用：git config core.hooksPath .githooks（會先執行全域 core.hooksPath 的 pre-commit，再跑字樣守衛）
 # 掃暫存區新增行；黑名單由 BANNED_TERMS_REGEX 或 ~/.config/agent-skills/banned-terms.regex 提供，
 # 都沒有時直接放行。細節見 scripts/check-banned-terms.sh。
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# repo-local core.hooksPath 會蓋掉全域設定，這裡手動串接全域 pre-commit（例如 secret 掃描）。
+global_path="$(git config --global --get core.hooksPath || true)"
+case "$global_path" in
+  \~) global_path="$HOME" ;;
+  \~/*) global_path="$HOME/${global_path#\~/}" ;;
+esac
+if [ -n "$global_path" ] && [ -d "$global_path" ]; then
+  global_dir="$(cd "$global_path" && pwd -P)"
+  global_hook="$global_dir/pre-commit"
+  # 全域目錄就是本 repo 的 .githooks 時不執行，避免遞迴
+  if [ "$global_dir" != "$self_dir" ] && [ -x "$global_hook" ] && [ -f "$global_hook" ]; then
+    rc=0
+    "$global_hook" "$@" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      exit "$rc"
+    fi
+  fi
+fi
+
 exec bash "$root/scripts/check-banned-terms.sh" --staged

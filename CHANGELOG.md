@@ -5,7 +5,7 @@
 ## [Unreleased]
 
 ### Added
-- **公開 repo 字樣守衛**：`scripts/check-banned-terms.sh`（`--staged`／`--range`／`--all`，黑名單由環境變數或本機檔案提供、不進 repo，命中只印 `path:line` 或 commit sha）、`.githooks/pre-commit`（`git config core.hooksPath .githooks` 啟用；會先執行全域 `core.hooksPath` 的 `pre-commit`，例如 secret 掃描，非 0 即中止，全域目錄就是本 repo 的 `.githooks` 時略過以免遞迴）、`.github/workflows/banned-terms.yml`（讀 secret，fork PR 無 secret 時跳過）與 `scripts/tests/test_check_banned_terms.py`。
+- **公開 repo 字樣守衛**：`scripts/check-banned-terms.sh`（`--staged`／`--range`／`--all`，黑名單由環境變數或本機檔案提供、不進 repo，命中只印 `path:line` 或 commit sha）、`.githooks/pre-commit`（`git config core.hooksPath .githooks` 啟用；`pre-commit`、`pre-push`（新增，只串接）都會先執行全域 `core.hooksPath` 的同名 hook，例如 secret 掃描，非 0 即中止，`pre-push` 的 stdin 原樣傳入，全域目錄就是本 repo 的 `.githooks` 時略過以免遞迴；共用邏輯在 `.githooks/_chain-global.sh`）、`.github/workflows/banned-terms.yml`（讀 secret，fork PR 無 secret 時跳過）與 `scripts/tests/test_check_banned_terms.py`。
 - **新增 `rules/merge-by-human-preview-first.md`**：agent 不可自己 merge 進 prod 等價分支（例如會部署到 prod 的 `hotfix` 分支），每個 PR 先 preview／staging 驗證再交人 merge，stacked PR 不可借用前一個 PR 的驗證。`plan-run` 的 Step 3.6 與 `dispatch-loop` 的派工通用規則各補一句指向它。來源：2026-10-28 agent 自行 merge 三個 PR 進 hotfix 被使用者喊停。
 
 ### Changed

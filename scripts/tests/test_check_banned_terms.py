@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "check-banned-terms.sh"
-HOOK = Path(__file__).resolve().parent.parent.parent / ".githooks" / "pre-commit"
+HOOKS_DIR = Path(__file__).resolve().parent.parent.parent / ".githooks"
 WORD = "forbiddenword"
 REGEX = r"(forbiddenword|\bsecret-[0-9]+)"
 
@@ -235,17 +235,22 @@ class TestPreCommitHookChain(BannedTermsBase):
         (self.repo / "scripts").mkdir()
         (self.repo / ".githooks").mkdir()
         shutil.copy(SCRIPT, self.repo / "scripts" / "check-banned-terms.sh")
-        shutil.copy(HOOK, self.repo / ".githooks" / "pre-commit")
-        (self.repo / ".githooks" / "pre-commit").chmod(0o755)
+        for name in ("_chain-global.sh", "pre-commit", "pre-push"):
+            shutil.copy(HOOKS_DIR / name, self.repo / ".githooks" / name)
+            (self.repo / ".githooks" / name).chmod(0o755)
         self.marker = self.root / "global-hook-ran"
+        self.stdin_marker = self.root / "global-hook-stdin"
         self.gitconfig = self.root / "gitconfig"
 
-    def make_global_hook(self, exit_code: int, dirname: str = "global-hooks") -> Path:
+    def make_global_hook(
+        self, exit_code: int, dirname: str = "global-hooks", name: str = "pre-commit"
+    ) -> Path:
         hooks = self.root / dirname
         hooks.mkdir(parents=True, exist_ok=True)
-        hook = hooks / "pre-commit"
+        hook = hooks / name
         hook.write_text(
-            f'#!/bin/sh\necho "$@" > "{self.marker}"\nexit {exit_code}\n',
+            f'#!/bin/sh\necho "$@" > "{self.marker}"\ncat > "{self.stdin_marker}"\n'
+            f"exit {exit_code}\n",
             encoding="utf-8",
         )
         hook.chmod(0o755)
@@ -260,7 +265,7 @@ class TestPreCommitHookChain(BannedTermsBase):
         env = self.env(BANNED_TERMS_REGEX=REGEX, GIT_CONFIG_GLOBAL=str(self.gitconfig))
         return subprocess.run(
             [str(self.repo / ".githooks" / "pre-commit"), *args], cwd=self.repo,
-            env=env, capture_output=True, text=True, timeout=30,
+            env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
         )
 
     def test_global_hook_runs_then_banned_terms_still_checked(self) -> None:
@@ -311,3 +316,43 @@ class TestPreCommitHookChain(BannedTermsBase):
         proc = self.run_hook("nothing here\n")
         self.assertFalse(self.marker.exists())
         self.assertEqual(proc.returncode, 0)
+
+    def run_pre_push(self, stdin: str, *args: str):
+        env = self.env(BANNED_TERMS_REGEX=REGEX, GIT_CONFIG_GLOBAL=str(self.gitconfig))
+        return subprocess.run(
+            [str(self.repo / ".githooks" / "pre-push"), *args], cwd=self.repo,
+            env=env, input=stdin, capture_output=True, text=True, timeout=30,
+        )
+
+    def test_pre_push_global_hook_ok_receives_args_and_stdin(self) -> None:
+        self.set_global_hooks_path(str(self.make_global_hook(0, name="pre-push")))
+        refs = "refs/heads/main aaa refs/heads/main bbb\nrefs/heads/x ccc refs/heads/x ddd\n"
+        proc = self.run_pre_push(refs, "origin", "git@example.com:o/r.git")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self.marker.read_text().strip(), "origin git@example.com:o/r.git")
+        self.assertEqual(self.stdin_marker.read_text(), refs)
+
+    def test_pre_push_global_hook_failure_exit_code_propagates(self) -> None:
+        self.set_global_hooks_path(str(self.make_global_hook(5, name="pre-push")))
+        proc = self.run_pre_push("refs/heads/main aaa refs/heads/main bbb\n", "origin", "url")
+        self.assertEqual(proc.returncode, 5)
+        self.assertTrue(self.marker.exists())
+
+    def test_pre_push_without_global_hook_exits_0(self) -> None:
+        self.gitconfig.write_text("", encoding="utf-8")
+        self.assertEqual(self.run_pre_push("x\n", "origin", "url").returncode, 0)
+        # 全域目錄存在但只有 pre-commit、沒有 pre-push
+        self.set_global_hooks_path(str(self.make_global_hook(3, name="pre-commit")))
+        self.assertEqual(self.run_pre_push("x\n", "origin", "url").returncode, 0)
+        self.assertFalse(self.marker.exists())
+
+    def test_pre_push_does_not_recurse_when_global_is_repo_githooks(self) -> None:
+        self.set_global_hooks_path(str(self.repo / ".githooks"))
+        self.assertEqual(self.run_pre_push("x\n", "origin", "url").returncode, 0)
+
+    def test_pre_commit_still_passes_args_after_helper_extraction(self) -> None:
+        # 回歸：抽出共用 helper 後 pre-commit 仍把參數交給全域 hook
+        self.set_global_hooks_path(str(self.make_global_hook(0)))
+        proc = self.run_hook("nothing here\n", "a", "b")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(self.marker.read_text().strip(), "a b")

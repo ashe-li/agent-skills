@@ -54,4 +54,4 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck guard scripts
-        run: shellcheck scripts/check-banned-terms.sh .githooks/pre-commit
+        run: shellcheck scripts/check-banned-terms.sh .githooks/pre-commit .githooks/pre-push .githooks/_chain-global.sh

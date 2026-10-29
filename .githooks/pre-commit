@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# 啟用：git config core.hooksPath .githooks
+# 啟用：git config core.hooksPath .githooks（會先執行全域 core.hooksPath 的 pre-commit，再跑字樣守衛）
 # 掃暫存區新增行；黑名單由 BANNED_TERMS_REGEX 或 ~/.config/agent-skills/banned-terms.regex 提供，
 # 都沒有時直接放行。細節見 scripts/check-banned-terms.sh。
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
+# shellcheck source=/dev/null
+. "$(dirname "${BASH_SOURCE[0]}")/_chain-global.sh"
+
+# 全域 pre-commit（例如 secret 掃描）失敗就以同樣 exit code 結束，不再跑字樣守衛
+chain_global_hook pre-commit "$@" || exit $?
+
 exec bash "$root/scripts/check-banned-terms.sh" --staged

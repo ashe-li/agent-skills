@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# 啟用：git config core.hooksPath .githooks（只負責串接全域 core.hooksPath 的 pre-push）
+# git 會把 ref 清單從 stdin 傳給 pre-push，原樣交給全域 hook；沒有全域 hook 就直接放行。
+set -euo pipefail
+# shellcheck source=/dev/null
+. "$(dirname "${BASH_SOURCE[0]}")/_chain-global.sh"
+
+chain_global_hook pre-push "$@" || exit $?

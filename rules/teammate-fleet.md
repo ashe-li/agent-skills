@@ -6,7 +6,7 @@ Scope: Apply when a task can be decomposed into ≥2 independent investigation/p
 
 預計並行 ≥2 個背景 teammate 時，先用 AskUserQuestion 問是否啟用編隊模式：
 
-- 附成本預估：每路只寫「預期模型 × 複雜度量級」，例「4 路 Sonnet・中 + 1 路 Opus・中」；不算具體 token 數字（量級判準見下）
+- 附成本預估：每路只寫「預期模型 × 複雜度量級」，例「4 路 Sonnet・中 + 1 路 Opus・中」；`effort` 不是預設值時一併寫出，例「1 路 Opus・`high`・中」；不算具體 token 數字（量級判準見下）
 - 第一選項「啟用 (Recommended)」
 - 單路派工不問逕行；本 session 已同意過一次 → 同 session 後續同類 fan-out 不再問
 
@@ -19,6 +19,8 @@ Scope: Apply when a task can be decomposed into ≥2 independent investigation/p
 | 大 | 跨模組實作、深度審查、headed 驗證、需要多輪試錯 |
 
 成本以「模型層級 × 量級」做相對比較，不追求絕對數字。要校準量級時，拿過往 subagent 實際用量對照（`~/.claude/projects/*/*/subagents/*.jsonl` 的 usage），不在 HITL 問句裡寫數字。
+
+模型層級的相對牌價（Claude API，2026-11，Haiku 5.5／Sonnet 5.5／Opus 5.5／Fable 5.2）：Sonnet → Opus → Fable 每升一級，input 與 output 單價各是前一級的 2 倍。Haiku 在 prompt 不超過 100K token 時約為 Sonnet 的 1/20，超過 100K 之後約 1/4——Haiku 那一路的 prompt 會長過 100K 時，拿「每個完成任務的成本」跟 Sonnet 比，不比牌價。alias 解析到其他版本時（見 [`agents/README.md`](../agents/README.md)）比例可能不同，依實際解析到的模型查價。
 
 ## 編隊守則
 
@@ -49,10 +51,10 @@ Why: 本 session（teammate 編隊模式推進）實測至少 4 次交錯：①�
 
 - 路數由「互相獨立的調查軸」決定，不是越多越好；兩路會讀同一批檔案 → 合併成一路。
 - 每路 scope 互斥（目錄/主題切開），派工 prompt 明寫「不碰 X（另一路負責）」。
-- 搜尋/定位用唯讀 Explore 型 agent（讀摘錄不讀全檔）、機械活降小模型；不要每路都吃主模型。
+- 搜尋/定位用唯讀 Explore 型 agent（讀摘錄不讀全檔），並明帶 `model`——Explore 不帶時跟著 session 的模型走，不是固定 Haiku（主對話是 Fable 時的例外見 [`/dispatch-loop`](../dispatch-loop/SKILL.md) 角色分工）；不要每路都吃主模型。小模型（Haiku）只放「錯了很容易看出來」的工作（找檔、跑測試、讀 log），code 編輯與需要判斷的工作預設不放 Haiku（批次改檔的例外條件見 [`/dispatch-loop`](../dispatch-loop/SKILL.md) 的型態微調）。
 - worktree isolation 只給會改檔的並行 agent（有建置成本），唯讀調查不用。
 - 追問既有 teammate（SendMessage）優於重派 — 重派 = 重付整個 context 建置費。
 - 任一路實際跑成比預估高一級的形狀（例：預估單軸調查卻擴成跨模組）、或連錯兩次 → 停下重估路線，不加派更多 agent 補洞。
-- trivial 任務（單檔已知位置、單條指令可答）不開編隊。
+- trivial 任務（單檔已知位置、單條指令可答）不開編隊；一條相依的步驟鏈、或一個 context window 裝得下的工作也不開。
 
-Why: 2026-07-08 Fable 主對話實測 — 背景編隊（具名 teammate、派出即繼續、SendMessage 續問）讓多路調查與主對話推進並行、等待時間歸零；但無閘門的大量委派會失控燒 token，故比照 Task Tracking 以 HITL 附成本預估徵求啟用。2026-10-29 改為只估「模型 × 量級」：對照 120 天 1,199 個 subagent 實際用量，過去寫進 skill 的具體數字多數偏低，最嚴重的 `/design` 分診（5–15K）與 `/evidence-check`（每路約 8–15K）對 Haiku 單路中位數約 74K 差約 5–15 倍，且同模型 p25 到 p90 差約 3 倍，單一數字代表不了實際用量。本機另有 `~/.claude/playbooks/10-model-dispatch.md` §7.1 詳版與 CLAUDE.md 硬性偏好一行；本檔為 repo 可攜版本，供其他環境接線（不建議同時 symlink 進常駐，避免重複載入）。
+Why: 2026-07-08 Fable 主對話實測 — 背景編隊（具名 teammate、派出即繼續、SendMessage 續問）讓多路調查與主對話推進並行、等待時間歸零；但無閘門的大量委派會失控燒 token，故比照 Task Tracking 以 HITL 附成本預估徵求啟用。2026-10-29 改為只估「模型 × 量級」：對照 120 天 1,199 個 subagent 實際用量，過去寫進 skill 的具體數字多數偏低，最嚴重的 `/design` 分診（5–15K）與 `/evidence-check`（每路約 8–15K）對 Haiku 單路中位數約 74K 差約 5–15 倍，且同模型 p25 到 p90 差約 3 倍，單一數字代表不了實際用量。2026-11-10 依 [Anthropic 2026-11-09 模型選擇文章](https://claude.dev/blog/which-claude-model-should-you-build-with/) 補上 `effort` 標示、相對牌價、小模型適用邊界與「相依鏈不開編隊」。本機另有 `~/.claude/playbooks/10-model-dispatch.md` §7.1 詳版與 CLAUDE.md 硬性偏好一行；本檔為 repo 可攜版本，供其他環境接線（不建議同時 symlink 進常駐，避免重複載入）。

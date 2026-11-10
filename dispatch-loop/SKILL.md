@@ -17,7 +17,7 @@ redundancy-peers: [plan-run]
 - **Opus agent**：複雜實作、深度審查、困難除錯；spec 清楚但本身困難的 step（例如遷移、效能最佳化）也歸這層——spec 清楚不等於該用 Sonnet，其中重大的遷移或重構用最高一級的模型（Fable）。不確定歸哪一層時從 Opus 起
 - **Haiku agent**：只接「錯了很容易看出來」的工作——找檔、跑測試、讀 log、分類分診。不接長的 agentic loop，也不當 code 編輯的預設路由
 - Agent tool **明帶 `model` 參數**，不讓 agent 繼承主模型——繼承等於每隻 agent 都吃主模型額度。內建 `Explore` 也一樣：不帶 `model` 時跟著 session 的模型走，不是固定 Haiku（主對話是 Fable 時，Anthropic 訂閱、Console 帳號或 LLM gateway 連線會落在 Opus，Bedrock、Google Cloud、Foundry 等平台仍是 Fable）
-- `effort` 預設不帶，沿用模型預設值；要調的時機與順序見下方「升級階梯」。逐次呼叫帶 `effort` 需要 Claude Code v2.1.292 以上，fork 型 subagent 不適用
+- `effort` 預設不帶。不帶時，跟主對話同模型的 agent 沿用 session 的 `effort`，其他模型不套用 session 的設定——估成本與決定階梯起點時以實際生效的等級為準。要調的時機與順序見下方「升級階梯」。逐次呼叫帶 `effort` 需要 Claude Code v2.1.292 以上，fork 型 subagent 不適用
 
 ## 迴圈步驟（每個 plan step）
 
@@ -93,7 +93,7 @@ plan_runner.py complete plans/active/foo.md S3.2 \
 照順序走：
 
 1. **先補自我驗證**：派工 prompt 有沒有給 agent 一條它自己能跑的檢查（測試、build、打 endpoint 的 script）？沒有就補上，同模型、同 `effort` 重派。這一步通常比調 `effort` 省，延遲也低
-2. **`effort` 升一級**（Agent tool 的 `effort` 參數），模型不變。適用在 agent 需要想更久、多呼叫工具、多檢查自己產出的情況。缺的是知識或能力時，加 `effort` 補不起來，直接走第 3 階
+2. **`effort` 升一級**（Agent tool 的 `effort` 參數），模型不變。適用在 agent 需要想更久、多呼叫工具、多檢查自己產出的情況。缺的是知識或能力時，加 `effort` 補不起來，直接走第 3 階；實際解析到的模型不支援 `effort` 時（例如 Bedrock、Google Cloud、Foundry 上 `haiku`、`sonnet` 解析到的 4.5 版）也跳過這一階
 3. **升一級模型，`effort` 從比原本低的等級起跳**。已經到 `high` 還不夠時，先試這一階再考慮 `xhigh`／`max`——過了 `high` 再加一級的花費可能跟換上一級模型一樣，兩種做法都要在自己的任務上比過
 
 階梯決定的是「下一次重派要改什麼」，不是多給重試次數：同一路連錯兩次照 [`rules/teammate-fleet.md`](../rules/teammate-fleet.md) 停下重估，升模型是重估後的選項之一，不加派補洞。
@@ -113,7 +113,7 @@ plan_runner.py complete plans/active/foo.md S3.2 \
 ## 何時不用本模式
 
 - **一條相依的步驟鏈，或一個 context window 裝得下的工作**：交給一隻 agent 做完，不逐 step 拆派。文章談 multiagent orchestration 時的說法是，這兩種情況下拆工與合併的成本高過省下的
-- **路由配置沒量過就不要當成定案**：多模型配置只有在贏過每一個單模型做法時才值得留。量法——抽幾個真實做過的 step，各配一個結果檢查（測試通過、列數正確）；每個候選模型跑兩到三個 `effort`，各開獨立 session 避免共用 cache；記每個完成任務的成本，把分數對花費排出來比。快速版：同一個 backlog 任務用 `/model` 在兩個模型上各跑一次，比 `/usage` 的回報。本機歷史用量可從 `~/.claude/projects/*/*/subagents/*.jsonl` 的 usage 撈。本模式把 code 編輯放在 Sonnet／Opus agent；文章的預設是編輯留在主模型，並點名 `opusplan`（Opus 規劃、Sonnet 執行）這類配置要先量過再當預設
+- **路由配置沒量過就不要當成定案**：多模型配置只有在贏過每一個單模型做法時才值得留。量法——抽幾個真實做過的 step，各配一個結果檢查（測試通過、列數正確）；每個候選模型跑兩到三個 `effort`，各開獨立 session 避免共用 cache，並各從同一個 commit（或隔離的 worktree）起跑，免得後一次看到前一次改好的檔案；記每個完成任務的成本，把分數對花費排出來比。快速版：同一個 backlog 任務用 `/model` 在兩個模型上各跑一次，比 `/usage` 的回報。本機歷史用量可從 `~/.claude/projects/*/*/subagents/*.jsonl` 的 usage 撈。本模式把 code 編輯放在 Sonnet／Opus agent；文章的預設是編輯留在主模型，並點名 `opusplan`（Opus 規劃、Sonnet 執行）這類配置要先量過再當預設
 
 ## 實證教訓（本模式下的已知坑）
 

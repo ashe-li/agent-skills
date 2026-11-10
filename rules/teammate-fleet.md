@@ -20,7 +20,7 @@ Scope: Apply when a task can be decomposed into ≥2 independent investigation/p
 
 成本以「模型層級 × 量級」做相對比較，不追求絕對數字。要校準量級時，拿過往 subagent 實際用量對照（`~/.claude/projects/*/*/subagents/*.jsonl` 的 usage），不在 HITL 問句裡寫數字。
 
-模型層級的相對牌價（Claude API，2026-11）：Sonnet → Opus → Fable 每升一級，input 與 output 單價各是前一級的 2 倍。Haiku 在 prompt 不超過 100K token 時約為 Sonnet 的 1/20，超過 100K 之後約 1/4——Haiku 那一路的 prompt 會長過 100K 時，拿「每個完成任務的成本」跟 Sonnet 比，不比牌價。
+模型層級的相對牌價（Claude API，2026-11，Haiku 5.5／Sonnet 5.5／Opus 5.5／Fable 5.2）：Sonnet → Opus → Fable 每升一級，input 與 output 單價各是前一級的 2 倍。Haiku 在 prompt 不超過 100K token 時約為 Sonnet 的 1/20，超過 100K 之後約 1/4——Haiku 那一路的 prompt 會長過 100K 時，拿「每個完成任務的成本」跟 Sonnet 比，不比牌價。alias 解析到其他版本時（見 [`agents/README.md`](../agents/README.md)）比例可能不同，依實際解析到的模型查價。
 
 ## 編隊守則
 

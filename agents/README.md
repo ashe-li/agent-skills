@@ -31,7 +31,7 @@ prompt 需包含：「依 agents/<name>.md 的定義與檢查清單執行 <任�
 
 ## `haiku` alias 指到哪個模型
 
-定義檔 frontmatter 寫的是 alias，不是版本。依 [Anthropic 2026-11-09 文章](https://claude.dev/blog/which-claude-model-should-you-build-with/)：走 Anthropic API 時 `haiku` 解析為 Haiku 5.5（需 Claude Code v2.1.293 以上）；走 Amazon Bedrock、Google Cloud、Microsoft Foundry、Claude Platform on AWS 時仍是 Haiku 4.5。要固定版本用環境變數 `ANTHROPIC_DEFAULT_HAIKU_MODEL`。例外：主對話本身就跑 Haiku 系列時，帶 `haiku` alias 的 subagent 會跟主對話用同一個模型，不看 alias 指到的版本。Haiku 5.5 的 prompt 超過 100K token 後單價變 5 倍。
+定義檔 frontmatter 寫的是 alias，不是版本。依 [Anthropic 2026-11-09 文章](https://claude.dev/blog/which-claude-model-should-you-build-with/)：走 Anthropic API 時 `haiku` 解析為 Haiku 5.5（需 Claude Code v2.1.293 以上）；走 Amazon Bedrock、Google Cloud、Microsoft Foundry、Claude Platform on AWS 時仍是 Haiku 4.5。要固定版本用環境變數 `ANTHROPIC_DEFAULT_HAIKU_MODEL`。例外：主對話本身就跑 Haiku 系列時，帶 `haiku` alias 的 subagent 會跟主對話用同一個模型，不看 alias 指到的版本，`ANTHROPIC_DEFAULT_HAIKU_MODEL` 也擋不住這個例外。subagent 一定要用特定版本時，在定義檔 frontmatter 的 `model` 填完整模型 ID（例如 `claude-haiku-5-5`）；[官方文件](https://code.claude.com/docs/en/sub-agents)的例外條文只針對 alias，完整 ID 不在其列。Agent tool 呼叫時的 `model` 參數只收 alias，不能傳完整 ID，所以要用 ID 固定版本只能寫在定義檔。Haiku 5.5 的 prompt 超過 100K token 後單價變 5 倍。
 
 ## Step 3 — When to Use：驗收
 

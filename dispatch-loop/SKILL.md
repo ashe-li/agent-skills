@@ -13,9 +13,11 @@ redundancy-peers: [plan-run]
 ## 角色分工
 
 - **主模型**：讀 plan 狀態機輸出、寫派工 prompt、抽查回報、視覺/設計裁決、HITL、稀缺配額 MCP 呼叫（單次、落檔後派工）
-- **Sonnet agent**：一般實作、研究、機械改檔、文件整理
-- **Opus agent**：複雜實作、深度審查、困難除錯
-- Agent tool **明帶 `model` 參數**，不讓 agent 繼承主模型——繼承等於每隻 agent 都吃主模型額度
+- **Sonnet agent**：範圍明確的實作（bug fix、照 spec 做的 feature）、研究、機械改檔、文件整理
+- **Opus agent**：複雜實作、深度審查、困難除錯；spec 清楚但本身困難的 step（例如遷移、效能最佳化）也歸這層——spec 清楚不等於該用 Sonnet，其中重大的遷移或重構用最高一級的模型（Fable）。不確定歸哪一層時從 Opus 起
+- **Haiku agent**：只接「錯了很容易看出來」的工作——找檔、跑測試、讀 log、分類分診。不接長的 agentic loop，也不當 code 編輯的預設路由
+- Agent tool **明帶 `model` 參數**，不讓 agent 繼承主模型——繼承等於每隻 agent 都吃主模型額度。內建 `Explore` 也一樣：不帶 `model` 時跟著 session 的模型走，不是固定 Haiku（主對話是 Fable 時，Anthropic 訂閱、Console 帳號或 LLM gateway 連線會落在 Opus，Bedrock、Google Cloud、Foundry 等平台仍是 Fable）
+- `effort` 預設不帶，沿用模型預設值；要調的時機與順序見下方「升級階梯」。逐次呼叫帶 `effort` 需要 Claude Code v2.1.292 以上，fork 型 subagent 不適用
 
 ## 迴圈步驟（每個 plan step）
 
@@ -72,7 +74,7 @@ plan_runner.py complete plans/active/foo.md S3.2 \
 
 - **搜尋定位**：agent `Explore`、model `haiku`（範圍模糊或跨多命名慣例升 `sonnet`）；要求每筆附 `檔案:行號`，並列出試過的搜尋模式讓人判斷有沒有漏
 - **實作**：agent `general-purpose`、model `sonnet`；驗收條件必含測試與 build 指令
-- **重構/批次改檔**：同上（模式已定案的機械套用可降 `haiku`）；變換規則逐字列出、明寫「不順手修別的問題，看到疑似 bug 記下來回報」；會與其他 agent 並行改檔時加 `isolation: "worktree"`
+- **重構/批次改檔**：同上，model 維持 `sonnet`；變換規則逐字列出、明寫「不順手修別的問題，看到疑似 bug 記下來回報」；會與其他 agent 並行改檔時加 `isolation: "worktree"`。要降 `haiku` 得三個條件都成立：規則已逐字列出、結果能用一條指令全數判定（grep 計數、測試）、批次短
 - **研究查證**：model `sonnet`；來源優先序 官方文件 > 原始碼 > issue/changelog > 部落格，每個宣稱附出處，查不到明寫「查無」不推測補洞
 - **審查驗收**：審查者必須是**沒參與實作的 fresh context**；開頭寫死「你是驗收者，預設懷疑，產出是不符合驗收條件之處，不是背書」，收尾要一行總判定 ACCEPT / REJECT
 
@@ -86,13 +88,32 @@ plan_runner.py complete plans/active/foo.md S3.2 \
 
 派工後主模型的義務：收到回報先驗格式（驗收條件有無逐條 PASS/FAIL、宣稱有無出處），缺就退回重報不腦補；涉及 commit 的親眼 `git diff` 比對；失敗的派工記下軌跡（prompt + 輸出 + fail 原因）再升級。
 
+## 升級階梯（派工結果不夠好時）
+
+照順序走：
+
+1. **先補自我驗證**：派工 prompt 有沒有給 agent 一條它自己能跑的檢查（測試、build、打 endpoint 的 script）？沒有就補上，同模型、同 `effort` 重派。這一步通常比調 `effort` 省，延遲也低
+2. **`effort` 升一級**（Agent tool 的 `effort` 參數），模型不變。適用在 agent 需要想更久、多呼叫工具、多檢查自己產出的情況。缺的是知識或能力時，加 `effort` 補不起來，直接走第 3 階
+3. **升一級模型，`effort` 從比原本低的等級起跳**。已經到 `high` 還不夠時，先試這一階再考慮 `xhigh`／`max`——過了 `high` 再加一級的花費可能跟換上一級模型一樣，兩種做法都要在自己的任務上比過
+
+階梯決定的是「下一次重派要改什麼」，不是多給重試次數：同一路連錯兩次照 [`rules/teammate-fleet.md`](../rules/teammate-fleet.md) 停下重估，升模型是重估後的選項之一，不加派補洞。
+
+量級參考（Opus 5.5 在 SWE-bench Pro，[Anthropic 2026-11-09 文章](https://claude.dev/blog/which-claude-model-should-you-build-with/)）：`medium` 比 `high` 低約 2.5 分、成本約 70%；`low` 低約 8 分、成本約三分之一；`xhigh` 高約 1.4 分、成本是 `high` 的 2.5 倍。這是別人任務上的數字，只用來決定從哪裡起跳。
+
 ## Token 紀律（本 skill 的存在理由）
 
-- plan 內每 step 標【預期 agent 數 × 模型層級 × 複雜度量級（小／中／大）】，不寫具體 token 數字；量級判準見 [`rules/teammate-fleet.md`](../rules/teammate-fleet.md)
+- plan 內每 step 標【預期 agent 數 × 模型層級 × 複雜度量級（小／中／大）】，不寫具體 token 數字；量級判準見 [`rules/teammate-fleet.md`](../rules/teammate-fleet.md)；`effort` 不是預設值時一併標出
 - 單 step 實際跑成比預估高一級的形狀 → 停下重估，不加派補洞
 - review 關卡按「風險 × 不可逆性」裁剪：低風險 step 單一驗證即可，只有核心邏輯/不可逆操作才疊多重審查
 - 量級參考（2026-07-10 實測，小型 landing page 專案）：實作 step 屬「中」、headed 驗證屬「大」；**30-agent 編隊 code review 約等於全部實作 step 總和的一半**——對小 repo 過度設計，repo <5K 行時 review 用單一 reviewer agent 或 ≤4 角度小編隊即可
 - 追問既有 agent 用 SendMessage（附 agentId），不重派
+- 產出能自動判定的批次 step（測試、row count、grep 計數）：先全部用 `low` 跑，只把沒過的用 `high` 重跑。文章同一組 SWE-bench Pro 子集上，Opus 5.5 這樣跑通過約 97%、每題約 $0.17；全部用 `high` 跑通過 95.3%、每題 $0.29
+- 主對話中途換模型有代價：cache 屬於寫入它的模型，換過去第一輪要對整段對話重付 cache write；往下換還會丟掉先前的 reasoning。要換就先 `/compact`，或用 `/handoff` 帶一份短計畫開新 session
+
+## 何時不用本模式
+
+- **一條相依的步驟鏈，或一個 context window 裝得下的工作**：交給一隻 agent 做完，不逐 step 拆派。文章談 multiagent orchestration 時的說法是，這兩種情況下拆工與合併的成本高過省下的
+- **路由配置沒量過就不要當成定案**：多模型配置只有在贏過每一個單模型做法時才值得留。量法——抽幾個真實做過的 step，各配一個結果檢查（測試通過、列數正確）；每個候選模型跑兩到三個 `effort`，各開獨立 session 避免共用 cache；記每個完成任務的成本，把分數對花費排出來比。快速版：同一個 backlog 任務用 `/model` 在兩個模型上各跑一次，比 `/usage` 的回報。本機歷史用量可從 `~/.claude/projects/*/*/subagents/*.jsonl` 的 usage 撈。本模式把 code 編輯放在 Sonnet／Opus agent；文章的預設是編輯留在主模型，並點名 `opusplan`（Opus 規劃、Sonnet 執行）這類配置要先量過再當預設
 
 ## 實證教訓（本模式下的已知坑）
 

@@ -118,12 +118,13 @@ gh api repos/<repo>/compare/<base>...<head> \
 四項查核做完、**動筆寫 body 之前**，對每一條打算寫進 body 的條目先列一張表：
 
 ```
-| PR# | 說法（一行） | 證據指令 | 關鍵輸出 | 判定 |
-|---|---|---|---|---|
-| NNNN | 新增 `utils/foo.ts`，status=added | `gh api repos/<repo>/compare/<base>...<head> --jq '.files[] | select(.filename=="utils/foo.ts") | .status'` | `added` | 正確 |
-| NNNN | 本機 12 suites 全綠 | 無可對當前 diff 重跑的指令 | — | 無法佐證（不進 body，改指向 check runs）|
+| PR# | 分類 | 說法（一行） | 證據指令 | 關鍵輸出 | 判定 |
+|---|---|---|---|---|---|
+| NNNN | Features | 新增 `utils/foo.ts`，status=added | `gh api repos/<repo>/compare/<base>...<head> --jq '.files[] | select(.filename=="utils/foo.ts") | .status'` | `added` | 正確 |
+| NNNN | Improvements | 本機 12 suites 全綠 | 無可對當前 diff 重跑的指令 | — | 無法佐證（不進 body，改指向 check runs）|
 ```
 
+- **`分類` 欄填 Step 2 與上方第 3、4 項查核後的最終歸類**（Features／Bug Fixes／Improvements）。Step 3 照這一欄把 bullet 放進對應 section，不重做分類；委派時，分類結果靠這一欄交回主對話。
 - 欄位對齊 `evidence-gate` 第 1 節 Claim Schema（宣稱＋證據指令＋關鍵輸出＋判定）：**正確** = PASS、**無法佐證** = UNVERIFIABLE。
 - **證據只能來自 diff**：`gh api .../compare`、`gh pr view <PR> --json files`、`git show <base>:<path>` 等；**commit message 與 PR 標題不能當證據**（只能用來定位該查哪段 diff，見上方 Step 2.5 開頭與 `evidence-gate` 第 2 節）。
 - 證據指令作者先自己跑一次，把實際輸出貼進「關鍵輸出」，不憑記憶或預期填（`evidence-gate` 第 1 節末）。
@@ -139,7 +140,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 每條 bullet 用 `- **重點**（#PR）：說明`。
 
-**body 的每條 bullet 只能來自 claim ledger 中判定為「正確」的列，不得新增 ledger 沒有的說法**；寫作中想補一句 ledger 沒有的，先回 Step 2.5 補列並跑證據指令，再寫。
+**body 的每條 bullet 只能來自 claim ledger 中判定為「正確」的列，並放進該列 `分類` 欄指定的 section，不得新增 ledger 沒有的說法**；寫作中想補一句 ledger 沒有的，先回 Step 2.5 補列並跑證據指令，再寫。
 
 ## Step 3.5：範圍相稱性擋門（scope proportionality）
 

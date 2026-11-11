@@ -34,7 +34,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 1. **大型批次**：>20 commits 或 >40 檔，與主對話是哪個模型無關。
 2. **主對話模型的層級高於 Sonnet（Opus、Fable）**，且批次超過 3 commits 或超過 3 檔。不確定主對話是哪個模型時，當作高於 Sonnet。
 
-委派時主對話只做 Step 0、量規模、讀回 ledger 檔，不自己撈完整 commit message 或 patch，接著進 Step 3。
+委派時主對話只做 Step 0、Step 1 的 commit 標題清單（第一個指令）、量規模、讀回 ledger 檔，接著進 Step 3；完整 commit message 與 patch 由 agent 撈，主對話不撈。
 
 判斷的理由與邊界：
 
@@ -100,7 +100,7 @@ gh api repos/<repo>/compare/<base>...<head> \
   --jq '.files[] | "\(.status)\t+\(.additions)/-\(.deletions)\t\(.filename)"'
 ```
 
-拿這份清單跑三個檢查（成本都是零，不必讀任何 patch）：
+拿這份清單跑四個檢查（成本都是零，不必讀任何 patch）：
 
 1. **否定式敘述**——commit 說「不動 X」「不新增 X」時，其真值範圍是**寫下它的那個 PR 當下**，release notes 的 scope 是整個批次。X 只要出現在檔案清單就直接推翻；正確修法是補回 scope 限定詞（「本 PR 不…；後續 #NNNN 才…」）而非刪句。**跨 PR 並排後才浮現的矛盾同理**：整份 body 寫完通讀一次，專找互斥的兩句。
 2. **本機執行結果數字**——commit 尾段的「N unit suites / M tests 綠、build 成功」在 diff 裡永遠查不到，且後續 PR 進版後必然失效。**不轉載**，改指向本 PR 的 check runs；要保留品質訊號（如 mutation testing 結果）就標明「PR #NNNN 當時的本機驗證」。

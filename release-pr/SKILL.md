@@ -11,6 +11,44 @@ argument-hint: [PR 號碼或 PR URL]
 
 適用情境：`hotfix → master`、`develop → master`、`release/* → master` 這類把一段期間累積的變更發版的 PR。**不是** feature PR（feature PR 用 `/pr`）。
 
+## 模型路由（誰做哪一步）
+
+本 skill 有兩處會派 agent：Step 2.5 的查核與 claim ledger、Step 4.5 的驗收。兩處都**明帶 `model`**，不讓 agent 繼承主對話的模型——繼承時每一路都跑在主對話那個模型上，而這兩路的工作主要是重跑 `gh api` 與對表，預設不需要那一級。
+
+| 工作 | 誰做 | `model` |
+|---|---|---|
+| Step 0–1 取 PR、量規模；Step 5 寫回與讀回 | 主對話 | — |
+| Step 2–2.5 分類、四項查核、產 claim ledger | 依下方「是否委派」判斷 | 委派時 `sonnet` |
+| Step 3–4 起草 body、範圍相稱性判讀、標題 | 主對話 | — |
+| Step 4.5 寫回前驗收 | 一律另派 fresh-context agent | `sonnet`；大型批次 `opus` |
+
+**先量規模**（Step 1 之後跑一次，數字同時給下方判斷與 Step 2.5、Step 4.5 用）：
+
+```bash
+gh api repos/<repo>/compare/<base>...<head> \
+  --jq '"\(.total_commits) commits / \(.files | length) files"'
+```
+
+**Step 2–2.5 是否委派**——下列任一成立，就派**一個** agent（`subagent_type: "general-purpose"`、`model: "sonnet"`）全包分類、四項查核與 ledger；都不成立則主對話自己做：
+
+1. **大型批次**：>20 commits 或 >40 檔，與主對話是哪個模型無關。
+2. **主對話模型的層級高於 Sonnet（Opus、Fable）**，且批次超過 3 commits 或超過 3 檔。不確定主對話是哪個模型時，當作高於 Sonnet。
+
+委派時主對話只做 Step 0、量規模、讀回 ledger 檔，不自己撈完整 commit message 或 patch，接著進 Step 3。
+
+判斷的理由與邊界：
+
+- **微型批次不派**：ledger 只有幾列，預期派工的啟動成本高過省下的。
+- **主對話本身是 Sonnet 或更低時，中小批次不派**：委派換不到較低的模型層級；只有大型批次為了不把大量 `gh` 輸出留在主對話才派。
+- **只派一路，不拆多路並行**：跨 PR 並排後才浮現的矛盾（Step 2.5 第 1 項）要整批放在同一個 context 才看得到。
+- **兩處都不用 `haiku`**：兩者都是長的工具呼叫迴圈，而且漏判是無聲的——否定式敘述或 ledger 外說法沒被抓到時不會有任何錯誤訊息——不符合 [`/dispatch-loop`](../dispatch-loop/SKILL.md) 角色分工對 Haiku 的條件「錯了很容易看出來」。
+- **Step 4.5 大型批次用 `opus`**：驗收員放行之後沒有下一道關卡，而大型批次實測的錯誤集中在否定式敘述與跨 PR 一致性（見 Step 2.5 的依據）。這一條是推論，尚未量測。
+- **`effort` 不帶**，沿用模型預設值。
+- **agent 回報不合格時**（漏列、格式不符、判定與它自己貼的輸出矛盾）：照 [`/dispatch-loop`](../dispatch-loop/SKILL.md) 的「升級階梯」與既有停損處理，本 skill 不另立重試次數。
+- Agent tool 的 `model` 參數只收 alias，不能傳完整模型 ID（見 [`agents/README.md`](../agents/README.md)）。
+
+上面的門檻（3 commits／3 檔、20 commits／40 檔）與模型選擇都是起跳點，尚未量測；量法見 [`/dispatch-loop`](../dispatch-loop/SKILL.md) 的「何時不用本模式」。
+
 ## Step 0：取得目標 PR
 
 - 引數有給 PR 號碼 / URL → 用它。
@@ -71,7 +109,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 **驗證「彙整了哪 N 個 PR」**：取那 N 個 merge commit 的檔案聯集，與 compare 的檔案數比對，差額必須逐項解釋得通（base 本就沒有的檔，其 delete 不會出現在 compare 裡）。
 
-大型批次（>20 commits 或 >40 檔）派一個 agent 全包查核，prompt 必含兩句：**「commit message 的自述不能當證據，commit 與 diff 衝突時 diff 是真相」**、**「逐條給 正確／錯誤／無法佐證 三分類，diff 沒有直接證據一律歸『無法佐證』，不要為了讓 body 看起來對而放寬」**。
+符合「模型路由」的委派條件時（大型批次，或主對話模型高於 Sonnet 且批次超過 3 commits 或超過 3 檔），派一個 agent（`subagent_type: "general-purpose"`、`model: "sonnet"`）全包查核，prompt 必含兩句：**「commit message 的自述不能當證據，commit 與 diff 衝突時 diff 是真相」**、**「逐條給 正確／錯誤／無法佐證 三分類，diff 沒有直接證據一律歸『無法佐證』，不要為了讓 body 看起來對而放寬」**。
 
 （依據：web-app #7969 實測，28 commits / 64 檔，~62 條 claim 錯 2 條、誤導 5 條，且**檔案路徑與符號名稱 0/30 錯**——查核預算要放在否定式敘述與跨 PR 一致性，不是路徑。詳見 KB `wiki/learned/release-notes-transcribed-from-commits-inherit-their-errors.md`、`intra-batch-self-correction-is-not-a-bug-fix.md`）
 
@@ -91,7 +129,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 - 證據指令作者先自己跑一次，把實際輸出貼進「關鍵輸出」，不憑記憶或預期填（`evidence-gate` 第 1 節末）。
 - 說法與證據矛盾（如否定式敘述被檔案清單推翻）時，先依上方四項改寫成 diff 支持的版本（補 scope 限定詞），以改寫後的說法**重列一行**再判定；ledger 最終只留「正確」「無法佐證」兩種判定。
 - **判定「無法佐證」的說法不得進 body**：改寫成可查證的版本重列，或整條剔除，不保留原句。
-- 大型批次沿用上方規則由 agent 產表（prompt 要求不變，輸出格式改為本表）。
+- 委派時沿用上方規則由 agent 產表（prompt 要求不變，輸出格式改為本表）。agent 把表寫到下一條的路徑，回報只給路徑、各判定的列數、被改寫或剔除的說法清單；主對話讀回該檔再進 Step 3。
 - 表落檔 `.verification/YYYY-MM-DD/release-pr-<PR>-claim-ledger.md`（沿用 `evidence-gate` 第 3 節路徑），不得刪除；Step 4.5 的驗收員要用它。
 - **不設人工關卡**：ledger 產完直接進 Step 3，整條鏈跑完才回報使用者。
 
@@ -167,9 +205,9 @@ body 字元數應隨改動規模**次線性**成長。既有房規（2026-09-06 
 
 ## Step 4.5：寫回前的擋門（強制）
 
-Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Agent`（`subagent_type: general-purpose`，需 Bash 跑 `gh`/`git`）重跑一次 Step 2.5 的四個查核——不是新規則，是換一個沒看過草稿產生過程的人重驗一次（核心紀律 #2「驗證不自驗」；Step 2.5 只在 >20 commits 時才派 agent，且屬產出前自查）。
+Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Agent`（`subagent_type: "general-purpose"`，需 Bash 跑 `gh`/`git`；`model: "sonnet"`，大型批次 `model: "opus"`，見「模型路由」）重跑一次 Step 2.5 的四個查核——不是新規則，是換一個沒看過草稿產生過程的人重驗一次（核心紀律 #2「驗證不自驗」；Step 2.5 的 agent 只在符合委派條件時才派，且屬產出前自查）。Step 2.5 有委派時，驗收員必須是另外新派的 agent，不可續用產 ledger 的那一個。
 
-本步驟即 `evidence-gate` skill 的 caller 落地（該 skill 第 6 節 Caller 呼叫契約已列本步驟為對應實作）；可直接 `Skill({ skill: "evidence-gate" })` 取用其 Claim Schema（第 1 節）與 Fact-Checker 派遣模板（第 4 節），不必重新定義格式。
+本步驟即 `evidence-gate` skill 的 caller 落地（該 skill 第 6 節 Caller 呼叫契約已列本步驟為對應實作）；可直接 `Skill({ skill: "evidence-gate" })` 取用其 Claim Schema（第 1 節）與 Fact-Checker 派遣模板（第 4 節），不必重新定義格式。套用第 4 節派遣模板時補上 `model`（模板本身未帶）。
 
 **輸入**：draft title/body 全文、**Step 2.5 的 claim ledger**、PR 號、repo。
 

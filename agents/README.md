@@ -1,6 +1,6 @@
 # agents/ — 自持 Agent 定義目錄（不是 skill）
 
-> **本目錄不是 skill。** 它沒有 `SKILL.md`、不會被註冊成 `/agents`、不會出現在指令清單裡，也不能被直接呼叫。這裡只是一份給 `design`、`update` 等 skill 引用的定義檔索引——原本的 `agents/SKILL.md` 自述「非直接可呼叫」，卻因為檔名是 `SKILL.md` 而照樣佔掉指令清單一格，本檔即為那份文件改名後的版本，內容不變。
+> **本目錄不是 skill。** 它沒有 `SKILL.md`、不會被註冊成 `/agents`、不會出現在指令清單裡，也不能被直接呼叫。這裡只是一份給 `design`、`update` 等 skill 引用的定義檔索引。
 
 本目錄存放本 repo 自持的 agent 定義（一 agent 一檔，ECC 式架構：frontmatter `name`/`description`/`tools`/`model` + 輸入防禦基線 / 職責 / 流程 / 輸出格式 / 判準或檢查清單 / 紅旗）。不依賴 everything-claude-code (ECC) plugin，供 `design/SKILL.md`、`update/SKILL.md` 等呼叫方在啟動 `general-purpose` subagent 時引用其定義。本文件是這份索引與呼叫慣例的唯一權威版本，其他文件（README、design/SKILL.md、update/SKILL.md）一律只留一句指標過來，不重複內容。
 

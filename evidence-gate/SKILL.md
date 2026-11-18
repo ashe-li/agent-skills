@@ -109,7 +109,7 @@ Claim schema（每列一條宣稱 + 我聲稱用的證據指令）：
 | Caller | 呼叫時機 | 傳入 | 拿回 |
 |---|---|---|---|
 | `/pr` | Step 5「建立或更新 PR」寫回前，PR description 草稿完成後 | draft body 全文 + `origin/<base>..HEAD` 範圍 | claim schema 表（全 PASS 且 SCHEMA-DEFECT=0）或 FAIL／SCHEMA-DEFECT 清單退回修正 |
-| `/release-pr` | Step 4.5「寫回前的擋門」——即本 gate 的落地實作，Step 2.5 三項查核可直接映射進第 1/2 節的 claim schema | draft title/body + compare API 的 commits/files 清單 | 同上，FAIL 或 SCHEMA-DEFECT 清單同樣退回；`/release-pr` 既有的「CLAIM \| 驗證指令 \| 實際結果 \| 通過?」格式即本 skill 第 1 節表格的既有實例 |
+| `/release-pr` | Step 4.5「寫回前的擋門」——即本 gate 的落地實作，Step 2.5 四項查核可直接映射進第 1/2 節的 claim schema | draft title/body + compare API 的 commits/files 清單 | 同上，FAIL 或 SCHEMA-DEFECT 清單同樣退回；`/release-pr` 既有的「CLAIM \| 驗證指令 \| 實際結果 \| 通過?」格式即本 skill 第 1 節表格的既有實例 |
 | `alert-triage` | Step 5「RCA Report」定稿前，尤其 `stated_cause` 對賭與分類結論部分 | Step 3 的假設＋live 證據列 | 對每個假設補齊 PASS/FAIL/UNVERIFIABLE；`real` 判定的 claim 若 FAIL 或 UNVERIFIABLE 需回 alert-triage 既有的 G4（low-confidence）流程 |
 | security review（如 `security-review-scoped`） | VERDICT 先出、證據後補階段，證據段落定稿前 | 每條漏洞/風險宣稱 + 對應程式碼行號 | claim schema 表；FAIL 的宣稱代表誤判風險，需重新定位行號或降級為 UNVERIFIABLE |
 

@@ -18,7 +18,7 @@ redundancy-peers: [design]
 
 本 skill 啟動 2 個並行 subagent 做深度調查，token 消耗較高，用 AskUserQuestion 確認：
 
-> 即將啟動 4 維度並行調查：2 路 Haiku・中。
+> 即將啟動 4 維度並行調查：2 路 Sonnet・中。
 > 調查對象：[摘要自 $ARGUMENTS]（獨立深度調查，不同於 /design 的 inline 驗證）
 >
 > 1. 繼續 — 啟動調查
@@ -103,10 +103,10 @@ D4 社群共識+反面意見：
 同時啟動 2 個 subagent，兩個 Agent() 呼叫放在同一個 message 中以實現並行：
 
 ```
-Agent(subagent_type="general-purpose", model="haiku")
+Agent(subagent_type="general-purpose", model="sonnet")
 — prompt: Subagent A context(D1 學術 + D2 業界標準)
 
-Agent(subagent_type="general-purpose", model="haiku")
+Agent(subagent_type="general-purpose", model="sonnet")
 — prompt: Subagent B context(D3 最佳實踐 + D4 社群共識)
 ```
 

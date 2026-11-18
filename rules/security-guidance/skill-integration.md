@@ -37,7 +37,7 @@
 | Skill | 何時觸發 | 機制 A（`/security-review`） | 機制 B（guidance checklist） |
 |-------|---------|----------------|------------------------------|
 | `/design` | plan 涉及上述面向 | plan 的實作後步驟須納入 `/security-review` | plan 必含「Security / Threat Model」章節，逐條對照 guidance；Step 4 品質閘**主動驗證**覆蓋（非只「已評估」打勾）|
-| `/update` | session 變更涉及上述面向 | Step 2 在 code-reviewer 之外**並行**跑 `/security-review` | review prompt 附上 guidance 當判準 |
+| `/update` | session 變更涉及上述面向 | Step 2 在審查 agent（`agents/doc-reviewer.md`）之外**並行**跑 `/security-review` | review prompt 附上 guidance 當判準 |
 | `/pr` | 變更涉及上述面向 | Step 2 Quick Review **委派** `/security-review`（非只 inline）| quick review 以 guidance 為 checklist |
 
 ## 與 plugin 的關係

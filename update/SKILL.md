@@ -123,7 +123,7 @@ origin: auto-extracted
 | non-redundancy | | 與現有 skills 的重複度 |
 | coverage | | 涵蓋場景的完整度 |
 
-廢棄 `specificity=4, actionability=5, ...` 單行格式。
+評分照上表逐維度填寫，不寫成 `specificity=4, actionability=5, ...` 這種單行。
 
 Step 4 完成後，把提取到的 pattern 回寫進「知識寫入 Manifest」（新增條目、更新狀態）。
 
@@ -140,6 +140,8 @@ Step 4 完成後，對「知識寫入 Manifest」做最終驗證 —— 不依�
 | 全域記憶 | `~/.claude/MEMORY.md`（如有） |
 | 專案知識庫 | Step 3 確認的目錄 |
 | 專案文件 | `docs/`、`research/`、`README.md` |
+
+使用者的 `CLAUDE.md` 或專案指示若另外指定了記憶、learned skill 的落點，以該指示為準；上表與 Step 3 的「MEMORY.md」只是沒有指定時的預設。
 
 逐條枚舉 manifest 每一項，用 grep/glob 確認是否已寫入對應知識庫（learned skill 用 Glob + 讀取內容確認內容一致），計算 `expected_count - verified_count` 的差集。差集 > 0 時，為每個遺漏項主動起草內容，AskUserQuestion 確認後寫入；無遺漏則列出逐條驗證證據（grep 命中行號等）並結束。
 

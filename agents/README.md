@@ -15,6 +15,7 @@
 | `doc-updater.md` | 文件同步（README/docs/CODEMAPS），輸出變更 Manifest | 程式碼變更後需同步文件，且需要主模型事後逐條驗證 | `/update` Step 1 |
 | `tdd-guide.md` | TDD 紅－綠－重構引導，80% 覆蓋率門檻 | 新功能或修 bug 前缺測試覆蓋，需要先寫失敗測試再實作 | `/design` Step 1 資源盤點列出、Step 3 計畫步驟視需要引用 |
 | `readonly-verifier.md` | 唯讀驗收員，fresh-context 事實查核、PR／部署驗收 | 需要「驗證不自驗」的第二雙眼睛；派工 prompt 需指定證據目錄與引用使用者原話 | `/rca` 硬規則 1 與 Step 3 |
+| `headed-verifier.md` | Headed 驗收員，真實瀏覽器（CLI）視覺與行為驗收，非 GET 請求逐筆記錄 | UI 或行為變更需要 headed 驗收；派工 prompt 需引用使用者原話並明文授權（或不授權）寫入型驗收 | 尚無 skill 引用，由派工方註冊後直接派工 |
 
 選錯定義檔的常見徵兆：把「審查」誤派成「更新」（doc-reviewer 只讀不寫，doc-updater 才會 Edit 檔案）、把「分診」誤派成「審查」（complexity-triage 只做影響面粗估，不做逐項 PASS/FAIL）。
 
@@ -36,12 +37,12 @@ prompt 需包含：「依 agents/<name>.md 的定義與檢查清單執行 <任�
 
 ## 例外：權限型 agent 與強制力邊界
 
-`readonly-verifier.md` 這類靠工具白名單限縮權限的定義，不適用上面「一律經 `general-purpose`」的慣例：
+`readonly-verifier.md`、`headed-verifier.md` 這類靠工具白名單限縮權限的定義，不適用上面「一律經 `general-purpose`」的慣例：
 
-- **必須註冊成真正的 subagent，白名單才生效。** 把定義檔 symlink 進 `~/.claude/agents/`（例如 `ln -sfn <你的 checkout>/agents/readonly-verifier.md ~/.claude/agents/readonly-verifier.md`），再以 `subagent_type="readonly-verifier"` 派工。
+- **必須註冊成真正的 subagent，白名單才生效。** 把定義檔 symlink 進 `~/.claude/agents/`（例如 `ln -sfn <你的 checkout>/agents/readonly-verifier.md ~/.claude/agents/readonly-verifier.md`），再以 `subagent_type="readonly-verifier"`（或 `"headed-verifier"`）派工。
 - **未註冊時降級**：走 `general-purpose` 加定義引用，此時 frontmatter 的 `tools` 不會被套用，回報第一行必須標明「白名單未生效」。
-- **強制力邊界**：工具白名單由 harness 強制，但只擋得掉 Write 與 Edit 兩個工具；Bash 仍能寫檔。定義檔內其餘限制（不執行任何 rm、憑證邊界、驗收基準取使用者原話、多輪上限）全是提示，不是機械強制。集中成一份定義換掉的是「每次派工重寫限制」，不是「不會越權」，不要把它描述成機械化防越權。
-- 撞名禁令仍適用於其他定義檔；`readonly-verifier` 的註冊是刻意為之，不算直呼舊 ECC 定義。
+- **強制力邊界**：工具白名單由 harness 強制，但只擋得掉 Write 與 Edit 兩個工具；Bash 仍能寫檔。定義檔內其餘限制（不執行任何 rm、憑證邊界、驗收基準取使用者原話、多輪上限；headed-verifier 另有寫入攔截、非 GET 紀錄、寫入型驗收授權）全是提示，不是機械強制。集中成一份定義換掉的是「每次派工重寫限制」，不是「不會越權」，不要把它描述成機械化防越權。
+- 撞名禁令仍適用於其他定義檔；`readonly-verifier`、`headed-verifier` 的註冊是刻意為之，不算直呼舊 ECC 定義。
 
 ## Step 3 — When to Use：驗收
 

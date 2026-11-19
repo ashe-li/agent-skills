@@ -27,6 +27,20 @@ REQUIRED_KEYS = ("name", "description", "tools", "model")
 FORBIDDEN_TOOLS = ("Write", "Edit")
 VERIFIER_PHRASES = ("Bash 仍能寫檔", "提示")
 
+# headed-verifier 六條限制各一個關鍵詞，加上回報的兩個計數欄位。
+# 注意：這些只證明「文字存在於定義檔」，不證明 agent 實際行為；
+# 六條限制都是提示，Bash 仍能寫檔、瀏覽器 CLI 能送出任何請求。
+HEADED_PHRASES = (
+    "寫入攔截任何時候都掛著",  # (1)
+    "假資料",  # (2)
+    "非 GET 請求",  # (3)
+    "不執行任何 rm",  # (4)
+    "marker",  # (5)
+    "使用者原話",  # (6)
+    "載入次數",  # 回報欄位
+    "掛攔截的載入次數",  # 回報欄位
+)
+
 
 def _definitions() -> list[Path]:
     """agents/ 下有 frontmatter 的定義檔（略過沒有 frontmatter 的 README.md）。"""
@@ -87,6 +101,16 @@ class VerifierGuard(unittest.TestCase):
             for phrase in VERIFIER_PHRASES:
                 with self.subTest(agent=path.name, phrase=phrase):
                     self.assertIn(phrase, text)
+
+
+class HeadedVerifierGuard(unittest.TestCase):
+    """只證明關鍵句存在，不證明行為。通用的 verifier 規則已由 VerifierGuard 涵蓋。"""
+
+    def test_headed_verifier_has_six_constraints_and_report_fields(self) -> None:
+        text = (AGENTS_DIR / "headed-verifier.md").read_text(encoding="utf-8")
+        for phrase in HEADED_PHRASES:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
 
 
 if __name__ == "__main__":

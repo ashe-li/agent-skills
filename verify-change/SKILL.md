@@ -52,7 +52,7 @@ $E select --repo <repo> [--base <分支>] [--head <ref>]    # --json 供程式�
 只在變更觸及 UI／行為時做。從 profile 的 `Flows`（`When` 符合者）與 Step 3 命中項目組出驗收清單，環境細節（網址樣式、登入方式）取自 Flows 的 `Notes` 與 `Verifier notes`，不要自行假設。
 
 - `Use` 指向既有 skill（`figma-verify`、`pr-evidence-comment`）就呼叫它。
-- 需要 headed 驗收員就派 `agents/headed-verifier.md`；`agents/` 不存在時，派工 prompt 貼上方「驗收員限制區塊」。驗收基準用使用者原話，PR 描述只當線索。
+- 需要 headed 驗收員就派 `agents/headed-verifier.md`；`agents/` 不存在時，派工 prompt 貼下方「驗收員限制區塊」。驗收基準用使用者原話，PR 描述只當線索。
 - 驗收員的限制是提示，不是機械強制，見文末強制力段。
 
 ## Step 5: 證據與 receipt

@@ -135,6 +135,14 @@ console 出現與本次變更無關的 error（第三方元件、既有 API 403/
 
 **① 起 stock Chrome + 獨立 profile + CDP 埠**
 
+先看是不是已經有一個在跑，有就直接接，**不要再 launch 第二個**：
+
+```bash
+curl -s --max-time 3 http://127.0.0.1:9222/json/version   # 有回 JSON 就跳到 ②
+```
+
+沒有才啟動：
+
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --user-data-dir="$HOME/.agent-chrome-profile" \
@@ -144,6 +152,7 @@ console 出現與本次變更無關的 error（第三方元件、既有 API 403/
 
 - 使用者在這個視窗**人工登入一次**；profile 持久化，之後免重登
 - ⚠️ **Chrome 136+ 禁止對「預設 profile」開 CDP** —— `--user-data-dir` 指到獨立目錄是必要的，不是可選
+- 接既有的 Chrome 時：另開分頁做事、不要把視窗帶到前景、做完只關自己開的分頁，**不要結束 Chrome 行程**。結束前景 app 會讓 macOS 把前景交給別的 app，同一台機器上其他 session 的 headed 驗收會被打斷，使用者的鍵盤焦點也會被搶走
 
 **② 接上去**
 
@@ -151,7 +160,22 @@ console 出現與本次變更無關的 error（第三方元件、既有 API 403/
 agent-browser connect 9222
 ```
 
-**③ 模擬人工附圖**（classic comment 表單）
+`agent-browser` 操作的是目前的分頁。不想動到別人開著的分頁、或不能搶前景時，改用原生 CDP：對 `/json/version` 的 `webSocketDebuggerUrl` 送 `Target.createTarget {url, background: true}` 開背景分頁，之後只連那個分頁的 WebSocket。背景分頁裡不要用需要畫面更新的動作（click／fill 的可操作性檢查可能卡住），下面的步驟都用 eval 完成。
+
+**③ 模擬人工附圖**
+
+GitHub 的留言框有兩版，先判斷是哪一版，也順便確認已登入：
+
+```js
+JSON.stringify({
+  classic: !!document.querySelector("#new_comment_field"),
+  react: !!document.querySelector('textarea[placeholder="Leave a comment"]'),
+  fileInputs: document.querySelectorAll('input[type="file"]').length,
+  loggedIn: !!(document.querySelector('meta[name="user-login"]') || {}).content,
+})
+```
+
+**③-A classic 表單**（`classic: true`）
 
 | 目標 | selector |
 |---|---|
@@ -166,12 +190,53 @@ agent-browser upload "#fc-new_comment_field" <檔案1> <檔案2> ...
 
 `upload` 到 file input 等同拖拉：GitHub 自動傳到 `user-attachments`，並把 `![...](...)` markdown **append 進 textarea**。
 
-**送出前必等上傳完**——eval 檢查 textarea value：
+**③-B React 版留言框**（`react: true`、`fileInputs: 0`；2026-11 起 PR 頁是這一版）
+
+頁面上沒有 file input，只有一顆「Paste, drop, or click to add files」按鈕。不必點它，自己造一個 input 再用合成的貼上事件把檔案交給留言框：
+
+1. 加一個隱藏的 input：
+
+   ```js
+   (() => { const i = document.createElement("input"); i.type = "file"; i.multiple = true; i.id = "__up"; i.style.display = "none"; document.body.appendChild(i); return "ready"; })()
+   ```
+
+2. 把檔案塞進去：`agent-browser upload "#__up" <檔案1> <檔案2> ...`（原生 CDP 是 `DOM.setFileInputFiles`）。全部檔案放在同一次呼叫。
+3. 對留言框送貼上事件：
+
+   ```js
+   (() => {
+     const input = document.getElementById("__up");
+     const ta = document.querySelector('textarea[placeholder="Leave a comment"]');
+     const dt = new DataTransfer();
+     for (const f of input.files) dt.items.add(f);
+     ta.focus();
+     ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+     return input.files.length;
+   })()
+   ```
+
+4. 等上傳完（條件見下）。這一版寫進 textarea 的是 `<img width=".." height=".." alt="<檔名去副檔名>" src="https://github.com/user-attachments/assets/...">`，不是 `![]()`。
+5. **文字在上傳完之後才放**：讀出 textarea 裡 alt 對 src 的對照，自己組好最終內文（Step 3 的文字加圖片；圖多時用 `<table>` 加 `<img width="190">` 排成一列四張，comment 才不會被長圖拉得很長），再寫回去。React 受控元件直接設 `ta.value` 不會生效，要用原生 setter 再觸發 `input`：
+
+   ```js
+   (() => {
+     const ta = document.querySelector('textarea[placeholder="Leave a comment"]');
+     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(ta, BODY);
+     ta.dispatchEvent(new Event("input", { bubbles: true }));
+     return ta.value.length;
+   })()
+   ```
+
+6. 送出：頁面上文字剛好是 `Comment` 的 button 應該只有一顆（旁邊另有 `Close pull request`），確認只有一顆且不是 disabled 再 `.click()`。送出後 textarea 會清空。
+
+> 實測紀錄（2026-11-19）：以原生 CDP 的背景分頁照上面步驟一次上傳 14 張成功。只想拿圖片網址、留言改用 `gh pr comment --body-file` 發的話，離開前要清空 textarea，否則 GitHub 會把那串圖片標記存成草稿。
+
+**送出前必等上傳完**（兩版都一樣）——eval 檢查 textarea value：
 
 - `Uploading` 佔位字串數量歸零
 - `user-attachments` 連結數 **=** 檔案數
 
-兩者都成立才可送出。送出鈕用 eval `btn.click()`（form 內找 textContent 為 `Comment` 的 button）。
+兩者都成立才可送出。classic 表單的送出鈕同樣用 eval `btn.click()`（form 內找 textContent 為 `Comment` 的 button）。
 
 ⚠️ **附件會以使用者本人身分發文**（session 是他的）——文字方向要先給使用者確認過，圖要先過 Step 2.5 的目檢。
 

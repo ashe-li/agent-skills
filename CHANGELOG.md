@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.7.1] - 2026-11-20
+
 ### Fixed
 - **`plan_report.py` 解析不了 `dispatch-loop` 教的摘要格式**：`/dispatch-loop` 的 `--summary` 範例是「1. …；2. …；3. …；4. …」，但解析器只在編號前面是空白時才切段，分號或句號直接接編號時四段都切不開，整則摘要落進「未分類摘要」，報告彙整段的「偏離 plan／副作用／延後待辦」三張清單全是（無）。現在編號前面是 `；`、`;`、`。` 也會切段；`3.5` 這類小數與順序不對的編號仍不切。新增的測試直接從 `dispatch-loop/SKILL.md` 取範例當輸入，文件與解析器之後不會再各走各的。測試：`scripts/tests/test_plan_report_rollup.py`。
 
@@ -762,7 +764,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.7.1...HEAD
+[v3.7.1]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...v3.7.1
 [v3.7.0]: https://github.com/ashe-li/agent-skills/compare/v3.6.1...v3.7.0
 [v3.6.1]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...v3.6.1
 [v3.6.0]: https://github.com/ashe-li/agent-skills/compare/v3.5.2...v3.6.0

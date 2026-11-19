@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.6.1] - 2026-11-19
+
 ### Changed
 - **`alert-triage` 的 repo 歸屬改為與 ownership 規則一致**：Step 6 原本把整個 `deployment-eks` 寫成「後端團隊負責，不直接改，只產建議或開 issue」，與同檔 Action Items 段及 ownership 規則相反，會讓 skill 對 infra 類告警（OOM、查詢成本、HPA）判定為 real 之後只寫建議、不開 guardrail PR。改為分兩類：cluster infra、network、observability、Flux 與一般業務 deployment 的 PDB／HPA／副本數／resources 屬使用者，照常走 PR；`smb-*`／`payment-*`、託管資料庫、cert-manager 副本配置、後端 EC2 屬後端，不動也不寫提案。G3 關卡的觸發條件同步改為「後端 own 或歸屬不明的資源」。這是放寬原本的禁令，由使用者裁決後才改。
 - **`/pr` 的 PR 描述模板拿掉寫死的「Generated with Claude Code」**：署名是否加上改由使用者的 Claude Code attribution 設定決定。原本寫死在模板裡，關掉署名的使用者每次都要手動刪。
@@ -737,7 +739,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.6.1...HEAD
+[v3.6.1]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...v3.6.1
 [v3.6.0]: https://github.com/ashe-li/agent-skills/compare/v3.5.2...v3.6.0
 [v3.5.2]: https://github.com/ashe-li/agent-skills/compare/v3.5.1...v3.5.2
 [v3.5.1]: https://github.com/ashe-li/agent-skills/compare/v3.5.0...v3.5.1

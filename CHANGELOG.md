@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`plan_report.py` 解析不了 `dispatch-loop` 教的摘要格式**：`/dispatch-loop` 的 `--summary` 範例是「1. …；2. …；3. …；4. …」，但解析器只在編號前面是空白時才切段，分號或句號直接接編號時四段都切不開，整則摘要落進「未分類摘要」，報告彙整段的「偏離 plan／副作用／延後待辦」三張清單全是（無）。現在編號前面是 `；`、`;`、`。` 也會切段；`3.5` 這類小數與順序不對的編號仍不切。新增的測試直接從 `dispatch-loop/SKILL.md` 取範例當輸入，文件與解析器之後不會再各走各的。測試：`scripts/tests/test_plan_report_rollup.py`。
+
 ## [v3.7.0] - 2026-11-19
 
 ### Added

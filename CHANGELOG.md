@@ -6,6 +6,7 @@
 
 ### Changed
 - **`alert-triage` 的 repo 歸屬改為與 ownership 規則一致**：Step 6 原本把整個 `deployment-eks` 寫成「後端團隊負責，不直接改，只產建議或開 issue」，與同檔 Action Items 段及 ownership 規則相反，會讓 skill 對 infra 類告警（OOM、查詢成本、HPA）判定為 real 之後只寫建議、不開 guardrail PR。改為分兩類：cluster infra、network、observability、Flux 與一般業務 deployment 的 PDB／HPA／副本數／resources 屬使用者，照常走 PR；`smb-*`／`payment-*`、託管資料庫、cert-manager 副本配置、後端 EC2 屬後端，不動也不寫提案。G3 關卡的觸發條件同步改為「後端 own 或歸屬不明的資源」。這是放寬原本的禁令，由使用者裁決後才改。
+- **`/pr` 的 PR 描述模板拿掉寫死的「Generated with Claude Code」**：署名是否加上改由使用者的 Claude Code attribution 設定決定。原本寫死在模板裡，關掉署名的使用者每次都要手動刪。
 - **`/evidence-check` 兩路調查改用 `sonnet`**：原本用 `haiku`，與 `/dispatch-loop` 角色分工（Haiku 只接「錯了很容易看出來」的工作、研究查證用 `sonnet`）不一致。Step 0 的成本預估同步改為「2 路 Sonnet・中」。成本會上升，尚未量測。
 - **`/figma-verify` 的 description 改為意圖類別**：原本列 11 個近義觸發詞並夾帶流程摘要，改成比對對象加三種觸發情境。觸發率可能改變，尚未量測。
 - **`/update` 的記憶落點加上優先序**：使用者的 `CLAUDE.md` 或專案指示若另外指定了記憶、learned skill 的落點，以該指示為準；skill 內寫的位置只是沒有指定時的預設。

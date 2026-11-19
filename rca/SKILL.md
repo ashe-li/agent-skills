@@ -11,7 +11,7 @@ argument-hint: <Grafana alert URL | Sentry issue URL/shortId | CI run URL>
 
 ## 硬規則（每一步都適用）
 
-1. **四路全唯讀**。調查 agent 用 `readonly-verifier`（沒有 Write／Edit），`model: sonnet`。禁止 `kubectl apply/patch/delete/rollout`、`terraform apply/import/state rm`、`git push`、任何 POST／PUT 到 Sentry／Grafana。`terraform plan` 一律帶 `-lock=false -refresh=false`；需要 refresh 時改用 `-refresh-only -lock=false`，而且只讀輸出，不 apply。
+1. **四路全唯讀**。調查 agent 用 `agents/readonly-verifier.md` 定義的 `readonly-verifier`（沒有 Write／Edit），`model: sonnet`。禁止 `kubectl apply/patch/delete/rollout`、`terraform apply/import/state rm`、`git push`、任何 POST／PUT 到 Sentry／Grafana。`terraform plan` 一律帶 `-lock=false -refresh=false`；需要 refresh 時改用 `-refresh-only -lock=false`，而且只讀輸出，不 apply。
 2. **subagent 沒有 MCP**（learned `subagents-do-not-inherit-mcp-servers-hand-them-an-http-helper`）。派工 prompt 裡不能寫 `mcp__*`，資料管道一律用 `scripts/obs_http.py`：
    ```
    H=~/.claude/skills/rca/scripts/obs_http.py
@@ -104,7 +104,7 @@ SYNTHESIS 的產出（frontmatter `type: incident-rca`、`action_items_open: <n>
 
 ## Step 3 — 驗收與 HITL
 
-- 派 `readonly-verifier`（fresh context）抽驗：時間軸挑 3 條、矛盾裁決全部、falsifier 指令實際跑一次，逐條標 PASS／FAIL，證據存 `.verification/`。有 FAIL 就回 Step 2 修正。只有零 FAIL，報告的 status 才能寫成 `verified`。
+- 派 `readonly-verifier`（`agents/readonly-verifier.md`，fresh context）抽驗：時間軸挑 3 條、矛盾裁決全部、falsifier 指令實際跑一次，逐條標 PASS／FAIL，證據存 `.verification/`。有 FAIL 就回 Step 2 修正。只有零 FAIL，報告的 status 才能寫成 `verified`。
 - **G1 開 PR 前**、**G3 動到後端 own 的資源**、**G4 根因信心 LOW**：用 AskUserQuestion 停下來等使用者決定。分類是 `SELF-INFLICTED → CODIFY` 時，另外要問使用者「這個手動變更是不是你們刻意做的」，除非 KNOWLEDGE 已經找到白紙黑字的決策。
 - KB gate：回收 agent 之前，要把本次教訓寫進知識來源的 `$KB_HOME/_pending/`（`[ -d ]` 檢查），可以重複使用的做法寫到 `$KB_HOME/wiki/learned/`（存在才寫，有索引就掛上）；未設定就印一行「未設定知識來源，教訓降級為寫進 `.verification/<date>/rca-<slug>/lessons.md`」。
 

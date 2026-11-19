@@ -14,6 +14,10 @@ on:
       # PR 完全不觸發測試。workflow 自身也列進來，改 CI 時要能看到它跑。
       - "scripts/**"
       - ".github/workflows/skill-quality.yml"
+      # agents/ 的定義有守衛測試（test_agent_definitions），docs/ 有路徑守衛；
+      # 只改這兩處的 PR 若不觸發測試，守衛等於沒守到。
+      - "agents/**"
+      - "docs/**"
 jobs:
   unit-tests:
     # 在這之前 scripts/tests/ 從沒在 CI 跑過（CHANGELOG 舊條目已記錄），

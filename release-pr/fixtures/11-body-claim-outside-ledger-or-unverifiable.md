@@ -22,7 +22,7 @@ notes: 實驗性。起草前先產 claim ledger 是否能降低 Step 4.5 退回�
 
 ## 期望產出
 
-起草前產出 ledger（`PR# | 說法 | 證據指令 | 關鍵輸出 | 判定`），Step 3 的每條 bullet 都對得回一列「正確」。Step 4.5 驗收員逐列重跑證據指令，並反向把 body 每條 bullet 對回 ledger：
+起草前產出 ledger（五欄總表加每條說法一個小節，證據指令放小節內的 bash fenced block），Step 3 的每條 bullet 都對得回一條「正確」。Step 4.5 驗收員重跑全部證據指令，並反向把 body 每條 bullet 對回 ledger：
 
 ```bash
 gh api repos/<repo>/compare/<base>...<head> \

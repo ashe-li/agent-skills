@@ -115,24 +115,24 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 ### 產出 claim ledger（起草前，強制）
 
-四項查核做完、**動筆寫 body 之前**，對每一條打算寫進 body 的條目先列一張表：
-
+四項查核做完、**動筆寫 body 之前**，依 `evidence-gate` 第 1 節的格式列 ledger：一張總表（只留編號、PR、分類、說法、判定五欄），加每條說法一個小節，證據指令放小節內的 bash fenced block，不放表格儲存格：
+````markdown
+| # | PR# | 分類 | 說法（一行） | 判定 |
+|---|---|---|---|---|
+| 1 | NNNN | Features | 新增 `utils/foo.ts`，status=added | 正確 |
+| 2 | NNNN | Improvements | 本機 12 suites 全綠 | 無法佐證（不進 body，改指向 check runs）|
+## 1. 新增 `utils/foo.ts`，status=added
+```bash
+gh api repos/<repo>/compare/<base>...<head> --jq '.files[] | select(.filename=="utils/foo.ts") | .status'
 ```
-| PR# | 分類 | 說法（一行） | 證據指令 | 關鍵輸出 | 判定 |
-|---|---|---|---|---|---|
-| NNNN | Features | 新增 `utils/foo.ts`，status=added | `gh api repos/<repo>/compare/<base>...<head> --jq '.files[] | select(.filename=="utils/foo.ts") | .status'` | `added` | 正確 |
-| NNNN | Improvements | 本機 12 suites 全綠 | 無可對當前 diff 重跑的指令 | — | 無法佐證（不進 body，改指向 check runs）|
-```
+關鍵輸出：`added`
+判定：PASS
+````
 
-- **`分類` 欄填 Step 2 與上方第 3、4 項查核後的最終歸類**（Features／Bug Fixes／Improvements）。Step 3 照這一欄把 bullet 放進對應 section，不重做分類；委派時，分類結果靠這一欄交回主對話。
-- 欄位對齊 `evidence-gate` 第 1 節 Claim Schema（宣稱＋證據指令＋關鍵輸出＋判定）：**正確** = PASS、**無法佐證** = UNVERIFIABLE。
+- **`分類` 欄填 Step 2 與上方第 3、4 項查核後的最終歸類**（Features／Bug Fixes／Improvements）。Step 3 照這一欄把 bullet 放進對應 section，不重做分類；委派時，分類結果靠這一欄交回主對話。總表判定 **正確** = 小節的 PASS、**無法佐證** = UNVERIFIABLE；ledger 最終只留這兩種。作者交出前每條指令先自己跑一次、貼實際輸出，再跑 `python3 scripts/claim_schema.py lint <ledger 檔>`（腳本不存在就照格式手寫、逐條自己跑）。
 - **證據只能來自 diff**：`gh api .../compare`、`gh pr view <PR> --json files`、`git show <base>:<path>` 等；**commit message 與 PR 標題不能當證據**（只能用來定位該查哪段 diff，見上方 Step 2.5 開頭與 `evidence-gate` 第 2 節）。
-- 證據指令作者先自己跑一次，把實際輸出貼進「關鍵輸出」，不憑記憶或預期填（`evidence-gate` 第 1 節末）。
-- 說法與證據矛盾（如否定式敘述被檔案清單推翻）時，先依上方四項改寫成 diff 支持的版本（補 scope 限定詞），以改寫後的說法**重列一行**再判定；ledger 最終只留「正確」「無法佐證」兩種判定。
-- **判定「無法佐證」的說法不得進 body**：改寫成可查證的版本重列，或整條剔除，不保留原句。
-- 委派時沿用上方規則由 agent 產表（prompt 要求不變，輸出格式改為本表）。agent 把表寫到下一條的路徑，回報只給路徑、各判定的列數、被改寫或剔除的說法清單；主對話讀回該檔再進 Step 3。
-- 表落檔 `.verification/YYYY-MM-DD/release-pr-<PR>-claim-ledger.md`（沿用 `evidence-gate` 第 3 節路徑），不得刪除；Step 4.5 的驗收員要用它。
-- **不設人工關卡**：ledger 產完直接進 Step 3，整條鏈跑完才回報使用者。
+- 說法與證據矛盾（如否定式敘述被檔案清單推翻）時，先依上方四項改寫成 diff 支持的版本（補 scope 限定詞），以改寫後的說法**重列**再判定。**判定「無法佐證」的說法不得進 body**：改寫成可查證的版本重列，或整條剔除，不保留原句。
+- 委派時沿用上方規則由 agent 產 ledger（prompt 要求不變，輸出為本格式）。agent 把 ledger 寫到下一條的路徑，回報只給路徑、各判定的條數、被改寫或剔除的說法清單；主對話讀回該檔再進 Step 3。ledger 落檔 `.verification/YYYY-MM-DD/release-pr-<PR>-claim-ledger.md`（沿用 `evidence-gate` 第 3 節路徑），不得刪除；Step 4.5 的驗收員要用它。**不設人工關卡**：ledger 產完直接進 Step 3，整條鏈跑完才回報使用者。
 
 ## Step 3：產生 description
 
@@ -140,7 +140,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 每條 bullet 用 `- **重點**（#PR）：說明`。
 
-**body 的每條 bullet 只能來自 claim ledger 中判定為「正確」的列，並放進該列 `分類` 欄指定的 section，不得新增 ledger 沒有的說法**；寫作中想補一句 ledger 沒有的，先回 Step 2.5 補列並跑證據指令，再寫。
+**body 的每條 bullet 只能來自 claim ledger 中判定為「正確」的條目，並放進該條 `分類` 欄指定的 section，不得新增 ledger 沒有的說法**；寫作中想補一句 ledger 沒有的，先回 Step 2.5 補列並跑證據指令，再寫。
 
 ## Step 3.5：範圍相稱性擋門（scope proportionality）
 
@@ -214,8 +214,8 @@ Step 3、4 的 title + body 進 Step 5 之前，派一個 **fresh-context** `Age
 
 **做法**：驗收員拿 ledger 與 body 一起核對，兩件事都要做：
 
-1. **逐列重跑 ledger 的證據指令**（不沿用 ledger 的「關鍵輸出」），確認判定與實際輸出一致。
-2. **反向檢查 body 有沒有 ledger 以外的說法**：逐條 bullet 對回 ledger 的列；對不上的、或對到「無法佐證」列的，各記一列 `通過?=否`（CLAIM 欄標「ledger 外說法」）。
+1. **重跑 ledger 的全部證據指令**（`extract` 一次抽出，不沿用 ledger 的「關鍵輸出」），確認判定與實際輸出一致。
+2. **反向檢查 body 有沒有 ledger 以外的說法**：逐條 bullet 對回 ledger 的條目；對不上的、或對到「無法佐證」的，各記一列 `通過?=否`（CLAIM 欄標「ledger 外說法」）。
 
 驗收員仍是 fresh-context：不給它草稿產生過程，ledger 只當「要重跑的指令清單」，不當結論。
 

@@ -4,7 +4,17 @@
 
 ## [Unreleased]
 
+## [v3.8.0] - 2026-11-20
+
+### Added
+- **`/notion-report` 的 browser 路徑可以附本機截圖**：`notion-report/scripts/notion_browser.py` 新增 `stash-image-js`（把一張圖暫存到頁面，每張一次 eval）與 `paste-images-js`（把暫存的圖用一個貼上事件依序貼到頁面最後，可帶防呆用的錨點文字）。原本這條路徑只會貼 Markdown 文字，要放圖只能請使用者手動上傳。單張上限 600 KB，超過直接拒絕（整張圖會放進指令參數，受 `ARG_MAX` 限制）。API 路徑仍不支援附圖。
+- **`notion_browser.py scan-js`**：分段捲動整頁、以 block id 去重後回報區塊總數、型別分佈、圖片尺寸、目標字串出現次數與最後幾個區塊。解決的問題：Notion 只畫畫面附近的區塊，`verify-js` 讀單次 `innerText`，頁面一長就會少算（60 個區塊的頁面只回 398 字），目標不在畫面附近時還會誤報找不到。`/notion-report` Step 5 改為長頁面與附圖一律用 `scan-js`，並在重新載入後再掃一次。
+- `scripts/tests/test_notion_browser.py`：新子指令的編碼、守衛條件與指令表。
+
 ### Fixed
+- **`/pr-evidence-comment` Step 4 的上傳步驟在新版 GitHub PR 頁走不通**：PR 頁的留言框改成 React 版後，`#new_comment_field` 與隱藏的 `#fc-new_comment_field` 都不存在，照舊步驟會找不到元素。現在先用一段 eval 判斷留言框是哪一版；React 版改為自建隱藏的 file input、塞入檔案後對留言框送合成的貼上事件，上傳完再用原生 setter 寫入最終內文並送出。classic 表單的步驟保留。
+- **`/pr-evidence-comment` 會多開一個 Chrome 並搶走前景**：Step 4 原本一律啟動新的 Chrome。現在先探 `9222` 是否已有一個在跑，有就直接接；並寫明接既有 Chrome 時用另開的分頁、不帶前景、做完只關自己的分頁、不結束 Chrome 行程（結束前景 app 會打斷同機其他 session 的 headed 驗收）。
+- **`/notion-report` 沒有提醒寫入前要重讀頁面、也沒有 CLI 卡住時的處置**：補上「共用頁面可能已被人改過，第二次寫入前先重讀」，以及 `playwright-cli` 指令卡住、圖片張數不符、圖片超過上限三種情況的處置。
 - **`plan_report.py` 解析不了 `dispatch-loop` 教的摘要格式**：`/dispatch-loop` 的 `--summary` 範例是「1. …；2. …；3. …；4. …」，但解析器只在編號前面是空白時才切段，分號或句號直接接編號時四段都切不開，整則摘要落進「未分類摘要」，報告彙整段的「偏離 plan／副作用／延後待辦」三張清單全是（無）。現在編號前面是 `；`、`;`、`。` 也會切段；`3.5` 這類小數與順序不對的編號仍不切。新增的測試直接從 `dispatch-loop/SKILL.md` 取範例當輸入，文件與解析器之後不會再各走各的。測試：`scripts/tests/test_plan_report_rollup.py`。
 
 ## [v3.7.0] - 2026-11-19
@@ -762,7 +772,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.8.0...HEAD
+[v3.8.0]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...v3.8.0
 [v3.7.0]: https://github.com/ashe-li/agent-skills/compare/v3.6.1...v3.7.0
 [v3.6.1]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...v3.6.1
 [v3.6.0]: https://github.com/ashe-li/agent-skills/compare/v3.5.2...v3.6.0

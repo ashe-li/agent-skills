@@ -1,0 +1,22 @@
+{
+  "attempt": 1,
+  "conclusion": "failure",
+  "databaseId": 2000000002,
+  "headSha": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+  "jobs": [
+    {
+      "conclusion": "failure",
+      "databaseId": 2000000003,
+      "name": "quality",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 2000000004,
+      "name": "unit-tests",
+      "status": "completed"
+    }
+  ],
+  "status": "completed",
+  "workflowName": "Skill Quality Gate"
+}

@@ -11,7 +11,7 @@ argument-hint: <Grafana alert URL | Sentry issue URL/shortId | CI run URL>
 
 ## 硬規則（每一步都適用）
 
-1. **四路全唯讀**。調查 agent 用 `readonly-verifier`（沒有 Write／Edit），`model: sonnet`。禁止 `kubectl apply/patch/delete/rollout`、`terraform apply/import/state rm`、`git push`、任何 POST／PUT 到 Sentry／Grafana。`terraform plan` 一律帶 `-lock=false -refresh=false`；需要 refresh 時改用 `-refresh-only -lock=false`，而且只讀輸出，不 apply。
+1. **四路全唯讀**。調查 agent 用 `agents/readonly-verifier.md` 定義的 `readonly-verifier`（沒有 Write／Edit），`model: sonnet`。禁止 `kubectl apply/patch/delete/rollout`、`terraform apply/import/state rm`、`git push`、任何 POST／PUT 到 Sentry／Grafana。`terraform plan` 一律帶 `-lock=false -refresh=false`；需要 refresh 時改用 `-refresh-only -lock=false`，而且只讀輸出，不 apply。
 2. **subagent 沒有 MCP**（learned `subagents-do-not-inherit-mcp-servers-hand-them-an-http-helper`）。派工 prompt 裡不能寫 `mcp__*`，資料管道一律用 `scripts/obs_http.py`：
    ```
    H=~/.claude/skills/rca/scripts/obs_http.py
@@ -26,7 +26,7 @@ argument-hint: <Grafana alert URL | Sentry issue URL/shortId | CI run URL>
 4. **反模式護欄**（兩條都是實際踩過的坑）：
    - **不用字面資源名 grep 判斷有沒有被 IaC 管理**。資源名稱常常是 `"${var.env}-${local.name}"`、`for_each`、module output 組出來的。判斷方式依序是：`terraform state list | grep`（權威來源）→ `terraform state show <addr>` → 反查 module／variables／`*.tfvars` 找出名稱是怎麼組的。只有「state 裡找不到，**而且**所有組名路徑都排除了」才能說 unmanaged。以前曾經用 grep 字面名稱，誤判某個 bucket 不歸 terraform 管。
    - **不先讀值就不報 secret**。看到像 key／token 的欄位，要先分辨是 placeholder（`changeme`、`<TOKEN>`、`${...}`、`xxx`、ESO／SOPS 引用、空字串）還是真值。讀值只為判斷類型，報告裡只寫「真值／placeholder／引用」與長度，**不輸出值本身**。沒讀到值就寫 `unverified`。
-5. **ownership**：碰到 `smb-*`／`payment-*` 的 helm values、secrets、後端 EC2、他人的 PR 狀態，只調查，不代修、不主動寫提案（rules `repo-ownership.md`）。
+5. **ownership**：ownership 邊界依本機規則；不屬於自己的資源（他人的 helm values、secrets、主機）與他人的 PR 狀態，只調查，不代修、不主動寫提案。
 6. **時區**：一律換算成 UTC 對齊時間軸；台灣時間（+08:00）放在括號裡。
 
 ## Step 0 — 正規化告警（主對話做，可以用 MCP）
@@ -61,7 +61,7 @@ envelope 另外要定出：**告警時間窗**（first seen −2h 到 last seen�
 |---|---|---|---|
 | **OBSERVABILITY** | 告警時間窗前後的 metrics／logs／traces／Sentry events | 事件數的時間分佈（每小時 bucket）、受影響的 release／browser／URL 分佈（Sentry `tags`）、同時段的 error rate／latency／restart 數；每個數字都要附 query | 推論 code 根因 |
 | **HISTORY** | 涉及的 repo，近 30 天內動過涉及路徑的 commit | `git fetch` 後 `git log --since=30.days --format='%h %ad %an %s' --date=iso -- <paths>`；把 Sentry release sha／CI 的綠紅 sha 對應到 commit 區間（`git log <good>..<bad>`）；依賴變更（`package.json`／lockfile 的 diff）；列候選 commit 並說明為什麼可疑 | 修 code、checkout 別的 branch（用 `git show`／`git log`，不切 worktree 狀態） |
-| **KNOWLEDGE** | `~/Documents/knowledge-base` | 用 BM25 跑 `bm25_retrieve.py "<症狀>"`、`--index wiki/rules/INDEX.md`、`wiki/decisions/INDEX.md`；`grep -rn '\bAD-[0-9]\+'` 找出相關的 AD 編號決策，**原文逐字引用**（檔案:行號）；過去同類的 `reports/`；還要特別找「我們已經決定過了／by design／刻意」的筆記 | 改寫、摘要 AD 原文 |
+| **KNOWLEDGE** | 知識來源（解析 `KB_HOME`，見 `docs/knowledge-source-contract.md`；未設定就印一行「未設定知識來源，本 lane 降級為只回報『無知識來源可查』」並結束） | 知識來源若提供檢索工具就用，否則對 `$KB_HOME` 用 `grep -rn "<症狀>"`；先看 `$KB_HOME/wiki/rules/INDEX.md`、`$KB_HOME/wiki/decisions/INDEX.md`（`[ -e ]` 檢查，不存在就略過）；`grep -rn '\bAD-[0-9]\+'` 找出相關的 AD 編號決策，**原文逐字引用**（檔案:行號）；過去同類的 `$KB_HOME/reports/`（存在才查）；還要特別找「我們已經決定過了／by design／刻意」的筆記 | 改寫、摘要 AD 原文 |
 | **INFRA** | cluster／CDN／IaC 的 live 狀態 | `kubectl config current-context` 先確認 context；nodes／events（spot interruption、Karpenter disruption）、PDB 與 selector 對不上的 orphan、ingress／CF cache rule；`terraform plan -lock=false -refresh=false` 或 `state list` 比對 drift；S3 lifecycle rules；**護欄 4 兩條必遵守** | 任何寫入動作；後端 own 的資源只看不評 |
 
 INFRA 判斷「跟這次告警無關」時，要寫出排除依據（例如：時間窗內 node 事件數為 0，附指令），不能直接留空。
@@ -100,13 +100,13 @@ INFRA 判斷「跟這次告警無關」時，要寫出排除依據（例如：�
    - **解析契約**：下游的 action item digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
    - 完整範例：[`examples/action-items-open.md`](examples/action-items-open.md)（2 筆 open）、[`examples/action-items-benign.md`](examples/action-items-benign.md)（無待辦寫「無」）。與 `alert-triage` Step 5 的 schema 完全相同。
 
-SYNTHESIS 的產出寫到 KB 的 `reports/<YYYY-MM-DD>-rca-<slug>.md`（frontmatter `type: incident-rca`、`action_items_open: <n>`，tags 帶 `rca`），並掛到 `reports/INDEX.md`。PR 草稿放在同目錄的 `.verification/<date>/rca-<slug>/pr-draft.md`。
+SYNTHESIS 的產出（frontmatter `type: incident-rca`、`action_items_open: <n>`，tags 帶 `rca`）：`$KB_HOME/reports/` 存在時寫成 `$KB_HOME/reports/<YYYY-MM-DD>-rca-<slug>.md` 並掛到其 `INDEX.md`（若有）；未設定知識來源或該目錄不存在，就印一行「未設定知識來源，報告降級為只寫 `.verification/<date>/rca-<slug>/report.md`」。PR 草稿一律放 `.verification/<date>/rca-<slug>/pr-draft.md`。
 
 ## Step 3 — 驗收與 HITL
 
-- 派 `readonly-verifier`（fresh context）抽驗：時間軸挑 3 條、矛盾裁決全部、falsifier 指令實際跑一次，逐條標 PASS／FAIL，證據存 `.verification/`。有 FAIL 就回 Step 2 修正。只有零 FAIL，報告的 status 才能寫成 `verified`。
+- 派 `readonly-verifier`（`agents/readonly-verifier.md`，fresh context）抽驗：時間軸挑 3 條、矛盾裁決全部、falsifier 指令實際跑一次，逐條標 PASS／FAIL，證據存 `.verification/`。有 FAIL 就回 Step 2 修正。只有零 FAIL，報告的 status 才能寫成 `verified`。
 - **G1 開 PR 前**、**G3 動到後端 own 的資源**、**G4 根因信心 LOW**：用 AskUserQuestion 停下來等使用者決定。分類是 `SELF-INFLICTED → CODIFY` 時，另外要問使用者「這個手動變更是不是你們刻意做的」，除非 KNOWLEDGE 已經找到白紙黑字的決策。
-- KB gate：回收 agent 之前，要把本次教訓寫到 `_pending/session-<date>-rca-<slug>.md`；可以重複使用的做法寫到 `wiki/learned/`，並掛上 INDEX。
+- KB gate：回收 agent 之前，要把本次教訓寫進知識來源的 `$KB_HOME/_pending/`（`[ -d ]` 檢查），可以重複使用的做法寫到 `$KB_HOME/wiki/learned/`（已設定知識來源且該目錄存在才寫，有索引就掛上）；未設定知識來源、或 `_pending/` 不存在，就印一行「知識來源未設定或缺 `_pending/`，教訓降級為寫進 `.verification/<date>/rca-<slug>/lessons.md`」。
 
 ## 交付給使用者的格式
 

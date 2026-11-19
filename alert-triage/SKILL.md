@@ -11,9 +11,9 @@ argument-hint: <firing alert payload / alertname / Grafana alert URL>
 
 ## 設計原則（先讀）
 
-1. **分類先驗來自內部 KB，不是通用 SRE 知識**（pattern: `incident-kb-as-llm-prompt-corpus`）。每次 triage 先 grep `wiki/learned/INDEX.md` + `reports/` 撈既有 RCA 當 priors，再對照當前 alert。
-2. **下任何結論前先 live verify**（嚴格遵守 `~/.claude/rules/common/diagnostics.md`）。只靠 alert 描述 / runbook / config / 記憶推論的結論，一律標 `provisional`，等 live 證據確認。
-3. **alert 描述與 runbook 歸因會 rot**（KB `wiki/rules/validate-before-fix.md`）。annotation 寫的「根因」視為**待驗證假設**，不是事實；實測 header/metric/log 與它衝突時，以 live 為準並明確標示「runbook 說 X，實測 Y」。
+1. **分類先驗來自內部 KB，不是通用 SRE 知識**（pattern: `incident-kb-as-llm-prompt-corpus`）。每次 triage 先從知識來源（見 Step 2）撈既有 RCA 當 priors，再對照當前 alert。
+2. **下任何結論前先 live verify**。只靠 alert 描述 / runbook / config / 記憶推論的結論，一律標 `provisional`，等 live 證據確認。
+3. **alert 描述與 runbook 歸因會 rot**。annotation 寫的「根因」視為**待驗證假設**，不是事實；實測 header/metric/log 與它衝突時，以 live 為準並明確標示「runbook 說 X，實測 Y」。
 4. **benign vs real 不是純二元**。同一個 alert 可能部分 benign、部分 real（典型：imgproxy 422 marker-flaw 的 two-classes），決策樹要能拆分 sub-signal 分別處理。
 5. **編排既有資源，不重造輪子**。本 skill 整合既有 grafana MCP + kubectl + KB 慣例；report 沉澱、topic-grouped commit、`/kb-query`、`/verify-live-state` 都沿用，不重寫。
 
@@ -57,13 +57,13 @@ argument-hint: <firing alert payload / alertname / Grafana alert URL>
 下任何分類前，先用 parsed 訊號撈內部既有 RCA 當先驗：
 
 ```bash
-cd ~/Documents/knowledge-base
-# 1. learned skill 先驗（SOP / 已知陷阱）
-grep -iE "<alertname/service/failure-class keywords>" wiki/learned/INDEX.md
-# 2. 既往 RCA report（同類事件怎麼判的）
-ls reports/ | grep -iE "<service>|<failure-class>"
-# 3. pattern / memory 先驗
-grep -riE "<keywords>" wiki/patterns/
+KB_HOME="${AGENT_SKILLS_KB_HOME:-$(head -n 1 "${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/kb-home" 2>/dev/null)}"
+[ -d "$KB_HOME" ] || KB_HOME=""
+[ -n "$KB_HOME" ] || echo "未設定知識來源，本步驟降級為：不引用內部先驗，分類只靠 live 證據，結論標 provisional"
+# 以下依序為 learned 先驗、既往 RCA report、pattern 先驗，皆選用（不存在就略過）；知識來源若提供檢索工具就優先用，否則 grep -rn
+[ -n "$KB_HOME" ] && [ -e "$KB_HOME/wiki/learned/INDEX.md" ] && grep -iE "<alertname/service/failure-class keywords>" "$KB_HOME/wiki/learned/INDEX.md"
+[ -n "$KB_HOME" ] && [ -d "$KB_HOME/reports" ] && ls "$KB_HOME/reports" | grep -iE "<service>|<failure-class>"
+[ -n "$KB_HOME" ] && [ -d "$KB_HOME/wiki/patterns" ] && grep -riE "<keywords>" "$KB_HOME/wiki/patterns/"
 ```
 
 先把 grep 裡的 `<...>` 佔位符換成 Step 1 解析出的實際 alertname / service / failure-class 再執行。撈到後**點開最相關 2–3 篇全文讀**（INDEX 只有摘要，body 才有判斷依據）。
@@ -72,7 +72,7 @@ grep -riE "<keywords>" wiki/patterns/
 
 | Alert 類別 | 典型 KB 先驗 | 預設傾向 | 關鍵驗證點 |
 |-----------|-------------|---------|-----------|
-| cert-manager / webhook "no endpoints available" | `flux-kustomization-webhook-transient-fail-triage`(learned)、`2026-05-23-cert-manager-webhook-transient-fail-triage` | **benign** (by design) | Kustomization `status.history` 是否已自癒；webhook Pod AGE ≈ fail 時間；stg `cert-manager` replica=1 是刻意的（KB `wiki/learned/cert-manager-stg-replica-1-by-design.md`）——**不要推 HA PR** |
+| cert-manager / webhook "no endpoints available" | `flux-kustomization-webhook-transient-fail-triage`(learned)、`2026-05-23-cert-manager-webhook-transient-fail-triage` | **benign** (by design) | Kustomization `status.history` 是否已自癒；webhook Pod AGE ≈ fail 時間；stg `cert-manager` replica=1 是刻意的——**不要推 HA PR** |
 | Karpenter cold-start / replicas-mismatch noise | `2026-05-08-frontend-prod-replicas-mismatch-karpenter-noise`、`2026-04-28-frontend-cold-start-3-change-cascade`、`hpa-cold-start-scaleup-policy-sizing`(learned) | **benign** | 新 node 是否剛 provision；Pod 是否在 warm-up 窗；是否單純 scale 事件 |
 | Alert flapping on single replica | `grafana-alert-query-aggregation-per-series-trap`(learned) | **benign**(alert rule 設計缺陷) | Query A 是否漏 `sum()/avg()`，per-series 在單 replica transient 上抖動 → 修 rule 而非修服務 |
 | CF Tunnel 404 / prefetch noise | `2026-05-27-cf-tunnel-404-fallback-stale-client-prefetch-not-cdn-cache`、`2026-05-15-cf-tunnel-alert-prefetch-404-regression`、`2026-05-22-cf-tunnel-alert-multi-build-cdn-noise` | **benign**(多數) | **實測 HTML response header**：若 `no-store`/`DYNAMIC` 則非 CDN cache，是 client stale prefetch 自癒；runbook 若寫「CDN HTML cache」是 **attribution 錯誤**，要標示 |
@@ -141,7 +141,7 @@ kubectl get events -n <ns> --sort-by=.lastTimestamp | tail -30
 
 ## Step 5 — RCA Report（繁體中文 → KB）
 
-寫 `~/Documents/knowledge-base/reports/<YYYY-MM-DD>-<slug>.md`，**沿用既有 report 格式**（看同目錄近期 report 對齊）：
+寫 `$KB_HOME/reports/<YYYY-MM-DD>-<slug>.md`（`[ -n "$KB_HOME" ] && [ -d "$KB_HOME/reports" ]` 才寫；否則印一行「未設定知識來源，報告降級為只寫 `.verification/<date>/<slug>.md`」並改寫該路徑），**沿用既有 report 格式**（有同目錄近期 report 就對齊）：
 
 ```markdown
 ---
@@ -195,7 +195,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 - **期限**：由使用者給，格式 `YYYY-MM-DD`。**agent 不得自行填日期**；使用者還沒給就寫 `TBD`。
 - **狀態**：只能是 `open`、`done`、`wontfix` 三者之一（小寫）。
 - **連結**：沒有就寫 `-`，欄位不可留空。
-- **後端 own 的項目一律不列入表格**（`smb-*`／`payment-*` 的 helm values／secrets、後端 EC2、prod 的 cloudflared／alloy deploy trigger 等，見 `~/.claude/rules/common/repo-ownership.md`）。殘餘問題在後端層時，只在正文（處置或分類結論）用一句話標「屬後端」，不寫通知草稿、不寫提案、不列 row。
+- **不屬於自己的項目一律不列入表格**（ownership 邊界依本機規則；他人 own 的資源只調查、不代修）。殘餘問題在後端層時，只在正文（處置或分類結論）用一句話標「屬後端」，不寫通知草稿、不寫提案、不列 row。
 - **無項目**：結論是 benign 且沒有任何 action item 時，`## Action Items` 底下只寫「無」，不放表頭，frontmatter 寫 `action_items_open: 0`。
 - **`action_items_open`**：必須等於表中狀態為 `open` 的筆數；改了 row 狀態要同步改這個數字。
 - **格式約束**：每筆一行；任一欄位內不得出現 `|` 或換行（需要時用全形 `｜` 或改寫）；不得合併儲存格、不得在表格中間插入空行或註解。
@@ -207,17 +207,17 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 ## Step 6 — Guardrail Fix 草案（僅 real）
 
 1. **定位該修的 repo + base 規則**：
-   - `web-app`：PR base **一律 hotfix**（KB `wiki/rules/read-target-repo-claude-md-before-cross-repo-work-pr-base-is-repo-rule.md`）。
-   - `deployment-eks`：依歸屬分兩類（KB `wiki/rules/repo-ownership.md`）。
+   - `web-app`：PR base **一律 hotfix**（PR base 是目標 repo 自己的規則，跨 repo 工作前先讀它的 CLAUDE.md）。
+   - `deployment-eks`：依歸屬分兩類（ownership 邊界依本機規則）。
      - **屬使用者，照常走 PR（G1）**：cluster infra（NodePool、PDB、Karpenter）、network／gateway、observability（Alloy、Loki、Grafana）、Flux，以及一般業務 deployment 的 PDB／HPA／副本數／resources。prod 的 cloudflared／alloy 走 `make PHASE=prod`，deploy trigger 預設由後端執行：做到 values PR 為止，不主動代跑；使用者明示授權時才代跑。
      - **屬後端，不動也不寫提案（G3）**：`smb-*`／`payment-*` 的 helm values 與 secrets、託管資料庫、cert-manager 的副本配置、後端 EC2。只在報告正文用一句話標「屬後端」。
-   - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（KB `wiki/rules/helm-persist-before-apply.md`）。
+   - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（先把變更寫進 chart 再 apply）。
 2. **產 guardrail**（對症）：
    - OOM → resource limit / HPA scaleUp 平滑 / memory guardrail。
    - Loki query 成本 → 限 range / 降頻 / unwrap 上限。
-   - alert flap → Query A 補 `sum()/avg()`（修 alert rule 經 `mcp__grafana__alerting_manage_rules`，或走 Grafana-as-code PR）。**alert rule 一律不自動 apply**：先附 backfit query 建議交 G1 確認；update 草案須帶**完整既有 payload（含 `notification_settings` + `org_id`）**，漏帶會清空 routing（KB `wiki/learned/grafana-alert-update-notification-settings.md`）。
+   - alert flap → Query A 補 `sum()/avg()`（修 alert rule 經 `mcp__grafana__alerting_manage_rules`，或走 Grafana-as-code PR）。**alert rule 一律不自動 apply**：先附 backfit query 建議交 G1 確認；update 草案須帶**完整既有 payload（含 `notification_settings` + `org_id`）**，漏帶會清空 routing。
    - config gap（allowed-sources）→ 補設定 + regression test。
-3. **開 PR**：繁體中文 body（KB `wiki/rules/pr-traditional-chinese.md`），附 RCA report 連結 + 證據；external system 用全名引用（`Linear ABC-1234`、`Sentry Issue N`），不用裸 `#數字`。
+3. **開 PR**：繁體中文 body，附 RCA report 連結 + 證據；external system 用全名引用（`Linear ABC-1234`、`Sentry Issue N`），不用裸 `#數字`。
 
 ## HITL Gates（G1–G4）
 
@@ -248,11 +248,10 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 - **寫入類工具不預先核准**：`alerting_manage_rules`、`grafana_api_request` 可以建立、修改或刪除 prod 規則與 Grafana 資源。本 skill 會讀 Loki log，log 內容可受外部影響，所以這兩個工具刻意不放進 `allowed-tools`，每次呼叫都要經過權限確認，list／get 也一樣。唯讀查詢優先用上表其他工具。
 - **kubectl** 一律透過 Bash（`get` / `describe` / `logs --previous` / `top` / `get events`）。
 - grafana MCP 無 offset 的 timestamp 視為 **UTC**；跨 Loki/Prometheus/kubectl 比對時先對齊時區。
-- ALB/AWS 原生 metric grafana MCP 查不到（KB `wiki/learned/grafana-mcp-cloudwatch-gap.md`）→ 走 Athena / AWS console。
-- **`alerting_manage_rules` update footgun**：要 update/edit alert rule 前先 get 完整 rule，update 時帶回**全部欄位**（含 `notification_settings` + `org_id`），漏帶會被靜默清空（KB `wiki/learned/grafana-alert-update-notification-settings.md`）；且預設**不自動 apply**，產草案交 HITL G1。
+- ALB/AWS 原生 metric grafana MCP 查不到→ 走 Athena / AWS console。
+- **`alerting_manage_rules` update footgun**：要 update/edit alert rule 前先 get 完整 rule，update 時帶回**全部欄位**（含 `notification_settings` + `org_id`），漏帶會被靜默清空；且預設**不自動 apply**，產草案交 HITL G1。
 
 ## 不重造既有流程（編排，非取代）
 
-- **report 沉澱 / commit**：沿用 KB 既有慣例（topic-grouped commit、Markdown runbook、不裸 `.sh`）。
-- **learned skill 先驗**：每次 grep `wiki/learned/INDEX.md`（如 `flux-kustomization-webhook-transient-fail-triage`、`grafana-alert-query-aggregation-per-series-trap`、`karpenter-*`、`hpa-cold-start-scaleup-policy-sizing`）。
+- **report 沉澱 / commit**：沿用 KB 既有慣例（topic-grouped commit、Markdown runbook、不裸 `.sh`）；**learned skill 先驗**每次從知識來源的 learned 索引撈（如 `flux-kustomization-webhook-transient-fail-triage`、`grafana-alert-query-aggregation-per-series-trap`、`karpenter-*`、`hpa-cold-start-scaleup-policy-sizing`）。
 - **不重寫** `/kb-query`、`/verify-live-state`、`/release-pr`、`/pr`——本 skill 在對應步驟**引用**它們。

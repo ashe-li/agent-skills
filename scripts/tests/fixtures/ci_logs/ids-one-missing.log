@@ -1,0 +1,10 @@
+2026-01-02T03:04:05.1234567Z ##[group]Run python -m unittest -v
+2026-01-02T03:04:05.1234567Z test_add_item (widgets.tests.test_cart.CartTests.test_add_item) ... ok
+2026-01-02T03:04:05.1234567Z test_empty_cart (widgets.tests.test_cart.CartTests.test_empty_cart) ... ok
+2026-01-02T03:04:05.1234567Z test_discount (widgets.tests.test_price.PriceTests.test_discount) ... ok
+2026-01-02T03:04:05.1234567Z test_rounding (widgets.tests.test_price.PriceTests.test_rounding) ... ok
+2026-01-02T03:04:05.1234567Z 
+2026-01-02T03:04:05.1234567Z ----------------------------------------------------------------------
+2026-01-02T03:04:05.1234567Z Ran 4 tests in 0.010s
+2026-01-02T03:04:05.1234567Z 
+2026-01-02T03:04:05.1234567Z OK

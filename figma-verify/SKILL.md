@@ -75,7 +75,7 @@ mcp__figma__get_screenshot({ nodeId, fileKey })
 mcp__playwright__browser_take_screenshot({ fullPage: true })  // 已 resize ≥1600×1000
 ```
 
-兩張圖都進 transcript 後，Haiku 評估者就能直接做「純視覺比對」。
+兩張圖都進 transcript 後，Haiku 評估者就能直接做「純視覺比對」。有 profile 時 local 頁面的網址樣式、登入方式等環境細節取自 profile 的 `Flows` 與 `Verifier notes`（`/verify-change` Step 4）；沒有 profile 或引擎不可用，照現行流程，行為與現在完全相同。
 
 ### 4.5b — 下 `/goal` 啟動 visual gate
 

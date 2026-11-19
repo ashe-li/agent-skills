@@ -7,7 +7,7 @@ argument-hint: <PR 編號 / preview 或 staging URL / 驗收項目清單>
 
 # /pr-evidence-comment — headed 驗收 → 截圖 → PR comment 附圖
 
-把一次 headed 驗收變成 PR 上**別人打得開**的證據。
+把一次 headed 驗收變成 PR 上**別人打得開**的證據。開頭先跑 `$E pr register --repo . --from-gh`（只做驗收、沒有 push 的 session 靠這一步進入檢查；`$E` 見 `/verify-change` Step 1）；沒有 profile 或引擎不可用，照現行流程，行為與現在完全相同。
 
 ## 為什麼一定要上傳，不能只留本機路徑
 
@@ -36,7 +36,7 @@ argument-hint: <PR 編號 / preview 或 staging URL / 驗收項目清單>
 
 ## Step 1 — 定驗收項目並編號
 
-**先列清單再開瀏覽器**，不要邊看邊想要驗什麼——臨場發揮會漏掉 regression 面。
+**先列清單再開瀏覽器**，不要邊看邊想要驗什麼——臨場發揮會漏掉 regression 面。有 profile 時清單起點取自其 `Flows` 與 `$E select` 命中的項目（`/verify-change` Step 3、4），驗收員用 `agents/headed-verifier.md`。
 
 編號慣例：
 
@@ -57,7 +57,7 @@ C8b            同一項的補充視角（scrolled / 展開後）
 存放路徑：`<專案或知識庫>/.verification/<YYYY-MM-DD>-<slug>/<env>/`
 （`<env>` 例：`staging-v2`、`preview-8051`、`hotfix`）
 
-檔名 = `<編號>-<kebab-描述>.png`，與 Step 1 的清單一一對應。
+檔名 = `<編號>-<kebab-描述>.png`，與 Step 1 的清單一一對應。開拍前記下該 PR branch 的 head：`git rev-parse <PR branch>`（不是目前 checkout 的 `HEAD`；Step 5 寫驗收 receipt 前要比對）。
 
 ```bash
 agent-browser open <url> --headed     # headless 起過的 session 要先 close 再重開才會套用
@@ -184,6 +184,7 @@ gh pr view <num> --json comments --jq '.comments[-1].body' | grep -c "user-attac
 數字要等於上傳的檔案數。**不要用「沒有報錯」當成功**——沒有壞消息不是好消息（`git status` 空輸出同理，可能是已 commit，也可能是被 ignore）。
 
 同時把截圖清單與判定寫進知識庫 session 檔，標明證據路徑為**本機限定**。
+讀回成功後，有 profile 時先比對 `git rev-parse <PR branch>` 與開拍時記下的 head：相同才寫驗收 receipt `$E receipt acceptance --repo . --pr <num> --attachments <檔案數>`；不同代表截圖後該 branch 又有 commit，重驗變更後的畫面，或在 comment 明講截圖對應的 head 且不寫 receipt（receipt 綁的是註冊表中該 PR branch 寫入當下的本機 ref）。
 
 ## 不重造的既有資源
 

@@ -14,6 +14,8 @@
 | `doc-reviewer.md` | 計畫／文件審查，逐項 PASS/FAIL 找碴 | Plan agent 產出計畫後、或文件更新完成後，需要隔離 context 找碴而非背書 | `/design` Step 4a、`/update` Step 2 |
 | `doc-updater.md` | 文件同步（README/docs/CODEMAPS），輸出變更 Manifest | 程式碼變更後需同步文件，且需要主模型事後逐條驗證 | `/update` Step 1 |
 | `tdd-guide.md` | TDD 紅－綠－重構引導，80% 覆蓋率門檻 | 新功能或修 bug 前缺測試覆蓋，需要先寫失敗測試再實作 | `/design` Step 1 資源盤點列出、Step 3 計畫步驟視需要引用 |
+| `readonly-verifier.md` | 唯讀驗收員，fresh-context 事實查核、PR／部署驗收 | 需要「驗證不自驗」的第二雙眼睛；派工 prompt 需指定證據目錄與引用使用者原話 | `/rca` 硬規則 1 與 Step 3 |
+| `headed-verifier.md` | Headed 驗收員，真實瀏覽器（CLI）視覺與行為驗收，非 GET 請求逐筆記錄 | UI 或行為變更需要 headed 驗收；派工 prompt 需引用使用者原話並明文授權（或不授權）寫入型驗收 | `/pr-evidence-comment` Step 1、`/verify-change` Step 4 |
 
 選錯定義檔的常見徵兆：把「審查」誤派成「更新」（doc-reviewer 只讀不寫，doc-updater 才會 Edit 檔案）、把「分診」誤派成「審查」（complexity-triage 只做影響面粗估，不做逐項 PASS/FAIL）。
 
@@ -32,6 +34,15 @@ prompt 需包含：「依 agents/<name>.md 的定義與檢查清單執行 <任�
 ## `haiku` alias 指到哪個模型
 
 定義檔 frontmatter 寫的是 alias，不是版本。依 [Anthropic 2026-11-09 文章](https://claude.dev/blog/which-claude-model-should-you-build-with/)：走 Anthropic API 時 `haiku` 解析為 Haiku 5.5（需 Claude Code v2.1.293 以上）；走 Amazon Bedrock、Google Cloud、Microsoft Foundry、Claude Platform on AWS 時仍是 Haiku 4.5。要固定版本用環境變數 `ANTHROPIC_DEFAULT_HAIKU_MODEL`。例外：主對話本身就跑 Haiku 系列時，帶 `haiku` alias 的 subagent 會跟主對話用同一個模型，不看 alias 指到的版本，`ANTHROPIC_DEFAULT_HAIKU_MODEL` 也擋不住這個例外。subagent 一定要用特定版本時，在定義檔 frontmatter 的 `model` 填完整模型 ID（例如 `claude-haiku-5-5`）；[官方文件](https://code.claude.com/docs/en/sub-agents)的例外條文只針對 alias，完整 ID 不在其列。Agent tool 呼叫時的 `model` 參數只收 alias，不能傳完整 ID，所以要用 ID 固定版本只能寫在定義檔。Haiku 5.5 的 prompt 超過 100K token 後單價變 5 倍。
+
+## 例外：權限型 agent 與強制力邊界
+
+`readonly-verifier.md`、`headed-verifier.md` 這類靠工具白名單限縮權限的定義，不適用上面「一律經 `general-purpose`」的慣例：
+
+- **必須註冊成真正的 subagent，白名單才生效。** 把定義檔 symlink 進 `~/.claude/agents/`（例如 `ln -sfn <你的 checkout>/agents/readonly-verifier.md ~/.claude/agents/readonly-verifier.md`），再以 `subagent_type="readonly-verifier"`（或 `"headed-verifier"`）派工。
+- **未註冊時降級**：走 `general-purpose` 加定義引用，此時 frontmatter 的 `tools` 不會被套用，回報第一行必須標明「白名單未生效」。
+- **強制力邊界**：工具白名單由 harness 強制，但只擋得掉 Write 與 Edit 兩個工具；Bash 仍能寫檔。定義檔內其餘限制（不執行任何 rm、憑證邊界、驗收基準取使用者原話、多輪上限；headed-verifier 另有寫入攔截、非 GET 紀錄、寫入型驗收授權）全是提示，不是機械強制。集中成一份定義換掉的是「每次派工重寫限制」，不是「不會越權」，不要把它描述成機械化防越權。
+- 撞名禁令仍適用於其他定義檔；`readonly-verifier`、`headed-verifier` 的註冊是刻意為之，不算直呼舊 ECC 定義。
 
 ## Step 3 — When to Use：驗收
 

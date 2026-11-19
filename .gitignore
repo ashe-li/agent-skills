@@ -22,3 +22,5 @@ __pycache__/
 
 # Logs
 *.log
+# 測試 fixture 的 log 樣本要進版控（少了它們 CI 的測試會找不到檔）
+!scripts/tests/fixtures/**/*.log

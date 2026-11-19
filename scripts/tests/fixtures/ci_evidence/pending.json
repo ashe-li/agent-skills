@@ -1,0 +1,32 @@
+{
+  "schema": "verify-ci-evidence/1",
+  "_comment": "A required job is still running.",
+  "repo": "github.com/example-org/example-web",
+  "pr": 42,
+  "pr_state": "open",
+  "pr_head_sha": "1111111111111111111111111111111111111111",
+  "pr_head_branch": "feat/example-change",
+  "fetched_at": "2026-01-02T03:04:05Z",
+  "runs": [
+    {
+      "run_id": 1000000001,
+      "attempt": 1,
+      "workflow": "CI",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "status": "in_progress",
+      "conclusion": null,
+      "jobs": [
+        {
+          "name": "unit-tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "quality",
+          "status": "in_progress",
+          "conclusion": null
+        }
+      ]
+    }
+  ]
+}

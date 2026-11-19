@@ -1,0 +1,32 @@
+{
+  "schema": "verify-ci-evidence/1",
+  "_comment": "All jobs green, but for an older head. Tests set the SHAs to a commit that is no longer the branch head.",
+  "repo": "github.com/example-org/example-web",
+  "pr": 42,
+  "pr_state": "open",
+  "pr_head_sha": "2222222222222222222222222222222222222222",
+  "pr_head_branch": "feat/example-change",
+  "fetched_at": "2026-01-02T03:04:05Z",
+  "runs": [
+    {
+      "run_id": 1000000001,
+      "attempt": 1,
+      "workflow": "CI",
+      "head_sha": "2222222222222222222222222222222222222222",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "name": "unit-tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "quality",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ]
+}

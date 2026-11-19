@@ -106,7 +106,8 @@ mv plans/active/<filename>.md plans/completed/<filename>.md
 
 ```
 plans/
-├── active/       # 進行中（Hook 自動存入 / /plan 手動建立）
+├── active/       # 進行中（Hook 自動存入 / /design 產出）
+├── backlog/      # 提案池：未核准、近期無新證據（見 rules/plan-management.md）
 ├── completed/    # 已實作完成（/plan-archive 歸檔）
 └── archived/     # 長期封存（不再參考的舊 plan）
 ```

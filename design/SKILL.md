@@ -82,7 +82,7 @@ Agent(subagent_type="Plan")
 
 **計畫須包含：**
 
-計畫分兩組章節：**核心章節（A 組，所有複雜度預設都要）** 與 **研究章節（B 組，僅風險觸發）**。判準是「儀式成本與風險×不可逆性成比例」（見 Step 2b line 57 原則）——複雜度只決定「核心章節的深度」與「Step 4 審查是否派 subagent」，**不決定研究章節是否出現**。
+計畫分兩組章節：**核心章節（A 組，所有複雜度預設都要）** 與 **研究章節（B 組，僅風險觸發）**。判準是「儀式成本與風險×不可逆性成比例」（見 Step 2b「快速路徑的存在理由」）——複雜度只決定「核心章節的深度」與「Step 4 審查是否派 subagent」，**不決定研究章節是否出現**。
 
 **A 組 — 核心章節（預設全複雜度必含）：**
 
@@ -116,7 +116,7 @@ Agent(subagent_type="Plan")
 
 > **快速路徑（低複雜度）不派 subagent**：主模型以 7 項精簡清單 self-check——可執行性（每步有檔案路徑+動作）、依賴正確性、驗收可測、實作後品保步驟存在、診斷 gate 存在（票面假設未經 live 驗證時）、安全敏感面判定、測試覆蓋（新增/修改邏輯有對應測試，或明示不需要的理由，可引用 `agents/tdd-guide.md`）。任一不過直接改 plan，不進 FAIL 迴圈。以下 subagent 審查僅適用中等以上複雜度。
 
-啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫。不使用已禁用的 `architect` agent（ECC 版與無前綴版皆禁，消融實驗 delta=-0.50，見 `rules/refactor/remove-architect-pipeline.md`），改用通用 agent 依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。路徑解析與呼叫慣例見 `agents/README.md`。
+啟動 **general-purpose subagent** 在隔離 context 中審查 Step 3 的計畫，依 `agents/doc-reviewer.md` 的定義與檢查清單執行審查。路徑解析與呼叫慣例見 `agents/README.md`。
 
 ```
 Agent(subagent_type="general-purpose", model="sonnet")
@@ -206,7 +206,7 @@ prompt：「依 agents/doc-reviewer.md 的定義與檢查清單執行審查」+ 
 ### Phase 1: [實作階段]
 - [ ] **S1.1** — [Step title]
   - Files: src/foo.ts, src/bar.ts
-  - Agent: `planner`
+  - Agent: `general-purpose`
   - Action: ...
   - Dependencies: []
   - Why: ...

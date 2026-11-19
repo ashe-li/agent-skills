@@ -26,7 +26,7 @@ argument-hint: <Grafana alert URL | Sentry issue URL/shortId | CI run URL>
 4. **反模式護欄**（兩條都是實際踩過的坑）：
    - **不用字面資源名 grep 判斷有沒有被 IaC 管理**。資源名稱常常是 `"${var.env}-${local.name}"`、`for_each`、module output 組出來的。判斷方式依序是：`terraform state list | grep`（權威來源）→ `terraform state show <addr>` → 反查 module／variables／`*.tfvars` 找出名稱是怎麼組的。只有「state 裡找不到，**而且**所有組名路徑都排除了」才能說 unmanaged。以前曾經用 grep 字面名稱，誤判某個 bucket 不歸 terraform 管。
    - **不先讀值就不報 secret**。看到像 key／token 的欄位，要先分辨是 placeholder（`changeme`、`<TOKEN>`、`${...}`、`xxx`、ESO／SOPS 引用、空字串）還是真值。讀值只為判斷類型，報告裡只寫「真值／placeholder／引用」與長度，**不輸出值本身**。沒讀到值就寫 `unverified`。
-5. **ownership**：碰到 `smb-*`／`payment-*` 的 helm values、secrets、後端 EC2、他人的 PR 狀態，只調查、只提案，不代修（rules `repo-ownership.md`）。
+5. **ownership**：碰到 `smb-*`／`payment-*` 的 helm values、secrets、後端 EC2、他人的 PR 狀態，只調查，不代修、不主動寫提案（rules `repo-ownership.md`）。
 6. **時區**：一律換算成 UTC 對齊時間軸；台灣時間（+08:00）放在括號裡。
 
 ## Step 0 — 正規化告警（主對話做，可以用 MCP）
@@ -81,7 +81,7 @@ INFRA 判斷「跟這次告警無關」時，要寫出排除依據（例如：�
    - `REAL DEFECT → FIX`：程式碼或設定本身有缺陷。
    - `EXTERNAL／BENIGN → RECORD`：第三方、使用者環境（瀏覽器擴充套件等）、或 by-design，只記錄，不開 PR。
    這一步要說明為什麼不是其他三類。**特別注意**：看到 drift 時，預設問題是「這個 drift 是不是該寫進 terraform 的正確狀態」，不是「要不要 apply 回去」。以前吃過虧：把本來該 commit 進 terraform 的 drift 直接當成正常狀態套用了。
-5. **修復 PR 草稿＋rollback checklist**：寫成草稿檔，不開 PR（開 PR 要經過 HITL G1）。草稿包含 repo、base branch（`web-app` 用 `hotfix`）、改動的 diff 或具體檔案:行號、繁體中文 PR body、驗收方式（要可觀察：哪一條 query 的數字降到多少）。rollback checklist 包含：觸發條件（哪個數字回升到多少）、每一步的指令、每一步的預期輸出、資料／狀態是否可逆、通知誰。
+5. **修復 PR 草稿＋rollback checklist**：寫成草稿檔，不開 PR（開 PR 要經過 HITL G1）。草稿包含 repo、base branch（`web-app` 用 `hotfix`）、改動的 diff 或具體檔案:行號、繁體中文 PR body、驗收方式（要可觀察：哪一條 query 的數字降到多少）。rollback checklist 包含：觸發條件（哪個數字回升到多少）、每一步的指令、每一步的預期輸出、資料／狀態是否可逆、通知誰。根因落在後端 own 的資源時（規則 5）不寫修復草稿，只在正文用一句話標「屬後端」。
 
 6. **Action Items**：報告最後一節固定為 `## Action Items`，用下面這張固定 schema 的表格列出所有後續待辦（修復 PR、CODIFY 寫回 IaC、監控補強、要使用者決定的事）：
 
@@ -97,7 +97,7 @@ INFRA 判斷「跟這次告警無關」時，要寫出排除依據（例如：�
    - 分類是 `EXTERNAL／BENIGN → RECORD` 且沒有任何待辦時，標題底下只寫「無」（不放表格），frontmatter `action_items_open: 0`。
    - frontmatter 的 `action_items_open: <n>` 必須等於表中狀態為 `open` 的筆數。
    - 每筆一行；欄位內不得有 `|` 或換行；不得在表格中間插入空行。
-   - **解析契約**：S3.6 的 digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
+   - **解析契約**：下游的 action item digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
    - 完整範例：[`examples/action-items-open.md`](examples/action-items-open.md)（2 筆 open）、[`examples/action-items-benign.md`](examples/action-items-benign.md)（無待辦寫「無」）。與 `alert-triage` Step 5 的 schema 完全相同。
 
 SYNTHESIS 的產出寫到 KB 的 `reports/<YYYY-MM-DD>-rca-<slug>.md`（frontmatter `type: incident-rca`、`action_items_open: <n>`，tags 帶 `rca`），並掛到 `reports/INDEX.md`。PR 草稿放在同目錄的 `.verification/<date>/rca-<slug>/pr-draft.md`。
@@ -110,4 +110,4 @@ SYNTHESIS 的產出寫到 KB 的 `reports/<YYYY-MM-DD>-rca-<slug>.md`（frontmat
 
 ## 交付給使用者的格式
 
-結論先講（≤5 行）：根因、信心、falsifier、分類、下一步要使用者決定的事。附上報告路徑和 PR 草稿路徑。細節等使用者說「展開」再給。
+結論先講（≤5 行）：根因、信心、falsifier、分類、下一步要使用者決定的事。附上報告路徑；有 PR 草稿時一併附上草稿路徑。細節等使用者說「展開」再給。

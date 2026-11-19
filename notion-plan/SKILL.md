@@ -66,7 +66,7 @@ playwright-cli -s=notion open "https://www.notion.com/login" --profile ~/.playwr
 
 ## Step 2：Playwright CLI 抓取
 
-不使用 WebFetch / Playwright MCP（見全域規則 `webfetch-blocklist.md`：Notion 為 100% client-side rendering，且 MCP 每次操作注入 ~58KB snapshot）。
+不使用 WebFetch / Playwright MCP（Notion 為 100% client-side rendering，WebFetch 只拿得到空殼；MCP 每次操作注入 ~58KB snapshot）。
 
 所有 `playwright-cli` 指令使用 session `-s=notion` 和 persistent profile `--profile ~/.playwright-cli/notion-profile`。
 

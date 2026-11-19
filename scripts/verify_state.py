@@ -191,6 +191,26 @@ def state_lock(root: Path) -> Iterator[None]:
         os.close(fd)
 
 
+@contextlib.contextmanager
+def dir_lock(directory: Path) -> Iterator[None]:
+    """Exclusive advisory flock on a directory itself (no lock file is created).
+
+    Serializes read-modify-write sequences on files inside `directory`, such
+    as appending to a KB candidate or replacing an acceptance receipt.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(directory, flags)
+    except OSError as exc:
+        raise StateError(f"cannot lock {directory}: {exc.strerror}") from exc
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:HASH_CHARS]
 

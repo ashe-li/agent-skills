@@ -25,15 +25,13 @@ import os
 import re
 from typing import NamedTuple, Optional
 
+from verify_gate_refs import *  # noqa: F401,F403  (push refspec parsing, re-exported)
+from verify_gate_refs import _branch_name
+
 MAX_COMMAND_CHARS = 200_000
 KIND_PR_CREATE, KIND_PUSH, KIND_REGISTER = "gh-pr-create", "git-push", "pr-register"
 KIND_PR_CREATE_NOOP = "gh-pr-create-noop"  # --help / -h / --dry-run: creates nothing
-PUSH_CURRENT, PUSH_BRANCH, PUSH_UNRESOLVED, PUSH_NONE = "current", "branch", "unresolved", "none"
-PUSH_REFSPEC = "refspec"  # `<src>:<branch>`: the branch gets whatever <src> resolves to
-PUSH_IGNORE, PUSH_ALL, PUSH_MULTI = "ignore", "all", "multi"
-REF_CURRENT, REF_BRANCH, REF_REFSPEC = PUSH_CURRENT, PUSH_BRANCH, PUSH_REFSPEC
-REF_IGNORE, REF_UNRESOLVED = PUSH_IGNORE, PUSH_UNRESOLVED
-PLAN_NONE, PLAN_ALL, PLAN_REFS, PLAN_UNRESOLVED = "none", "all", "refs", "unresolved"
+KIND_HEAD_MOVE = "git-head-move"  # internal: a later checkout / switch in the same command
 DYNAMIC_VALUE = "\x00dynamic"  # option_value: the option is present but its value is not static
 
 _OPERATORS = ("&&", "||", "|&", ";", "|", "&")
@@ -53,6 +51,8 @@ _SUDO_VALUE = frozenset({"-u", "-g", "-U", "-C", "-D", "-p", "-r", "-t", "-T", "
 _NICE_VALUE = frozenset({"-n", "--adjustment"})
 _NICE_LEGACY = re.compile(r"^-\d+$")
 _PR_CREATE_NOOP = frozenset({"--help", "-h", "--dry-run"})
+# Only these change which branch is checked out; commit, reset, stash ... keep the name.
+_GIT_HEAD_MOVERS = frozenset({"checkout", "switch"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 _NAME_CHAR = re.compile(r"[A-Za-z0-9_]")
 _NAME_ONLY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -60,21 +60,6 @@ _PYTHON = re.compile(r"^python(?:3(?:\.\d+)?)?$")
 _PYTHON_SAFE_FLAGS = frozenset({"-I", "-u", "-B", "-E", "-s", "-S", "-O", "-OO", "-q"})
 _GIT_NOARG_OPTS = frozenset({"--no-pager", "--paginate", "-p", "-P", "--no-replace-objects",
                              "--literal-pathspecs", "--no-optional-locks", "--no-advice"})
-_PUSH_FLAGS = frozenset({"-u", "--set-upstream", "-f", "--force", "--force-with-lease",
-                         "--no-force-with-lease", "--force-if-includes", "-q", "--quiet",
-                         "-v", "--verbose", "--progress", "--no-progress", "--no-verify",
-                         "--verify", "--atomic", "--no-atomic", "--porcelain",
-                         "--follow-tags", "--no-follow-tags", "--signed", "--no-signed",
-                         "-4", "-6", "--ipv4", "--ipv6", "--thin", "--no-thin"})
-_PUSH_VALUE_OPTS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
-_PUSH_VALUE_PREFIXES = ("--force-with-lease=", "--push-option=", "--repo=", "--receive-pack=",
-                        "--exec=", "--signed=", "--recurse-submodules=")
-_PUSH_DRY_RUN = frozenset({"-n", "--dry-run"})
-_PUSH_ALL = frozenset({"--all", "--branches", "--mirror"})
-_PUSH_DELETE = frozenset({"-d", "--delete"})
-_PUSH_PLAN_FLAGS = _PUSH_DRY_RUN | _PUSH_ALL | _PUSH_DELETE | frozenset({"--tags", "--prune"})
-_TAGS = "refs/tags/"
-_HEADS = "refs/heads/"
 _WORD_VAR = re.compile(r'^"?\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"?$')
 _ENV_NOARG = frozenset({"-i", "-", "--ignore-environment", "-0", "--null"})
 _ENV_VALUE = frozenset({"-u", "--unset"})
@@ -105,22 +90,10 @@ class Invocation(NamedTuple):
     kind: str
     cwd: Optional[str]  # directory the command runs in; None when unknown
     args: tuple         # Words after the recognised subcommand
+    moved: bool = False  # KIND_PUSH: a later segment may switch the checked-out branch
 
 
-class RefPush(NamedTuple):
-    kind: str            # REF_CURRENT, REF_BRANCH, REF_REFSPEC, REF_IGNORE, REF_UNRESOLVED
-    branch: Optional[str]
-    src: Optional[str]   # REF_REFSPEC only: the source ref to resolve
 
-
-class PushPlan(NamedTuple):
-    kind: str            # PLAN_NONE, PLAN_ALL, PLAN_REFS, PLAN_UNRESOLVED
-    refs: tuple          # RefPush per refspec (PLAN_REFS only)
-
-
-class PushTarget(NamedTuple):
-    kind: str  # PUSH_CURRENT, PUSH_BRANCH, PUSH_UNRESOLVED or PUSH_NONE (dry run)
-    branch: Optional[str]
 
 
 # --- scanner ----------------------------------------------------------------------
@@ -442,6 +415,8 @@ def _git_invocation(words: tuple, cwd: Optional[str], home: Optional[str]
             index += 1
         elif text == "push":
             return Invocation(KIND_PUSH, cwd, words[index + 1:])
+        elif text in _GIT_HEAD_MOVERS:
+            return Invocation(KIND_HEAD_MOVE, cwd, words[index + 1:])
         else:
             return None  # another subcommand, or an option such as --git-dir
     return None
@@ -495,7 +470,7 @@ def _unwrap_once(words: tuple) -> Optional[tuple]:
     """Words after one wrapper; the same words when there is none; None to give up."""
     name = words[0].text
     rest = words[1:]
-    if name in _COMMAND_KEYWORDS or name == "nohup":
+    if name in _COMMAND_KEYWORDS or name in ("nohup", "builtin"):
         return rest
     if name == "sudo":
         return _skip_options(rest, _SUDO_NOARG, _SUDO_VALUE)
@@ -552,11 +527,16 @@ def recognise(words: tuple, cwd: Optional[str], home: Optional[str]) -> Optional
 
 
 def _next_cwd(seg: Segment, cwd: Optional[str], home: Optional[str]) -> Optional[str]:
-    words = _strip_assignments(seg.words)
+    """Directory after this segment. A `cd` to a directory that does not exist
+    fails: after `&&` the rest does not run; after `;` or a newline it runs in a
+    directory we cannot know, so it becomes None."""
+    words = unwrap(seg.words)
     if not words or words[0].dynamic or words[0].text != "cd":
         return cwd
     target = _resolve_dir(cwd, words[1], home) if len(words) == 2 else None
-    return target if seg.op in _CWD_KEEPING_OPS else None
+    if seg.op not in _CWD_KEEPING_OPS or target is None:
+        return None
+    return target if seg.op == "&&" or os.path.isdir(target) else None
 
 
 def _expand(words: tuple, assigned: dict) -> tuple:
@@ -651,7 +631,14 @@ def find_invocations(command: str, cwd: Optional[str], home: Optional[str]) -> t
         return ()
     found: list = []
     _walk(segments, cwd, home, {}, found)
-    return tuple(found)
+    marked = []
+    for index, invocation in enumerate(found):
+        if invocation.kind == KIND_HEAD_MOVE:
+            continue
+        later = any(i.kind == KIND_HEAD_MOVE for i in found[index + 1:])
+        marked.append(invocation._replace(moved=later) if invocation.kind == KIND_PUSH
+                      else invocation)
+    return tuple(marked)
 
 
 def mentions_pr_create(command: str) -> bool:
@@ -667,84 +654,8 @@ def mentions_pr_create(command: str) -> bool:
 
 # --- argument helpers --------------------------------------------------------------
 
-def _branch_name(ref: str) -> Optional[str]:
-    if ref.startswith(_HEADS):
-        ref = ref[len(_HEADS):]
-    if not ref or ref.startswith(("refs/", "-")) or ref in ("HEAD", "@"):
-        return None
-    return ref
 
 
-def _ref_push(spec: str) -> "RefPush":
-    """What one refspec does to a branch; see the hooks document for the table."""
-    spec = spec[1:] if spec.startswith("+") else spec
-    if spec in ("HEAD", "@"):
-        return RefPush(REF_CURRENT, None, None)
-    src, sep, dst = spec.partition(":")
-    target = dst if sep else spec
-    if (sep and not src) or target.startswith(_TAGS):
-        return RefPush(REF_IGNORE, None, None)  # a deletion or a tag
-    name = _branch_name(target)
-    if not name:
-        return RefPush(REF_UNRESOLVED, None, None)
-    if not sep or _branch_name(src) == name:
-        return RefPush(REF_BRANCH, name, None)
-    return RefPush(REF_REFSPEC, name, src)
-
-
-def _push_words(args: tuple) -> Optional[tuple]:
-    """(positional words, flags) of `git push`; None when unknowable."""
-    positional, flags, index = [], set(), 0
-    while index < len(args):
-        word, text = args[index], args[index].text
-        if word.dynamic:
-            return None
-        if text in _PUSH_VALUE_OPTS:
-            index += 2
-            continue
-        if text == "--":
-            positional.extend(w.text for w in args[index + 1:])
-            break
-        if not text.startswith("-"):
-            positional.append(text)
-        elif text in _PUSH_PLAN_FLAGS or text in _PUSH_FLAGS:
-            flags.add(text)
-        elif not text.startswith(_PUSH_VALUE_PREFIXES):
-            return None
-        index += 1
-    return None if any(w.dynamic for w in args) else (tuple(positional), frozenset(flags))
-
-
-def push_plan(args: tuple) -> PushPlan:
-    """How a `git push <args>` changes branches: none, all, per-refspec, or unknown."""
-    parsed = _push_words(args)
-    if parsed is None:
-        return PushPlan(PLAN_UNRESOLVED, ())
-    positional, flags = parsed
-    if flags & _PUSH_DRY_RUN:
-        return PushPlan(PLAN_NONE, ())
-    if flags & _PUSH_ALL:
-        return PushPlan(PLAN_ALL, ())
-    if flags & _PUSH_DELETE:
-        return PushPlan(PLAN_REFS, ())
-    refspecs = positional[1:]
-    if not refspecs:
-        tags_only = "--tags" in flags
-        return PushPlan(PLAN_REFS, () if tags_only else (RefPush(REF_CURRENT, None, None),))
-    return PushPlan(PLAN_REFS, tuple(_ref_push(spec) for spec in refspecs))
-
-
-def push_target(args: tuple) -> PushTarget:
-    """One-line summary of push_plan, used by tests and the hooks document."""
-    plan = push_plan(args)
-    if plan.kind != PLAN_REFS:
-        kind = {PLAN_NONE: PUSH_NONE, PLAN_ALL: PUSH_ALL}.get(plan.kind, PUSH_UNRESOLVED)
-        return PushTarget(kind, None)
-    if not plan.refs:
-        return PushTarget(PUSH_IGNORE, None)
-    if len(plan.refs) > 1:
-        return PushTarget(PUSH_MULTI, None)
-    return PushTarget(plan.refs[0].kind, plan.refs[0].branch)
 
 
 def option_value(args: tuple, names: frozenset) -> Optional[str]:

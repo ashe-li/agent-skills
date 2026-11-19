@@ -253,22 +253,38 @@ def _quick_outcome(root: str, key: str) -> Outcome:
                    vg.resolve_commit(root, "HEAD"), vg.head_tree(root))
 
 
-def run_pre_tool(ctx: Ctx, data: Mapping, invocations: tuple) -> int:
+def pre_targets(ctx: Ctx, invocations: tuple) -> tuple:
+    """(root, key) of every distinct profiled repo the `gh pr create`s run in.
+
+    An invocation whose directory cannot be resolved records `cwd-unresolved`,
+    one in a repo without a profile records `no-profile`; neither hides the others.
+    """
     import verify_receipts as vr
-    target = invocations[0].cwd
-    if target is None:
-        record_early(ctx, (GATE_PRE_PR,), R_CWD_UNRESOLVED)
-        return 0
-    info = vr.repo_info(target) if target and os.path.isdir(target) else None
-    if info is None or not info.root or not info.key:
-        return 0
-    if load_profile(info.key) is None:
-        record_early(ctx, (GATE_PRE_PR,), R_NO_PROFILE)
+    targets: dict = {}
+    for invocation in invocations:
+        if invocation.cwd is None:
+            record_early(ctx, (GATE_PRE_PR,), R_CWD_UNRESOLVED)
+            continue
+        info = vr.repo_info(invocation.cwd) if os.path.isdir(invocation.cwd) else None
+        if info is None or not info.root or not info.key:
+            continue
+        if load_profile(info.key) is None:
+            record_early(ctx, (GATE_PRE_PR,), R_NO_PROFILE)
+            continue
+        targets.setdefault(info.root, info.key)
+    return tuple(targets.items())
+
+
+def run_pre_tool(ctx: Ctx, data: Mapping, invocations: tuple) -> int:
+    """Check every `gh pr create` of the command; any failing repo blocks."""
+    targets = pre_targets(ctx, invocations)
+    if not targets:
         return 0
     RUN["path"] = PATH_FULL
-    outcome = _quick_outcome(info.root, info.key)
-    if decide_gate(ctx, GATE_PRE_PR, (outcome,)):
-        sys.stderr.write(block_reason(((GATE_PRE_PR, outcome),)) + "\n")
+    outcomes = tuple(_quick_outcome(root, key) for root, key in targets)
+    blocked = decide_gate(ctx, GATE_PRE_PR, outcomes)
+    if blocked:
+        sys.stderr.write(block_reason(tuple((GATE_PRE_PR, o) for o in blocked)) + "\n")
         sys.stderr.flush()
         return PRE_TOOL_BLOCK_EXIT
     return 0

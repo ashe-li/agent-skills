@@ -35,7 +35,7 @@ git diff --stat origin/main..HEAD -- Y/ | wc -l
 ````
 
 - 判定三態，不可省略。**PASS**：指令輸出直接支持宣稱。**FAIL**：輸出與宣稱矛盾（例：宣稱「不動 X」但 X 出現在 diff 檔案清單）。**UNVERIFIABLE**：沒有可重跑的指令能證實（例：commit message 尾段的本機測試數字、口頭效能觀察）——**不放 block**，也不是留白帶過；宣稱本身要嘛改寫成可查證的版本，要嘛整條剔除，不能保留原句蒙混。
-- **作者交出前，每條證據指令自己先跑一次**，把實際輸出貼進「關鍵輸出」（只留判定所需的幾行，但足以讓人不重跑就能覆核），不得憑記憶或預期寫結果；接著跑 `python3 scripts/claim_schema.py lint <檔>`，編號、block、判定、`\|` 跳脫等結構問題由它擋。`lint` 與 `extract` 只做文字處理，不執行指令。
+- **作者交出前，每條證據指令自己先跑一次**，把實際輸出貼進「關鍵輸出」（只留判定所需的幾行，但足以讓人不重跑就能覆核），不得憑記憶或預期寫結果；接著跑 `python3 scripts/claim_schema.py lint <檔>`，編號、block、判定、關鍵輸出等結構問題由它擋；block 內的 `\|` 在 ERE／PCRE 指令（`grep -E`／`-P`、`egrep`、`rg`、`awk`、`sed -E`）裡判 `SCHEMA-DEFECT`（比對的是字面直線，會靜默回 0 筆），其餘只警告 `ESCAPED-PIPE`（表格跳脫的殘留就拿掉反斜線，BRE 的交替可忽略）。`lint` 與 `extract` 只做文字處理，不執行指令。
 - 舊的表格格式（表頭含「證據指令」）相容到下一個 MAJOR 版，`lint` 只警告 `LEGACY-TABLE` 不擋；但儲存格內含直線字元仍判 `SCHEMA-DEFECT`。腳本不存在時（只裝了 SKILL.md）照同樣格式手寫，逐條自己跑。
 
 ## 2. Diff-Grounding 規則

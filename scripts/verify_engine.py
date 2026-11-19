@@ -51,6 +51,7 @@ RESULT_WRITTEN, RESULT_REJECTED = vci.WRITTEN, vci.REJECTED
 R_EVIDENCE_UNAVAILABLE = "evidence-unavailable"
 R_PROFILE_PRESENT = "profile-present"
 R_ACCEPTANCE_EXISTS = "acceptance-exists"
+FETCH_HINT = "; if it is a remote ref that has not been fetched yet, run `git fetch` first"
 KIND_EVIDENCE, KIND_EXEMPT = "evidence-comment", "exempt"
 CANDIDATE_OK = frozenset({"created", "appended", "unchanged"})
 METHODS_GENERIC = ("generic", "none")
@@ -61,10 +62,16 @@ class UsageError(Exception):
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
-    """argparse that also prints a JSON error object when --json was given."""
+    """argparse that also prints a JSON error object when --json was given.
+
+    `json_requested` is set by main() from the argv actually being parsed
+    (not sys.argv), so programmatic calls get the same behavior as the CLI.
+    """
+
+    json_requested = False
 
     def error(self, message: str) -> None:  # type: ignore[override]
-        if "--json" in sys.argv[1:]:
+        if JsonArgumentParser.json_requested:
             print(json.dumps({"result": "error", "reason": "usage", "message": message}))
         self.print_usage(sys.stderr)
         sys.stderr.write(f"{self.prog}: error: {message}\n")
@@ -127,9 +134,9 @@ def _ui_line(ui: vr.UiJudgement) -> str:
 def cmd_select(args: argparse.Namespace) -> int:
     info, ctx = _context(args)
     root = _require_root(info)
-    base = args.base or vp.default_base(ctx.profile)
-    if not vg.safe_ref(base) or not vg.safe_ref(args.head):
-        raise UsageError("--base and --head must be plain git refs")
+    base = _checked_base(args, root, ctx)
+    if not vg.safe_ref(args.head) or not vg.resolve_commit(root, args.head):
+        raise UsageError(f"--head must be a plain git ref that resolves to a commit{FETCH_HINT}")
     diff = vs.load_diff(root, base, args.head)
     selected = vs.select(ctx, root, diff)
     ui = vr.ui_changes(root, ctx.profile, diff.base, diff.head)
@@ -160,25 +167,50 @@ def _checks_lines(data: dict, run: vc.ChecksRun) -> list:
     return lines
 
 
-def _checks_notices(dirty: bool, receipt: Optional[dict], custom_base: bool,
-                    root: str, profile: Optional[vp.Profile]) -> list:
-    notices = [vc.DIRTY_NOTICE] if dirty else []
+def _checks_notices(dirty_before: bool, dirty: bool, receipt: Optional[dict],
+                    custom_base: bool, root: str, profile: Optional[vp.Profile]) -> list:
+    notices = [vc.DIRTY_NOTICE] if dirty_before else []
+    if dirty and not dirty_before:
+        notices.append(vc.CHANGED_DURING_NOTICE)
     if custom_base and receipt is not None and not vr.when_skip_trusted(receipt, root, profile):
         notices.append(vc.NON_DEFAULT_BASE_NOTICE)
     return notices
 
 
+def _untracked_notice(created: Sequence[str]) -> list:
+    if not created:
+        return []
+    shown = ", ".join(created[:vc.NEW_UNTRACKED_SHOWN])
+    more = len(created) - vc.NEW_UNTRACKED_SHOWN
+    paths = shown + (f" 等，另有 {more} 筆" if more > 0 else "")
+    return [vc.NEW_UNTRACKED_NOTICE.format(paths=paths)]
+
+
+def _checked_base(args: argparse.Namespace, root: str, ctx: vp.KbContext) -> str:
+    """The diff base for checks/select; an explicit --base must resolve."""
+    base = args.base or vp.default_base(ctx.profile)
+    if not vg.safe_ref(base):
+        raise UsageError("--base must be a plain git ref")
+    if args.base and not (vg.resolve_commit(root, base)
+                          or vg.resolve_commit(root, f"origin/{base}")):
+        raise UsageError(f"--base {base} does not resolve to a commit"
+                         f"{FETCH_HINT}")
+    return base
+
+
 def cmd_checks(args: argparse.Namespace) -> int:
     info, ctx = _context(args)
     root = _require_root(info)
-    head, tree = vg.resolve_commit(root, "HEAD"), vg.head_tree(root)
-    base = args.base or vp.default_base(ctx.profile)
-    if not (head and tree) or not vg.safe_ref(base):
-        raise UsageError("HEAD must exist and --base must be a plain git ref")
-    dirty = vg.is_dirty(root)
+    before = vc.work_state(root)
+    head, tree = before.head, before.tree
+    base = _checked_base(args, root, ctx)
+    if not (head and tree):
+        raise UsageError("HEAD must exist")
     diff = vs.load_diff(root, base)
     run = vc.evaluate(root, head, ctx, diff.changes, args.dry_run)
     selected = vs.select(ctx, root, diff)
+    after = vc.work_state(root)
+    dirty, created = vc.dirty_during(before, after), vc.new_untracked(before, after)
     path, receipt = None, None
     if not args.dry_run:
         receipt = vc.build_receipt(info, ctx, run, head=head, tree=tree, dirty=dirty,
@@ -188,7 +220,9 @@ def cmd_checks(args: argparse.Namespace) -> int:
             "checks": [o.as_json() for o in run.outcomes], "dirty": dirty,
             "stale_reasons": list(run.stale), "invalid_reasons": list(run.invalid),
             "argv": {o.id: list(o.argv) for o in run.outcomes},
-            "notices": _checks_notices(dirty, receipt, bool(args.base), root, ctx.profile)}
+            "new_untracked": list(created),
+            "notices": _checks_notices(before.dirty, dirty, receipt, bool(args.base),
+                                       root, ctx.profile) + _untracked_notice(created)}
     emit(args, data, _checks_lines(data, run))
     return EXIT_FAIL if data["verdict"] == vc.FAIL else EXIT_OK
 
@@ -252,7 +286,7 @@ def cmd_receipt_generic(args: argparse.Namespace) -> int:
 
 
 def _positive(value: str, flag: str, minimum: int = 1) -> int:
-    if not value.isdigit() or int(value) < minimum:
+    if not (value.isascii() and value.isdigit()) or int(value) < minimum:
         raise UsageError(f"{flag} must be an integer >= {minimum}")
     return int(value)
 
@@ -511,6 +545,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    JsonArgumentParser.json_requested = "--json" in argv
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

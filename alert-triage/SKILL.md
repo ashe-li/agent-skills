@@ -61,9 +61,9 @@ KB_HOME="${AGENT_SKILLS_KB_HOME:-$(head -n 1 "${XDG_CONFIG_HOME:-$HOME/.config}/
 [ -d "$KB_HOME" ] || KB_HOME=""
 [ -n "$KB_HOME" ] || echo "未設定知識來源，本步驟降級為：不引用內部先驗，分類只靠 live 證據，結論標 provisional"
 # 以下依序為 learned 先驗、既往 RCA report、pattern 先驗，皆選用（不存在就略過）；知識來源若提供檢索工具就優先用，否則 grep -rn
-[ -e "$KB_HOME/wiki/learned/INDEX.md" ] && grep -iE "<alertname/service/failure-class keywords>" "$KB_HOME/wiki/learned/INDEX.md"
-[ -d "$KB_HOME/reports" ] && ls "$KB_HOME/reports" | grep -iE "<service>|<failure-class>"
-[ -d "$KB_HOME/wiki/patterns" ] && grep -riE "<keywords>" "$KB_HOME/wiki/patterns/"
+[ -n "$KB_HOME" ] && [ -e "$KB_HOME/wiki/learned/INDEX.md" ] && grep -iE "<alertname/service/failure-class keywords>" "$KB_HOME/wiki/learned/INDEX.md"
+[ -n "$KB_HOME" ] && [ -d "$KB_HOME/reports" ] && ls "$KB_HOME/reports" | grep -iE "<service>|<failure-class>"
+[ -n "$KB_HOME" ] && [ -d "$KB_HOME/wiki/patterns" ] && grep -riE "<keywords>" "$KB_HOME/wiki/patterns/"
 ```
 
 先把 grep 裡的 `<...>` 佔位符換成 Step 1 解析出的實際 alertname / service / failure-class 再執行。撈到後**點開最相關 2–3 篇全文讀**（INDEX 只有摘要，body 才有判斷依據）。
@@ -141,7 +141,7 @@ kubectl get events -n <ns> --sort-by=.lastTimestamp | tail -30
 
 ## Step 5 — RCA Report（繁體中文 → KB）
 
-寫 `$KB_HOME/reports/<YYYY-MM-DD>-<slug>.md`（`[ -d "$KB_HOME/reports" ]` 才寫；否則印一行「未設定知識來源，報告降級為只寫 `.verification/<date>/<slug>.md`」並改寫該路徑），**沿用既有 report 格式**（有同目錄近期 report 就對齊）：
+寫 `$KB_HOME/reports/<YYYY-MM-DD>-<slug>.md`（`[ -n "$KB_HOME" ] && [ -d "$KB_HOME/reports" ]` 才寫；否則印一行「未設定知識來源，報告降級為只寫 `.verification/<date>/<slug>.md`」並改寫該路徑），**沿用既有 report 格式**（有同目錄近期 report 就對齊）：
 
 ```markdown
 ---

@@ -75,6 +75,7 @@ FRONTMATTER_FENCE = "---"
 _KEY_LINE = re.compile(r"^([A-Za-z0-9_-]+)\s*:\s*(.*)$")
 _LIST_ITEM = re.compile(r"^\s*-(?:\s+(.*))?$")
 _SCP_REMOTE = re.compile(r"^(?:[^@/\s]+@)?([^:/\s]+):(?!//)(.+)$")
+SINGLE_LABEL_KEY_SEGMENTS = 3
 _BLOCK_SCALAR_MARKERS = frozenset({"|", ">", "|-", ">-", "|+", ">+"})
 
 FrontmatterValue = Union[str, tuple]
@@ -188,16 +189,21 @@ def normalize_remote_or_key(value: str) -> Optional[str]:
 
     Profiles list `host/owner/repo` directly, so a value with no scheme and
     no scp colon is taken as that form when its first segment looks like a
-    host (contains a dot) and at least owner/repo follow.
+    host (contains a dot) and at least owner/repo follow. A first segment
+    without a dot is a single-label host (an SSH config alias: the remote
+    `git@forge:team/app` normalizes to `forge/team/app`); that form is taken
+    only with exactly host/owner/repo, so the key normalize_remote produced
+    for the repo can be matched again.
     """
     normalized = normalize_remote(value)
     if normalized is not None or not isinstance(value, str):
         return normalized
     candidate = value.strip()
-    if ":" in candidate or any(c.isspace() for c in candidate):
+    if ":" in candidate or any(c.isspace() or not c.isprintable() for c in candidate):
         return None
     segments = [s for s in _clean_repo_path(candidate).split("/") if s]
-    if len(segments) < 3 or "." not in segments[0]:
+    dotted = len(segments) >= 3 and "." in segments[0]
+    if not (dotted or len(segments) == SINGLE_LABEL_KEY_SEGMENTS):
         return None
     return "/".join(segments).lower()
 

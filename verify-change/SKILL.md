@@ -65,9 +65,9 @@ $E pr register --repo <repo> --from-gh            # 建立或更新 PR 後一律
 
 | receipt | 寫出的指令 | 對應 gate | 失效條件 |
 |---|---|---|---|
-| 快檢 | `$E checks`（Step 2） | `pre_pr`，開 PR 前 | HEAD tree、profile、base、引擎版本任一變動；`dirty` 為真 |
-| 驗收 | `$E receipt acceptance --pr <n> --attachments <讀回的附件數>`；免驗收用 `receipt exempt --pr <n> --reason "<理由>"` | `ui_acceptance`，Stop | receipt 之後 PR head 的變更檔命中 profile 的 `UI` |
-| CI | `$E receipt ci --from-gh [--pr <n>]` | `ci_evidence`，Stop | head 變動；profile 的 `CI` 分區變動 |
+| 快檢 | `$E checks --repo <repo>`（Step 2） | `pre_pr`，開 PR 前 | HEAD tree、profile、base、引擎版本任一變動；`dirty` 為真 |
+| 驗收 | `$E receipt acceptance --repo <repo> --pr <n> --attachments <讀回的附件數>`；免驗收用 `$E receipt exempt --repo <repo> --pr <n> --reason "<理由>"` | `ui_acceptance`，Stop | receipt 之後 PR head 的變更檔命中 profile 的 `UI` |
+| CI | `$E receipt ci --repo <repo> --from-gh [--pr <n>]` | `ci_evidence`，Stop | head 變動；profile 的 `CI` 分區變動 |
 
 - 驗收 receipt 只在附件讀回成功（`pr-evidence-comment` Step 5）後寫，不在截圖拍完時寫。
 - CI 還沒跑完：`receipt ci --from-gh --pending-declared`，回報明講「CI 未跑完，未宣稱完成」。結論 `red` 不能用它蓋掉。非 GitHub 環境改用 `--evidence <檔>`（`verify-ci-evidence/1` JSON）。

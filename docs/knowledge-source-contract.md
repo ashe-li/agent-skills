@@ -28,7 +28,7 @@ agent-skills 只提供通用的引擎、schema 與 skill，不含任何公司或
 
 KB 根目錄底下的其他內容由使用者自行安排，agent-skills 不要求也不檢查。
 
-profile 與 repo 的對應靠 profile frontmatter 的 `remotes` 清單。比對時，repo 的 `origin` URL 會先正規化成小寫的 `host/owner/repo`（`git@host:owner/repo.git`、`https://user:token@host/owner/repo.git/`、`ssh://git@host:22/owner/repo.git` 都會變成同一個值），profile 裡的每個值也先正規化再比。
+profile 與 repo 的對應靠 profile frontmatter 的 `remotes` 清單。比對時，repo 的 `origin` URL 會先正規化成小寫的 `host/owner/repo`（`git@host:owner/repo.git`、`https://user:token@host/owner/repo.git/`、`ssh://git@host:22/owner/repo.git` 都會變成同一個值），profile 裡的每個值也先正規化再比。主機可以是單一 label 的 SSH config 別名（`git@forge:team/app.git` 正規化成 `forge/team/app`），profile 直接寫 `forge/team/app` 或同一個 scp 形式都比得上；直接寫成 key 時，第一段含 `.` 的至少三段；第一段不含 `.`（單一 label 主機）的要恰好三段（`host/owner/repo`）；都不得含空白、控制字元或 `:`。
 
 - 零份符合：`no-profile`
 - 恰好一份符合：採用該 profile
@@ -129,7 +129,7 @@ Quick checks 欄位：
 - `Argv`（必填）：要執行的指令。引擎以 Python 的 `shlex.split` 切成 argv 後直接執行，不經 shell。含有下列任一字元就判 `PROFILE-INVALID`，整個項目不執行：`;`、`|`、`&`、`$`、反引號、`<`、`>`、`(`、`)`、換行。需要管線或重導向的檢查，請包成 repo 內的腳本再引用。
 - `When`：`always`，或 `paths:` 後接 glob 清單（只在 base 到 head 的變更檔命中時才跑，否則記為 `SKIPPED`）。預設 `always`。
 - `Requires-path`：選填，相對 repo 根目錄的路徑。檔案不存在就判 `PROFILE-STALE`，不執行。
-- `Timeout`：秒，預設 300，上限 1800。
+- `Timeout`：秒，預設 300，上限 1800。快檢在自己的 process group 執行，逾時時連同它衍生的子行程一起結束，判 `FAIL`。
 - `Required`：`true` 或 `false`，預設 `true`。`false` 的項目失敗不影響 verdict。
 
 指令找不到（執行檔不存在，或 exit code 為 127）判 `PROFILE-STALE`，不判 `FAIL`：那代表 profile 跟 repo 脫節，不是產品程式壞了。
@@ -242,7 +242,7 @@ frontmatter：
 - 沒有既有檔：建立新檔，回 `created`。
 - 有既有檔：把新的 `--occurrence` 追加到 `Occurrences` 尾端，回 `appended`；`出處` 已出現過的行不重複加，全部都已存在時回 `unchanged`，檔案不動。既有的 `Pattern` 與 `Proposed trigger` 不會被改寫，傳入不同值時忽略，並在輸出的 `message` 註明被忽略的旗標。
 
-三種結果的 exit code 都是 0；slug、scope 不合法或目錄在 KB 根目錄之外時回 `invalid`、exit 1。
+三種結果的 exit code 都是 0；slug、scope 不合法或目錄在 KB 根目錄之外時回 `invalid`、exit 1。找既有檔到寫回的整段持有 `_candidates/` 目錄的 flock，同一個 slug 並行追加不會遺失出處。
 
 可升級（promotable）的條件：至少兩筆 `出處` 不同的 Occurrences，而且 Proposed trigger 通過 checklist 項目的 lint 規則（至少一個 trigger、regex 可編譯）。`candidate list` 對每個候選項目標出是否可升級與原因，不會自動升級。被否決的候選項目保留檔案，把 `status` 改成 `rejected` 並寫下原因。
 
@@ -259,7 +259,7 @@ frontmatter：
 | `base_sha` | 驗證當下 HEAD 與 `default_base` 的 merge-base |
 | `config_digest` | profile 檔、`_common.md`、引擎內建項目三者內容的 sha256（十六進位） |
 | `engine_version` | 引擎版本字串 |
-| `dirty` | 驗證當下工作樹是否不乾淨（含未追蹤檔，排除 `.verification/`） |
+| `dirty` | 快檢開始前工作樹不乾淨（含未追蹤檔，排除 `.verification/`），或快檢執行期間已追蹤的檔、index、HEAD、HEAD 的 tree 有變動，就是 true；執行期間新出現的未追蹤檔不算 |
 | `method` | `profile-quick-checks`、`generic`（沒有知識來源或沒有 profile）、`none` |
 | `checks` | 每個快檢的 `id`、`required`、`status`、`exit`、`duration_s`、`log`、`skipped_by`（`SKIPPED` 的原因：`when` 表示 `When` 沒有命中變更檔；其他狀態為 null） |
 | `selected_items` | 命中的 checklist 項目 ID |
@@ -281,13 +281,13 @@ frontmatter：
 
 只改 profile、不動產品程式，receipt 一樣會失效（`stale-config`）。
 
-`checks --base <ref>` 改變 When 與命中項目所用的 diff（merge-base(`<ref>`, HEAD)..HEAD），receipt 的 `diff_base_sha` 記下這個 merge-base，`base_sha` 仍是對 `default_base` 的 merge-base。`diff_base_sha` 不是 HEAD 與本機 `default_base` 或 `origin/<default_base>` 的 merge-base 時（本機 `default_base` 落後 origin 而改用 `--base origin/<default_base>` 仍算數），因 When 沒命中而跳過的必要快檢不算通過（例如 `--base HEAD` 讓 diff 變空，條件式快檢就全被跳過），輸出會提示這張 receipt 的條件式快檢不能當開 PR 的憑證；沒有條件式必要快檢的 profile 不受影響。
+`checks --base <ref>` 改變 When 與命中項目所用的 diff（merge-base(`<ref>`, HEAD)..HEAD），receipt 的 `diff_base_sha` 記下這個 merge-base，`base_sha` 仍是對 `default_base` 的 merge-base。`diff_base_sha` 不是 HEAD 與本機 `default_base` 或 `origin/<default_base>` 的 merge-base 時（本機 `default_base` 落後 origin 而改用 `--base origin/<default_base>` 仍算數），因 When 沒命中而跳過的必要快檢不算通過（例如 `--base HEAD` 讓 diff 變空，條件式快檢就全被跳過），輸出會提示這張 receipt 的條件式快檢不能當開 PR 的憑證；沒有條件式必要快檢的 profile 不受影響。明確給的 `--base`（`checks` 與 `select` 都一樣）解析不出 commit（本身與 `origin/<ref>` 都不行）時是用法錯誤（exit 2），不寫 receipt。
 
 `checks --dry-run` 只列出每個快檢會執行的 argv（JSON 的 `argv` 欄位），不執行任何快檢、不寫 receipt，verdict 固定為 `DRY-RUN`（只出現在指令輸出，不會出現在 receipt）。
 
 `receipt record-generic --summary <文字>` 供沒有 profile 的 repo 記錄「跑了哪些內建通用步驟」：寫一張 `method` 為 `generic`、verdict 為 `NO-KB` 或 `NO-PROFILE` 的快檢 receipt，並附 `summary`。這種 receipt 的 verdict 不是 `PASS`，判定一律是 `required-incomplete`。有 profile 符合時拒絕（`profile-present`，exit 1），請改跑 `checks`。
 
-工作樹不乾淨時 `checks` 照常執行並寫出 receipt（`dirty: true`），輸出會提示這張 receipt 不能當作開 PR 的憑證。快檢跑的是工作樹內容，不是 HEAD 的 tree；之後把未提交的修改丟掉，receipt 的鍵值會剛好等於 HEAD 的 tree，所以 `dirty: true` 的 receipt 一律無效（`dirty-at-verify`），要在乾淨的工作樹重跑。
+工作樹不乾淨時 `checks` 照常執行並寫出 receipt（`dirty: true`），輸出會提示這張 receipt 不能當作開 PR 的憑證。快檢跑的是工作樹內容，不是 HEAD 的 tree；之後把未提交的修改丟掉，receipt 的鍵值會剛好等於 HEAD 的 tree，所以 `dirty: true` 的 receipt 一律無效（`dirty-at-verify`），要在乾淨的工作樹重跑。快檢自己改了追蹤檔（formatter、`lint --fix`）時同樣記成 dirty，事後還原也不會讓它變有效；輸出另有提示。快檢產生的未追蹤檔（`__pycache__`、`.pytest_cache` 這類快取）不讓 receipt 記成 dirty，`checks` 會列出這些新出現的路徑（JSON 的 `new_untracked`）。已知限制：判定端的 `dirty-now` 仍把未追蹤檔算進去，這些快取留在工作樹時 receipt 一樣無效；請把它們加進 `.gitignore`，或在開 PR 前清掉。
 
 ### 驗收 receipt
 
@@ -341,9 +341,9 @@ frontmatter：
 | 沒有任何必要 job 已完成但結論不是 `success` | 寫出 red（exit 1）；即使還有其他必要 job 未完成、即使帶了 `--pending-declared` 也一樣 |
 | 每個必要 job 都已完成 | 拒絕，`ci-pending`；只有帶 `--pending-declared` 才寫 receipt |
 
-同一個 `run_id` 出現多個 attempt 時，只採用 attempt 最大的那一筆，與清單順序無關。同一個 workflow 在同一個 head 上有多個 run 時（例如被 `cancel-in-progress` 取消的舊 run、重新觸發），同名的 job 只採用 `run_id` 最大的那個 run 裡的那一筆，被取代的 cancelled 或 failed 不影響結論；不同 workflow 的同名 job 各自採用、合起來看。以下「失敗」與「未完成」都只看被採用的那一筆。全部核對通過且必要 job 全部 `success` 為 green。紅燈排在未完成之前：已知有必要 job 失敗時若判 pending，`--pending-declared` 就能讓一個已知紅燈以 declared-unverified 通過 gate。
+同一個 `run_id` 出現多個 attempt 時，只採用 attempt 最大的那一筆，與清單順序無關。同一個 workflow 在同一個 head 上有多個 run 時（例如被 `cancel-in-progress` 取消的舊 run、重新觸發），同名的 job 只採用 `run_id` 最大的那個 run，被取代的 cancelled 或 failed 不影響結論；被採用的 run 裡同名的 job 有多筆時（不同 job 設了相同 `name`），每一筆都要成功才算成功，與清單順序無關；不同 workflow 的同名 job 各自採用、合起來看。以下「失敗」與「未完成」都只看被採用的那一筆。全部核對通過且必要 job 全部 `success` 為 green。紅燈排在未完成之前：已知有必要 job 失敗時若判 pending，`--pending-declared` 就能讓一個已知紅燈以 declared-unverified 通過 gate。
 
-證據來源本身出問題時：`--evidence` 的檔案讀不到、不是 JSON、或不符 `verify-ci-evidence/1`（`pr` 不是整數、`runs` 不是清單）為拒絕，`evidence-invalid`，exit 1；`--from-gh` 時 `gh` 無法執行、回非 0 或輸出不是 JSON 為 `UNVERIFIABLE`，`evidence-unavailable`，exit 0，不寫 receipt。`pr register` 的證據來源有同樣問題時一律拒絕，`evidence-invalid`。
+證據來源本身出問題時：`--evidence` 的檔案讀不到、不是 JSON、或不符 `verify-ci-evidence/1`（`pr` 不是整數、`runs` 不是清單、run 或 job 不是物件）為拒絕，`evidence-invalid`，exit 1；`--from-gh` 時 `gh` 無法執行、回非 0 或輸出不是 JSON 為 `UNVERIFIABLE`，`evidence-unavailable`，exit 0，不寫 receipt。`pr register` 的證據來源有同樣問題時一律拒絕，`evidence-invalid`。
 
 CI receipt 的結論有四種：`green`、`red`、`pending-declared`、`exempt`（必須附 `--reason`）。`green` 一定對應一個非空的必要 job 集合，空集合不可能被判為全部成功。
 
@@ -409,7 +409,10 @@ gate hook 在 PostToolUse 看到下列成功的指令時建立關聯：下方規
 - 多個 refspec：逐一依上兩條處理。
 - 只推 tag（`--tags` 且沒有 branch refspec、目的是 `refs/tags/*`、名稱在該 repo 解析為 tag 而不是 branch）與刪除（`--delete`、`-d`、`<remote> :<branch>`）：不呼叫任何函式，也不關聯。
 - `--all`、`--branches`、`--mirror`：對 `registered_branches(repo)` 與本 session 已關聯的每個 branch，本機 ref 存在就 `record_push(repo, branch)`；不新增關聯，不打 repo 層級標記。
-- 判斷不了的推送才用 repo 層級的 `mark_push_unresolved(repo)`：參數含解析不出的變數、不認得的選項、目的是 `refs/` 下其他位置、detached HEAD 推送目前 branch、執行目錄解析不出來（此時對 payload 的 `cwd` 標記，前提是它是有 profile 的 repo）。
+- 判斷不了推送目標時才用 repo 層級的 `mark_push_unresolved(repo)`：參數含解析不出的變數、不認得的選項、目的是 `refs/` 下其他位置、執行目錄解析不出來（此時對 payload 的 `cwd` 標記，前提是它是有 profile 的 repo）。
+- 推目前 branch 或 `HEAD` 類來源、而同一則指令在 push 之後又有 `git checkout` 或 `git switch`：不呼叫任何函式、不關聯，只寫一筆 `push-unresolved` 決策紀錄。push 之後接 `commit`、`reset`、`stash` 等不換 branch 的指令照常處理。
+- 工具結果沒有 `tool_response`：照常處理（push 當成成功、關聯），另寫一筆 `payload-no-tool-response` 決策紀錄。
+- 明寫 `refs/heads/<name>` 的目的一律當 branch，即使本機有同名 tag。
 - `-n`、`--dry-run` 不算推送。
 
 ### gate worktree 對照
@@ -450,7 +453,7 @@ ci_evidence=enforce
 | `ts` | UTC 時間，ISO 8601 |
 | `event` | `decision`（gate 的判定）或 `link`（`gh pr create` 成功後把 session 接上 PR 號；`gh pr create` 或 `pr register` 成功但目標 repo 或 branch 解析不出來時也寫 `link`，`reason_code` 為 `link-unresolved`） |
 | `session_id` | 清洗後的 session id |
-| `gate` | `pre_pr`、`ui_acceptance`、`ci_evidence`；`link` 事件，以及 PostToolUse 階段的 `hook-timeout`／`hook-error` 為 null |
+| `gate` | `pre_pr`、`ui_acceptance`、`ci_evidence`；`link` 事件、PostToolUse 寫的 `push-unresolved`／`payload-no-tool-response`，以及 PostToolUse 階段的 `hook-timeout`／`hook-error` 為 null |
 | `mode` | 當時該 gate 的模式；`gate` 為 null 時也為 null |
 | `decision` | `allow`、`would_block`（observe 下會擋）、`block`、`released`（同一 session 同一 gate 已擋兩次後放行）；`link` 事件為 null |
 | `reason_code` | 見下方 reason code 一覽；`link` 事件一般為 null，repo 或 branch 解析不出來時為 `link-unresolved` |
@@ -459,10 +462,10 @@ ci_evidence=enforce
 | `pr` | PR 號（整數），沒有則 null |
 | `head_sha` | 判定所用的 head；`pre_pr` 為目前 HEAD |
 | `tree_sha` | `pre_pr` 為目前 `HEAD^{tree}`；Stop 的 gate 為 null |
-| `path` | `early-exit`（mode 關閉以外的提早結束：沒有關聯的 PR、沒有 profile、`cwd-unresolved`、`unparsed`）或 `full-check`；`hook-timeout`／`hook-error` 記發生當下所在的路徑；`link` 事件為 null |
+| `path` | `early-exit`（mode 關閉以外的提早結束：沒有關聯的 PR、沒有 profile、`cwd-unresolved`、`unparsed`）或 `full-check`（含 `push-unresolved`、`payload-no-tool-response`）；`hook-timeout`／`hook-error` 記發生當下所在的路徑；`link` 事件為 null |
 | `duration_ms` | 從 hook 啟動到寫這一筆的毫秒數 |
 
-一次 Stop 會對每個啟用中的 gate、每個關聯的 PR 各寫一筆。PreToolUse 在兩種情況寫：指令位置認出 `gh pr create`（含包裝指令、關鍵字之後、`$(...)`、反引號、subshell 內；帶 `--help`、`-h`、`--dry-run` 的除外，那種不寫）；或沒有認出任何 `gh pr create`（不論整段能不能解析），而引號、註解與 heredoc 之外出現 `gh pr create` 字樣（`unparsed`）。其他 Bash 指令不寫，也不碰 git 與狀態目錄。
+一次 Stop 會對每個啟用中的 gate、每個關聯的 PR 各寫一筆。PreToolUse 在兩種情況寫：指令位置認出 `gh pr create`（含包裝指令、關鍵字之後、`$(...)`、反引號、subshell 內；帶 `--help`、`-h`、`--dry-run` 的除外，那種不寫）；或沒有認出任何 `gh pr create`（不論整段能不能解析），而引號、註解與 heredoc 之外出現 `gh pr create` 字樣（`unparsed`）。一則指令有多個 `gh pr create` 時，每個各自檢查所在目錄的 repo，每個 repo 一筆。PostToolUse 只寫 `link` 事件、`push-unresolved` 與 `payload-no-tool-response`。其他 Bash 指令不寫，也不碰 git 與狀態目錄。
 
 總時限（8 秒）到期或未預期的例外讓 hook 放行時，會盡力寫一筆 decision `allow`、reason code `hook-timeout` 或 `hook-error`：pre-tool 與 Stop 對每個啟用中的 gate 各一筆，post-tool 一筆（`gate` 為 null）。狀態目錄本身不可用時寫不出來；寫入失敗一律忽略，hook 仍然 exit 0 且無輸出。
 
@@ -536,6 +539,8 @@ gate hook 在決策紀錄另外使用下列 reason code（上表的 `no-receipt`
 | `unparsed` | allow | 沒有認出任何 `gh pr create`（整段解析不了，或寫法不認得，例如 `xargs ... gh pr create`），而引號、註解與 heredoc 之外出現 `gh pr create` 字樣；observe 與 enforce 都記，不擋。當成參數傳給別的程式、未加引號的 `echo gh pr create` 也會記，屬已知的假紀錄 |
 | `receipts-unavailable` | allow | 原 worktree 已移除、改用同 repo 其他 worktree 評估時，那裡找不到對應的 receipt；不擋 |
 | `link-unresolved` | `link` 事件 | `gh pr create` 或 `pr register` 成功，但目標 repo 或 branch 解析不出來，PR 沒有關聯進 session |
+| `push-unresolved` | allow（`gate` 為 null） | 推目前 branch 或 `HEAD`、而同一則指令之後又 `checkout`／`switch`，判斷不了被推的是哪個 branch；不關聯、不打任何標記，只留紀錄 |
+| `payload-no-tool-response` | allow（`gate` 為 null） | PostToolUse 的 payload 沒有 `tool_response`；照常判斷與關聯、不打標記，留紀錄供真實 session 核對 payload 形狀 |
 | `hook-timeout` | allow | hook 的總時限（8 秒）到期，fail-open 放行 |
 | `hook-error` | allow | hook 遇到未預期的例外，fail-open 放行 |
 | `ci-red` | 擋 | CI receipt 的結論是 red |

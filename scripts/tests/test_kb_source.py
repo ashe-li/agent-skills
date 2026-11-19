@@ -183,6 +183,19 @@ class NormalizeRemoteTests(unittest.TestCase):
         # A bare host/owner/repo has no scheme or scp colon; it is not a remote URL.
         self.assertIsNone(kb.normalize_remote(EXAMPLE_KEY))
 
+    def test_single_label_host_key_round_trips(self) -> None:
+        """CodeRabbit R22／M7：SSH config 別名（單一 label 的主機）也要比得上 profile。"""
+        key = kb.normalize_remote("git@forge:team/app.git")
+        self.assertEqual(key, "forge/team/app")
+        self.assertEqual(kb.normalize_remote_or_key(key), key)
+        self.assertEqual(kb.normalize_remote_or_key("github-work/org/repo"), "github-work/org/repo")
+
+    def test_bare_strings_that_are_not_keys_stay_rejected(self) -> None:
+        for value in ("only/two", "a b/c/d", "forge/team/sub/app", "forge/te\x07am/app",
+                      "forge/te\tam/app"):
+            with self.subTest(value=value):
+                self.assertIsNone(kb.normalize_remote_or_key(value))
+
     def test_credentials_never_survive(self) -> None:
         got = kb.normalize_remote("https://u:secretvalue@github.com/o/r.git")
         self.assertEqual(got, "github.com/o/r")

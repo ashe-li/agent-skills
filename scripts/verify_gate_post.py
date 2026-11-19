@@ -39,10 +39,14 @@ def push_succeeded(result: ToolResult) -> bool:
     return not any(marker in text for marker in PUSH_FAILURE_MARKERS)
 
 
+
 def created_pr(result: ToolResult) -> tuple:
-    """(succeeded, PR number or None) for a `gh pr create` result."""
+    """(succeeded, PR number or None) for a `gh pr create` result. Without a
+    tool_response it counts as created with no PR number (the caller records that)."""
     if result.interrupted:
         return False, None
+    if not result.available:
+        return True, None
     found = _PULL_URL.search(result.stdout)
     if found is None and "already exists" in result.stderr.lower():
         found = _PULL_URL.search(result.stderr)
@@ -53,9 +57,12 @@ def created_pr(result: ToolResult) -> tuple:
 
 
 def registered(result: ToolResult) -> bool:
-    """Only the engine's own success output counts (JSON or text mode)."""
+    """Only the engine's own success output counts (JSON or text mode); without a
+    tool_response it counts as registered (the caller records that)."""
     if result.interrupted:
         return False
+    if not result.available:
+        return True
     text = f"{result.stdout}\n{result.stderr}"
     return '"result": "registered"' in text or bool(_REGISTERED_TEXT.search(text))
 
@@ -112,10 +119,12 @@ def apply_ref(ctx: Ctx, info, ref) -> None:
     if ref.kind == vcmd.REF_IGNORE:
         return
     branch = vg.current_branch(root) if ref.kind == vcmd.REF_CURRENT else ref.branch
-    if ref.kind == vcmd.REF_UNRESOLVED or not branch:
+    if ref.kind == vcmd.REF_UNRESOLVED:  # destination elsewhere under refs/
         vr.mark_push_unresolved(root, state_dir=state)
         return
-    if _is_tag(root, branch):  # only the destination decides tag vs branch
+    if not branch:
+        return  # detached HEAD: git refuses to push "the current branch"
+    if not ref.explicit and _is_tag(root, branch):  # only the destination decides
         return
     sha = vg.resolve_commit(root, ref.src) if ref.kind == vcmd.REF_REFSPEC else None
     if (sha is None and ref.kind == vcmd.REF_REFSPEC) or not (sha or vg.branch_head(root, branch)):
@@ -125,18 +134,39 @@ def apply_ref(ctx: Ctx, info, ref) -> None:
     link_branch(ctx, info, branch)
 
 
+def record_post(ctx: Ctx, key: Optional[str], reason: str) -> None:
+    """A PostToolUse decision record (gate null) that changes no state."""
+    outcome = Outcome(True, reason, key, None, None, None)
+    append_record(ctx.state, make_record(ctx, decision=D_ALLOW, outcome=outcome,
+                                         path=PATH_FULL))
+
+
+def _switched_after(invocation, plan) -> bool:
+    """An implicit / HEAD push followed in the same command by checkout or switch:
+    the branch read afterwards may not be the one that was pushed."""
+    import verify_gate_cmd as vcmd
+    return invocation.moved and any(
+        r.kind == vcmd.REF_CURRENT or (r.kind == vcmd.REF_REFSPEC and vcmd.head_relative(r.src))
+        for r in plan.refs)
+
+
 def handle_push(ctx: Ctx, invocation, result: ToolResult, fallback: Optional[str]) -> None:
-    """Record pushed heads; only an unknowable push marks the whole repo."""
+    """Record pushed heads. Only an unknowable target marks the whole repo; a push we
+    cannot attribute after a branch switch is only recorded, never marked or linked."""
     import verify_gate_cmd as vcmd
     import verify_receipts as vr
     plan = vcmd.push_plan(invocation.args)
-    if plan.kind == vcmd.PLAN_NONE or not push_succeeded(result):
+    if plan.kind == vcmd.PLAN_NONE or (result.available and not push_succeeded(result)):
         return
     info = profiled_repo(invocation.cwd if invocation.cwd else fallback)
     if info is None:
         return
+    if not result.available:
+        record_post(ctx, info.key, R_NO_TOOL_RESPONSE)
     if invocation.cwd is None or plan.kind == vcmd.PLAN_UNRESOLVED:
         vr.mark_push_unresolved(info.root, state_dir=str(ctx.state))
+    elif _switched_after(invocation, plan):
+        record_post(ctx, info.key, R_PUSH_UNRESOLVED)
     elif plan.kind == vcmd.PLAN_ALL:
         push_all(ctx, info)
     else:
@@ -154,10 +184,16 @@ def link_unresolved(ctx: Ctx, directory: Optional[str], pr: Optional[int]) -> No
     append_record(ctx.state, make_record(ctx, event=EVENT_LINK, outcome=outcome))
 
 
-def handle_pr_create(ctx: Ctx, invocation, result: ToolResult) -> None:
+def handle_pr_create(ctx: Ctx, invocation, result: ToolResult,
+                     slot: Optional[tuple] = None) -> None:
+    """`slot` = (index, numbers) when several `gh pr create` share one output: the
+    index-th number when the counts match, otherwise no PR number at all."""
     import verify_gate_cmd as vcmd
     import verify_git as vg
     succeeded, pr = created_pr(result)
+    if slot is not None:
+        index, numbers = slot
+        pr = numbers[index] if succeeded and index < len(numbers) else None
     head = vcmd.option_value(invocation.args, HEAD_OPTIONS)
     if succeeded and (invocation.cwd is None or head == vcmd.DYNAMIC_VALUE):
         if pr is not None:
@@ -170,6 +206,8 @@ def handle_pr_create(ctx: Ctx, invocation, result: ToolResult) -> None:
     if not branch:
         return
     link_branch(ctx, info, branch, pr)
+    if not result.available:
+        record_post(ctx, info.key, R_NO_TOOL_RESPONSE)
     if pr is not None:
         outcome = Outcome(True, "", info.key, branch, pr, vg.branch_head(info.root, branch))
         append_record(ctx.state, make_record(ctx, event=EVENT_LINK, outcome=outcome))
@@ -202,16 +240,28 @@ def handle_register(ctx: Ctx, invocation, result: ToolResult) -> None:
         return
     entry = vr.read_registry_entry(info.root, branch, state_dir=str(ctx.state)) or {}
     link_branch(ctx, info, branch, entry.get("pr") if isinstance(entry.get("pr"), int) else None)
+    if not result.available:
+        record_post(ctx, info.key, R_NO_TOOL_RESPONSE)
 
 
 def run_post_tool(ctx: Ctx, data: Mapping, invocations: tuple) -> int:
     import verify_gate_cmd as vcmd
-    handlers = {vcmd.KIND_PR_CREATE: handle_pr_create, vcmd.KIND_REGISTER: handle_register}
     result, fallback = tool_result(data), payload_cwd(data)
+    creates = [i for i in invocations if i.kind == vcmd.KIND_PR_CREATE]
+    numbers = pr_numbers(result, len(creates)) if len(creates) > 1 else None
     RUN["path"] = PATH_FULL
     for invocation in invocations:
         if invocation.kind == vcmd.KIND_PUSH:
             handle_push(ctx, invocation, result, fallback)
+        elif invocation.kind == vcmd.KIND_PR_CREATE:
+            slot = None if numbers is None else (creates.index(invocation), numbers)
+            handle_pr_create(ctx, invocation, result, slot)
         else:
-            handlers[invocation.kind](ctx, invocation, result)
+            handle_register(ctx, invocation, result)
     return 0
+
+
+def pr_numbers(result: ToolResult, count: int) -> tuple:
+    """PR numbers in stdout order when there is exactly one per `gh pr create`, else ()."""
+    found = tuple(int(n) for n in _PULL_URL.findall(result.stdout))
+    return found if len(found) == count else ()

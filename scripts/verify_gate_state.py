@@ -54,6 +54,8 @@ R_UNPARSED = "unparsed"
 R_HOOK_TIMEOUT, R_HOOK_ERROR = "hook-timeout", "hook-error"
 R_RECEIPTS_UNAVAILABLE = "receipts-unavailable"
 R_LINK_UNRESOLVED = "link-unresolved"
+R_PUSH_UNRESOLVED = "push-unresolved"
+R_NO_TOOL_RESPONSE = "payload-no-tool-response"
 WORKTREES_FILE, WORKTREES_SCHEMA, WORKTREES_MAX = "gate-worktrees.json", "verify-gate-worktrees/1", 500
 _REASON_BRANCH_UNSAFE = re.compile(r"[^A-Za-z0-9._/-]")
 RUN: dict = {}  # context and phase of the running hook, for the fail-open record
@@ -67,6 +69,7 @@ class ToolResult(NamedTuple):
     stdout: str
     stderr: str
     interrupted: bool
+    available: bool = True  # False when the payload carries no usable tool_response
 
 
 class Outcome(NamedTuple):
@@ -118,7 +121,7 @@ def tool_result(data: Mapping) -> ToolResult:
     if isinstance(response, str):
         return ToolResult(response, "", False)
     if not isinstance(response, dict):
-        return ToolResult("", "", False)
+        return ToolResult("", "", False, False)
     out, err = response.get("stdout"), response.get("stderr")
     return ToolResult(out if isinstance(out, str) else "", err if isinstance(err, str) else "",
                       response.get("interrupted") is True)

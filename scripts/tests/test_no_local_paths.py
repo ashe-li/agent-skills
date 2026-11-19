@@ -15,6 +15,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -68,13 +69,30 @@ def _files(root: Path, group: int) -> list[Path]:
     return found
 
 
+BINARY_SNIFF_BYTES = 8192
+
+
+def _lines(path: Path) -> Optional[list[str]]:
+    """Text lines; [] for a binary file (NUL byte); None when it cannot be read."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data[:BINARY_SNIFF_BYTES]:
+        return []
+    try:
+        return data.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return None
+
+
 def scan(root: Path, group: int) -> list[str]:
     patterns = GROUP1 if group == 1 else GROUP2
     hits: list[str] = []
     for path in _files(root, group):
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (UnicodeDecodeError, OSError):
+        lines = _lines(path)
+        if lines is None:  # 讀不了不能當成乾淨：列出來讓守衛失敗
+            hits.append(f"{path.relative_to(root)}:0 [unreadable]")
             continue
         for no, line in enumerate(lines, 1):
             for name, rx in patterns.items():
@@ -126,6 +144,14 @@ class ScannerSelfCheck(unittest.TestCase):
         self.put("docs/d.md", bad)  # group2 只掃 SKILL.md
         self.assertEqual(scan(self.root, 1), ["docs/d.md:1 [Documents/knowledge-base]"])
         self.assertEqual(scan(self.root, 2), [])
+
+    def test_unreadable_text_file_is_reported_not_skipped(self) -> None:
+        """CodeRabbit C16：讀不了（非 UTF-8）的文字檔要列出來，不能靜默略過；二進位檔另行排除。"""
+        bad = self.root / "docs" / "bad.md"
+        bad.parent.mkdir(parents=True)
+        bad.write_bytes(b"Documents/knowledge-base \xff\xfe\n")
+        (self.root / "docs" / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00Documents/knowledge-base")
+        self.assertEqual(scan(self.root, 1), ["docs/bad.md:0 [unreadable]"])
 
     def test_report_does_not_leak_line_content(self) -> None:
         self.put("a/SKILL.md", "secret-text bm25_retrieve\n")

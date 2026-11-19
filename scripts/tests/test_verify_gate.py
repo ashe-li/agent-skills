@@ -40,6 +40,7 @@ for _p in (TESTS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, str(_p))
 
 import test_verify_engine as eng  # noqa: E402
+from shlex import quote as _quote  # noqa: E402
 import test_verify_receipts as tvr  # noqa: E402
 
 try:
@@ -61,6 +62,11 @@ OTHER_REMOTE = "https://github.com/example-org/no-profile-here.git"
 EXPECTED_KEYS = {"ts", "event", "session_id", "gate", "mode", "decision", "reason_code",
                  "repo", "branch", "pr", "head_sha", "tree_sha", "path", "duration_ms"}
 SECRET_MARKER = "MARKER-do-not-echo-7731"
+
+
+def q(path) -> str:
+    """A temp path as one shell word (TMPDIR may contain spaces)."""
+    return _quote(str(path))
 
 
 def gate_env(mode: str, *gates: str) -> dict:
@@ -89,6 +95,7 @@ class GateCase(tvr.ReceiptCase):
         argv = (["bash", str(WRAPPER), *args] if wrapper
                 else [sys.executable, str(GATE_SCRIPT), *args])
         data = raw if raw is not None else json.dumps(payload)
+        self._marks = {**getattr(self, "_marks", {}), sub: len(self.decisions())}
         return subprocess.run(argv, input=data, capture_output=True, text=True,
                               env=full_env, timeout=60)
 
@@ -188,9 +195,14 @@ class GateCase(tvr.ReceiptCase):
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
     def last_decision(self, gate: str) -> dict:
-        found = [d for d in self.decisions() if d["event"] == "decision" and d["gate"] == gate]
-        self.assertTrue(found, f"沒有 {gate} 的決策紀錄：{self.decisions()}")
-        return found[-1]
+        """The newest record of `gate`, which must have been written by the most recent
+        hook call able to write it (so a silent call cannot pass on an older record)."""
+        rows = self.decisions()
+        found = [i for i, d in enumerate(rows) if d["event"] == "decision" and d["gate"] == gate]
+        self.assertTrue(found, f"沒有 {gate} 的決策紀錄：{rows}")
+        mark = getattr(self, "_marks", {}).get(GATE_SUBCOMMAND[gate], 0)
+        self.assertGreaterEqual(found[-1], mark, f"最近一次呼叫沒有寫出 {gate} 的紀錄：{rows[mark:]}")
+        return rows[found[-1]]
 
     def assert_silent(self, proc: subprocess.CompletedProcess, rc: int = 0) -> None:
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (rc, "", ""))
@@ -213,6 +225,7 @@ class GateCase(tvr.ReceiptCase):
         self.assertEqual((record["decision"], record["reason_code"]), ("allow", reason), record)
 
 
+GATE_SUBCOMMAND = {"pre_pr": "pre-tool", "ui_acceptance": "stop", "ci_evidence": "stop"}
 ENF_PRE = gate_env("enforce", "pre_pr")
 ENF_UI = gate_env("enforce", "ui_acceptance")
 ENF_CI = gate_env("enforce", "ci_evidence")
@@ -954,9 +967,9 @@ class FinalFixTest(GateCase):
         self.push("s1")
         self.register_pr()
         self.ci_receipt()
-        self.post("s1", f"git push origin no-such-ref:{FEATURE}", PUSH_OK, env=ENF_CI)
-        self.assertEqual([l["branch"] for l in vr.read_session("s1")["links"]], [FEATURE])
-        self.assert_stop_blocked(self.stop("s1", ENF_CI), "head-unresolved")
+        self.post("s2", f"git push origin no-such-ref:{FEATURE}", PUSH_OK, env=ENF_CI)
+        self.assertEqual([l["branch"] for l in vr.read_session("s2")["links"]], [FEATURE])
+        self.assert_stop_blocked(self.stop("s2", ENF_CI), "head-unresolved")
 
     def test_push_all_records_tracked_branches_without_marker(self) -> None:
         self.plain_commit()
@@ -1053,6 +1066,140 @@ class ThirdRoundTest(GateCase):
                 self.assertEqual(self.last_decision("pre_pr")["reason_code"], "cwd-unresolved")
         command = f'WT={r}; cd "$WT" && gh pr create --fill'
         self.assert_pre_blocked(self.pre("cond-plain", command, ENF_PRE), "no-receipt")
+
+
+class CodeRabbitFixTest(GateCase):
+    """PR 審查意見（R08、R09、R10、R11、R14、R15、R16、R18、C09）的重現情境。"""
+
+    def _second_repo(self) -> Path:
+        """Another checkout of the same profiled remote, with no quick receipt."""
+        return self.make_repo(name="repo-b")
+
+    def test_must_block_pre_pr_checks_every_pr_create(self) -> None:
+        self.quick_checks()
+        other = self._second_repo()
+        both = (f"gh pr create --fill && cd {q(other)} && gh pr create --fill",
+                f"cd {q(other)} && gh pr create --fill; cd {q(self.repo)} && gh pr create --fill")
+        for index, command in enumerate(both):
+            with self.subTest(command=command):
+                before = len(self.decisions())
+                self.assert_pre_blocked(self.pre(f"multi-{index}", command, ENF_PRE),
+                                        "no-receipt")
+                rows = self.decisions()[before:]
+                self.assertEqual(sorted((r["decision"], r["reason_code"]) for r in rows),
+                                 [("allow", "verified"), ("block", "no-receipt")])
+
+    def test_pr_create_with_unresolved_directory_does_not_hide_others(self) -> None:
+        self.quick_checks()
+        before = len(self.decisions())
+        command = 'gh pr create --fill; cd "$UNSET_DIR" && gh pr create --fill'
+        self.assert_silent(self.pre("mixed", command, ENF_PRE))
+        self.assertEqual(sorted(r["reason_code"] for r in self.decisions()[before:]),
+                         ["cwd-unresolved", "verified"])
+
+    def test_command_or_builtin_cd_changes_directory(self) -> None:
+        self.quick_checks()
+        other = self._second_repo()
+        for index, prefix in enumerate(("command cd", "builtin cd")):
+            with self.subTest(prefix=prefix):
+                command = f"{prefix} {q(other)} && gh pr create --fill"
+                self.assert_pre_blocked(self.pre(f"cdw-{index}", command, ENF_PRE),
+                                        "no-receipt")
+
+    def test_failed_cd_then_semicolon_is_cwd_unresolved(self) -> None:
+        missing = q(self.root / "no-such-dir")
+        for index, command in enumerate((f"cd {missing}; gh pr create --fill",
+                                         f"cd {missing}\ngh pr create --fill")):
+            with self.subTest(command=command):
+                before = len(self.decisions())
+                self.assert_silent(self.pre(f"cdx-{index}", command, ENF_PRE))
+                self.assertEqual([r["reason_code"] for r in self.decisions()[before:]],
+                                 ["cwd-unresolved"])
+        before = len(self.decisions())
+        self.assert_silent(self.pre("cdx-and", f"cd {missing} && gh pr create --fill", ENF_PRE))
+        self.assertEqual(self.decisions()[before:], [])
+
+    def test_push_then_branch_switch_only_records(self) -> None:
+        self.plain_commit()
+        self.push("s1")
+        self.register_none()  # FEATURE: exempt while its head is unchanged
+        self.assert_silent(self.stop("s1", ENF_CI))
+        self.assert_allowed("ci_evidence", "exempt-none")
+        self.git(self.repo, "checkout", "-q", "-b", "side")
+        self.plain_commit("7")
+        self.git(self.repo, "checkout", "-q", "main")  # the command below already ran
+        before = len(self.decisions())
+        self.post("s1", "git push && git checkout main", PUSH_OK, env=ENF_CI)
+        self.assertEqual([(r["gate"], r["decision"], r["reason_code"])
+                          for r in self.decisions()[before:]],
+                         [(None, "allow", "push-unresolved")])
+        self.assertEqual([l["branch"] for l in vr.read_session("s1")["links"]], [FEATURE])
+        self.assertIsNone(vr.push_unresolved_at(eng.EXAMPLE_KEY))
+        for branch in ("main", "side"):
+            self.assertIsNone(vr.read_registry_entry(str(self.repo), branch))
+        self.assert_silent(self.stop("s1", ENF_CI))
+        self.assert_allowed("ci_evidence", "exempt-none")
+
+    def test_push_then_commands_that_keep_the_branch_record_normally(self) -> None:
+        for index, tail in enumerate(("git commit --allow-empty -qm x", "git stash pop",
+                                      "git log -1", "git status")):
+            command = f"git push && {tail}" if index != 2 else f"git push; {tail}"
+            with self.subTest(command=command):
+                session = f"keep-{index}"
+                self.post(session, command, PUSH_OK, env=ENF_CI)
+                self.assertEqual([l["branch"] for l in vr.read_session(session)["links"]],
+                                 [FEATURE])
+        self.assertIsNone(vr.push_unresolved_at(eng.EXAMPLE_KEY))
+        self.assertEqual([d for d in self.decisions() if d["reason_code"] == "push-unresolved"], [])
+
+    def test_checkout_then_push_records_the_checked_out_branch(self) -> None:
+        head = self.plain_commit()
+        self.post("s1", f"git checkout {FEATURE} && git push", PUSH_OK, env=ENF_CI)
+        self.assertEqual(vr.read_session("s1")["links"][0]["branch"], FEATURE)
+        self.assertEqual(vr.read_registry_entry(str(self.repo), FEATURE)
+                         ["last_pushed_head"]["sha"], head)
+        self.assertIsNone(vr.push_unresolved_at(eng.EXAMPLE_KEY))
+
+    def test_missing_tool_response_links_normally_and_records(self) -> None:
+        head = self.plain_commit()
+        self.post("s1", f"git push -u origin {FEATURE}", None, env=ENF_CI)
+        self.post("s2", "gh pr create --fill", None, env=ENF_CI)
+        self.post("s3", "python3 scripts/verify_engine.py pr register --from-gh", None,
+                  env=ENF_CI)
+        for session in ("s1", "s2", "s3"):
+            self.assertEqual([(l["branch"], l["pr"]) for l in vr.read_session(session)["links"]],
+                             [(FEATURE, None)])
+        self.assertEqual(vr.read_registry_entry(str(self.repo), FEATURE)
+                         ["last_pushed_head"]["sha"], head)
+        self.assertIsNone(vr.push_unresolved_at(eng.EXAMPLE_KEY))
+        self.assertEqual([(r["gate"], r["decision"], r["reason_code"]) for r in self.decisions()],
+                         [(None, "allow", "payload-no-tool-response")] * 3)
+
+    def test_explicit_heads_ref_is_a_branch_even_if_a_tag_shares_the_name(self) -> None:
+        self.plain_commit()
+        self.git(self.repo, "tag", "v1")
+        self.post("s1", "git push origin HEAD:refs/heads/v1", PUSH_OK, env=ENF_CI)
+        self.assertEqual([l["branch"] for l in vr.read_session("s1")["links"]], ["v1"])
+
+    def test_several_pr_creates_pair_numbers_only_when_counts_match(self) -> None:
+        self.plain_commit()
+        command = f"gh pr create --fill && gh pr create --head {FEATURE}-b --fill"
+        url_b = PR_URL.replace("/42", "/43")
+        self.post("one", command, {"stdout": PR_URL, "stderr": ""}, env=ENF_CI)
+        self.assertEqual({l["pr"] for l in vr.read_session("one")["links"]}, {None})
+        self.assertEqual([d for d in self.decisions() if d["event"] == "link"], [])
+        self.post("two", command, {"stdout": PR_URL + url_b, "stderr": ""}, env=ENF_CI)
+        self.assertEqual(sorted((l["branch"], l["pr"]) for l in vr.read_session("two")["links"]),
+                         [(FEATURE, 42), (f"{FEATURE}-b", 43)])
+
+    def test_fail_open_invalid_utf8_bytes(self) -> None:
+        env = {**os.environ, "AGENT_SKILLS_DIR": str(self.skills),
+               **gate_env("enforce", "pre_pr", "ui_acceptance", "ci_evidence")}
+        for sub in ("pre-tool", "post-tool", "stop"):
+            with self.subTest(sub=sub):
+                proc = subprocess.run(["bash", str(WRAPPER), sub], input=b"\xff\xfe{",
+                                      capture_output=True, env=env, timeout=60)
+                self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, b"", b""))
 
 
 class CommandParsingTest(unittest.TestCase):

@@ -298,6 +298,49 @@ class RunnerPatternTests(unittest.TestCase):
             ),
         )
 
+    def test_pytest_param_id_with_spaces(self):
+        """CodeRabbit L-3：參數化 id 含空白也要抓得到。"""
+        log = ("tests/t.py::test_a[two words] PASSED [ 50%]\n"
+               "tests/t.py::test_b PASSED [100%]\n")
+        self.assertEqual(self.ids("pytest", log),
+                         ("tests/t.py::test_a[two words]", "tests/t.py::test_b"))
+
+    def test_unittest_docstring_style_two_line_output(self):
+        """CodeRabbit C24：-v 遇到 docstring 時識別碼單獨一行，下一行才是 `... ok`。"""
+        log = ("test_x (pkg.mod.Cls.test_x)\nDoes a thing. ... ok\n"
+               "test_y (pkg.mod.Cls.test_y) ... ok\n"
+               "FAIL: test_z (pkg.mod.Cls.test_z)\n")
+        self.assertEqual(self.ids("unittest", log), ("pkg.mod.Cls.test_x", "pkg.mod.Cls.test_y"))
+
+    def test_skipped_tests_are_not_counted_as_run(self):
+        """R19／C24：pytest 的 SKIPPED 與 unittest 的 skipped（含 docstring 兩行式）不算已執行。"""
+        cases = {
+            "pytest": ("tests/t.py::test_a",
+                       "tests/t.py::test_a SKIPPED (not today) [ 50%]\n"
+                       "tests/t.py::test_b PASSED [100%]\n"),
+            "unittest": ("pkg.T.test_a",
+                         "test_a (pkg.T.test_a) ... skipped 'later'\ntest_b (pkg.T.test_b) ... ok\n"),
+            "unittest docstring": ("pkg.T.test_a",
+                                   "test_a (pkg.T.test_a)\nDoes a thing. ... skipped 'later'\n"
+                                   "test_b (pkg.T.test_b) ... ok\n"),
+        }
+        for label, (ident, log) in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                runner = label.split()[0]
+                proc = run_cli("ids", "--ids-file", write_tmp(tmp, "ids.txt", ident + "\n"),
+                               "--log", write_tmp(tmp, "log.txt", log), "--runner", runner)
+                self.assertIn(f"SKIPPED {ident}", proc.stdout)
+                self.assertNotIn(f"\nFOUND {ident}", proc.stdout)
+                self.assertEqual((verdict_of(proc), proc.returncode), ("VERDICT: FAIL", 1))
+
+    def test_skipped_in_one_matrix_job_but_run_in_another_is_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = run_cli("ids", "--ids-file", write_tmp(tmp, "ids.txt", "pkg.T.test_a\n"),
+                           "--log", write_tmp(tmp, "a.log", "test_a (pkg.T.test_a) ... skipped 'x'\n"),
+                           "--log", write_tmp(tmp, "b.log", "test_a (pkg.T.test_a) ... ok\n"),
+                           "--runner", "unittest")
+        self.assertEqual(verdict_of(proc), "VERDICT: PASS")
+
     def test_pytest_quiet_output_lists_nothing(self):
         self.assertEqual(self.ids("pytest", "..F.\n1 failed, 3 passed in 0.2s\n"), ())
 

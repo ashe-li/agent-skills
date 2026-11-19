@@ -92,6 +92,8 @@ def _validate(data: object) -> dict:
     for run in data["runs"]:
         if not isinstance(run, dict) or not isinstance(run.get("jobs", []), list):
             raise EvidenceError("every run must be an object with a jobs list")
+        if not all(isinstance(job, dict) for job in run.get("jobs") or []):
+            raise EvidenceError("every job must be an object")
     return data
 
 
@@ -119,7 +121,7 @@ def _gh(root: str, *args: str):
 
 
 def gh_pr_view(root: str, pr: Optional[str]) -> dict:
-    if pr is not None and not (pr.isdigit() and int(pr) > 0):
+    if pr is not None and not (pr.isascii() and pr.isdigit() and int(pr) > 0):
         raise EvidenceError("--pr must be a positive integer")
     args = ("pr", "view", *((pr,) if pr else ()), "--json", PR_FIELDS)
     view = _gh(root, *args)
@@ -216,22 +218,26 @@ def _attribution(info: vr.RepoInfo, data: dict, state_dir: Optional[str]) -> tup
 
 
 def adopted_jobs(runs: Sequence[dict]) -> dict:
-    """job name -> jobs that count, one per workflow.
+    """job name -> jobs that count.
 
-    `runs` already holds one attempt per run_id. Within a workflow, the job
-    from the run with the highest run_id supersedes older runs of the same
-    workflow on the same head (cancelled duplicates, earlier re-triggers).
+    `runs` already holds one attempt per run_id. Within a workflow, the run
+    with the highest run_id that has a job of that name supersedes older
+    runs of the same workflow on the same head (cancelled duplicates, earlier
+    re-triggers). Every job of that name inside the adopted run counts, so
+    two same-named jobs in one run must both succeed.
     """
     best = {}
     for run in runs:
         run_id = run.get("run_id") if isinstance(run.get("run_id"), int) else -1
         for job in run.get("jobs") or []:
             key = (run.get("workflow"), job.get("name"))
-            if key not in best or run_id > best[key][0]:
-                best[key] = (run_id, job)
+            best[key] = max(best.get(key, run_id), run_id)
     seen = {}
-    for (_, name), (_, job) in best.items():
-        seen.setdefault(name, []).append(job)
+    for run in runs:
+        run_id = run.get("run_id") if isinstance(run.get("run_id"), int) else -1
+        for job in run.get("jobs") or []:
+            if best[(run.get("workflow"), job.get("name"))] == run_id:
+                seen.setdefault(job.get("name"), []).append(job)
     return seen
 
 

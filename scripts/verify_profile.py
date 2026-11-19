@@ -298,7 +298,7 @@ def _parse_when(raw: str) -> tuple:
 def _parse_timeout(raw: str) -> tuple:
     if not raw:
         return DEFAULT_TIMEOUT, ()
-    if not raw.isdigit() or not 1 <= int(raw) <= MAX_TIMEOUT:
+    if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= MAX_TIMEOUT:
         return DEFAULT_TIMEOUT, (f"Timeout must be 1..{MAX_TIMEOUT} seconds",)
     return int(raw), ()
 

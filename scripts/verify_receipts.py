@@ -31,7 +31,7 @@ from verify_registry import (  # noqa: F401  (re-exported public API)
     resolve_head, sanitize_session_id, _read_entry)
 from verify_state import (  # noqa: F401  (re-exported public API)
     DEFAULT_STATE_PARTS, DIR_MODE, ENV_STATE_DIR, FILE_MODE, HASH_CHARS, LOCK_NAME,
-    RepoInfo, StateError, dump_json, now_iso, parse_time, read_json, repo_info, safe_dir,
+    RepoInfo, StateError, dir_lock, dump_json, now_iso, parse_time, read_json, repo_info, safe_dir,
     state_dir_path, state_lock, state_root, write_bytes_atomic)
 
 ENGINE_VERSION = "1.0.0"

@@ -3,8 +3,19 @@
 
 New format: one second-level section per claim, `## <n>. <claim>`; the
 evidence command lives in one bash fenced block under it; outside the block
-two lines, `關鍵輸出：...` and `判定：PASS|FAIL|UNVERIFIABLE`. An UNVERIFIABLE
-claim carries no block.
+two lines, `關鍵輸出：...` and `判定：PASS|FAIL|UNVERIFIABLE`, both required
+(an UNVERIFIABLE claim writes `關鍵輸出：—`). An UNVERIFIABLE claim carries
+no block.
+
+`\\|` inside a fenced block is a SCHEMA-DEFECT when the same line runs an
+ERE/PCRE tool (grep -E/-P, egrep, rg, awk, sed -E): there it matches a
+literal pipe and silently finds nothing. Elsewhere it is only a warning
+(ESCAPED-PIPE): a leftover of table escaping, or a valid BRE alternation
+such as `grep 'a\\|b'`. In a legacy table cell it stays a SCHEMA-DEFECT.
+
+`extract` wraps each claim's commands in its own `( ... )` subshell so a
+`cd`, a variable or `set -e` in one claim cannot leak into the next; the
+`echo "=== #n"` marker stays outside.
 
 Neither subcommand runs anything: both are plain text processing.
 
@@ -28,6 +39,7 @@ BLOCK_LANGS = frozenset({"bash", "sh"})
 HEADING_RE = re.compile(r"^##\s+(?P<n>\d+)\.\s+(?P<title>.+?)\s*$")
 H2_RE = re.compile(r"^##(?!#)")
 VERDICT_RE = re.compile(r"^判定[：:]\s*(?P<v>.*?)\s*$")
+KEY_OUTPUT_RE = re.compile(r"^關鍵輸出[：:]")
 FENCE_RE = re.compile(r"^(?P<ch>`{3,}|~{3,})\s*(?P<info>[^`]*)$")
 LEGACY_MARK = "證據指令"
 ESCAPED_PIPE = "\\|"
@@ -35,6 +47,15 @@ EC_ERROR = "error"
 EC_WARNING = "warning"
 EXIT_OK, EXIT_ERRORS, EXIT_USAGE = 0, 1, 2
 ECHO_FMT = 'echo "=== #{n}"'
+SUBSHELL_OPEN, SUBSHELL_CLOSE = "(", ")"
+ERE_TOOL_RE = re.compile(
+    r"\b(?:egrep|rg|awk|gawk|mawk)\b"
+    r"|\bgrep\b[^|;&]*?\s(?:-[A-Za-z]*[EP][A-Za-z]*|--extended-regexp|--perl-regexp)\b"
+    r"|\bsed\b[^|;&]*?\s(?:-[A-Za-z]*[Er][A-Za-z]*|--regexp-extended)\b")
+ERE_PIPE_MSG = ("block 內在 ERE／PCRE 指令（grep -E／-P、egrep、rg、awk、sed -E）裡寫了 `\\|`："
+                "這些語法的 `\\|` 比對字面的直線，會靜默回 0 筆；交替請寫 `|`")
+ESCAPED_PIPE_MSG = ("block 內出現反斜線加直線：若是表格跳脫的殘留，請拿掉反斜線；"
+                    "若是 BRE 的交替（grep 'a\\|b'），可忽略或改用 grep -E 'a|b'")
 
 
 class Issue(NamedTuple):
@@ -56,6 +77,7 @@ class Claim(NamedTuple):
     blocks: tuple[Block, ...]
     verdict: Optional[str]
     verdict_line: int
+    has_key_output: bool = True
 
 
 class Parsed(NamedTuple):
@@ -154,13 +176,15 @@ def _build_claims(lines: Sequence[str], blocks: Sequence[Block], covered: set[in
 
 def _claim_from_range(lines, blocks, covered, ln: int, n: int, end: int) -> Claim:
     mine = tuple(b for b in blocks if ln < b.start < end and b.lang in BLOCK_LANGS)
-    verdict, vline = None, 0
+    verdict, vline, key_output = None, 0, False
     for i in range(ln + 1, end):
-        m = VERDICT_RE.match(lines[i - 1]) if i not in covered else None
-        if m:
+        if i in covered:
+            continue
+        key_output = key_output or bool(KEY_OUTPUT_RE.match(lines[i - 1]))
+        m = VERDICT_RE.match(lines[i - 1])
+        if m and verdict is None:
             verdict, vline = m.group("v"), i
-            break
-    return Claim(n, ln, mine, verdict, vline)
+    return Claim(n, ln, mine, verdict, vline, key_output)
 
 
 def parse(text: str) -> Parsed:
@@ -179,6 +203,8 @@ def _claim_issues(claim: Claim, expected: int) -> list[Issue]:
         out.append(Issue(claim.line, "NO-VERDICT", "缺少「判定：」行"))
     elif claim.verdict not in VERDICTS:
         out.append(Issue(claim.verdict_line, "BAD-VERDICT", f"判定值 {claim.verdict!r} 不是 PASS／FAIL／UNVERIFIABLE"))
+    if not claim.has_key_output:
+        out.append(Issue(claim.line, "NO-KEY-OUTPUT", "缺少「關鍵輸出：」行（UNVERIFIABLE 寫「關鍵輸出：—」）"))
     out.extend(_block_issues(claim))
     return out
 
@@ -195,8 +221,10 @@ def _block_issues(claim: Claim) -> list[Issue]:
         out.append(Issue(claim.blocks[1].start, "MULTI-BLOCK", "一條宣稱只能有一個 bash block"))
     for block in claim.blocks:
         for off, text in enumerate(block.lines, start=1):
-            if ESCAPED_PIPE in text:
-                out.append(Issue(block.start + off, "SCHEMA-DEFECT", "block 內出現反斜線加直線；fenced block 不需要跳脫"))
+            if ESCAPED_PIPE in text and ERE_TOOL_RE.search(text):
+                out.append(Issue(block.start + off, "SCHEMA-DEFECT", ERE_PIPE_MSG))
+            elif ESCAPED_PIPE in text:
+                out.append(Issue(block.start + off, "ESCAPED-PIPE", ESCAPED_PIPE_MSG, EC_WARNING))
     return out
 
 
@@ -223,8 +251,10 @@ def extract_text(text: str) -> str:
         if claim.verdict == UNVERIFIABLE or not claim.blocks:
             continue
         parts.append(ECHO_FMT.format(n=claim.number))
+        parts.append(SUBSHELL_OPEN)
         for block in claim.blocks:
             parts.extend(block.lines)
+        parts.append(SUBSHELL_CLOSE)
     return "\n".join(parts) + "\n" if parts else ""
 
 

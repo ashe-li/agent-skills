@@ -30,8 +30,11 @@ ids-file: one changed-test identifier per line; blank lines and `#` lines skip.
     prefix           the log identifier starts with the value at a `.`/`/`/`:` boundary
 Several --log files (matrix jobs) are unioned and deduplicated.
 
-ids verdict: PASS (every id found), FAIL (some NOT-FOUND), UNVERIFIABLE (the
-    pattern lists nothing in any log, or the ids file is empty).
+ids verdict: PASS (every id found), FAIL (some NOT-FOUND or SKIPPED),
+    UNVERIFIABLE (the pattern lists nothing in any log, or the ids file is
+    empty). With --runner unittest/pytest an id listed only as skipped (pytest
+    SKIPPED, unittest `... skipped`) prints `SKIPPED <id>`: it was collected
+    but did not run. A run in any one log (matrix job) is enough for FOUND.
 count verdict: INFO or UNVERIFIABLE (a side has no count). Never PASS: totals
     move for unrelated reasons and cannot prove a specific test ran. A side's
     count is the sum of its matches; `matches=` shows how many there were.
@@ -61,10 +64,12 @@ TIMESTAMP_RE = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ?")
 
 _STATUS = r"(?:PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)"
 RUNNER_PATTERNS: Mapping[str, str] = {
-    # `test_x (pkg.mod.Cls.test_x) ... ok`; docstring-style lines are not caught
-    "unittest": r"^\w+ \(([\w.]+)\) \.\.\. ",
-    # `tests/a.py::Cls::test_x PASSED`; xdist `[gw0] PASSED tests/..` not caught
-    "pytest": rf"^(\S+\.py::\S+)\s+{_STATUS}\b",
+    # `test_x (pkg.mod.Cls.test_x) ... ok`, or the same id alone on its line
+    # when a docstring follows on the next line (`-v` with docstrings)
+    "unittest": r"^\w+ \(([\w.]+)\)(?: \.\.\. |$)",
+    # `tests/a.py::Cls::test_x[param id] PASSED`; the param id may hold spaces.
+    # xdist `[gw0] PASSED tests/..` is not caught
+    "pytest": rf"^(\S+\.py::.+?)\s+{_STATUS}\b",
     # `PASS src/a.test.ts (1.2 s)`; captures the test FILE, not single tests
     "jest": r"^(?:PASS|FAIL)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\b",
     # list reporter `✓  1 [chromium] › a.spec.ts:3:5 › title`; captures the FILE
@@ -72,6 +77,15 @@ RUNNER_PATTERNS: Mapping[str, str] = {
         r"^\s*(?:✓|✔|✘|x|-|·)\s+\d+\s+(?:\[[^\]]+\]\s+›\s+)?"
         r"(\S+\.(?:spec|test)\.[cm]?[jt]sx?):\d+:\d+"
     ),
+}
+
+
+# With --runner, a listed id whose status says it was skipped is reported as
+# SKIPPED (not run), never FOUND. The status follows the id on the same line,
+# or, for unittest -v with a docstring, on the next line.
+SKIP_STATUS: Mapping[str, "re.Pattern[str]"] = {
+    "unittest": re.compile(r"\.\.\. skipped\b"),
+    "pytest": re.compile(r"^\s*SKIPPED\b"),
 }
 
 
@@ -108,6 +122,22 @@ def _matches(text: str, pattern: "str | re.Pattern[str]") -> list[str]:
     return found
 
 
+def extract_listing(text: str, pattern: "re.Pattern[str]",
+                    skip: Optional["re.Pattern[str]"]) -> tuple[tuple[str, bool], ...]:
+    """(id, skipped) for every listed id, in order; skipped needs a skip pattern."""
+    lines = [normalize_line(raw) for raw in text.splitlines()]
+    found: list[tuple[str, bool]] = []
+    for index, line in enumerate(lines):
+        hit = pattern.search(line)
+        if not hit or hit.group(1) is None:
+            continue
+        status = line[hit.end(1):]
+        if not line[hit.end():].strip() and index + 1 < len(lines):
+            status += " " + lines[index + 1]
+        found.append((hit.group(1), bool(skip and skip.search(status))))
+    return tuple(found)
+
+
 def extract_ids(text: str, pattern: "str | re.Pattern[str]") -> tuple[str, ...]:
     """Identifiers listed in `text`, in first-seen order, deduplicated."""
     return tuple(dict.fromkeys(_matches(text, pattern)))
@@ -137,6 +167,12 @@ def judge_ids(
     return flags, PASS if all(ok for _, ok in flags) else FAIL
 
 
+def _status(ident: str, ok: bool, skipped: Sequence[str], mode: str) -> str:
+    if ok:
+        return "FOUND"
+    return "SKIPPED" if any(is_match(ident, seen, mode) for seen in skipped) else "NOT-FOUND"
+
+
 def read_text(path: str) -> str:
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -151,15 +187,22 @@ def read_ids_file(path: str) -> tuple[str, ...]:
 
 def run_ids(args: argparse.Namespace) -> int:
     pattern = compile_pattern(args.pattern or RUNNER_PATTERNS[args.runner])
+    skip = SKIP_STATUS.get(args.runner) if args.runner else None
     wanted = read_ids_file(args.ids_file)
-    collected: dict[str, None] = {}
+    ran: dict[str, None] = {}
+    skipped: dict[str, None] = {}
     for log in args.log:
-        collected.update(dict.fromkeys(extract_ids(read_text(log), pattern)))
-    flags, verdict = judge_ids(wanted, tuple(collected), args.match)
+        for ident, was_skipped in extract_listing(read_text(log), pattern, skip):
+            (skipped if was_skipped else ran)[ident] = None
+    listed = {**ran, **skipped}
+    flags, verdict = judge_ids(wanted, tuple(ran), args.match)
+    if verdict == UNVERIFIABLE and wanted and skipped:
+        verdict = FAIL  # something was listed, but only as skipped
     print(f"MATCH: {args.match}")
-    print(f"LISTED: {len(collected)} identifiers across {len(args.log)} log(s)")
+    print(f"LISTED: {len(listed)} identifiers across {len(args.log)} log(s)"
+          f"{f' ({len(skipped)} skipped)' if skipped else ''}")
     for ident, ok in flags:
-        print(f"{'FOUND' if ok else 'NOT-FOUND'} {ident}")
+        print(f"{_status(ident, ok, tuple(skipped), args.match)} {ident}")
     print(f"VERDICT: {verdict}")
     return EXIT_FAIL if verdict == FAIL else EXIT_OK
 

@@ -470,7 +470,7 @@ echo '{"prompt":"幫我實作這個 plan","cwd":"/path/to/normal/repo"}' \
 
 **本 session 關聯哪些 PR**：PostToolUse 在指令位置看到下列任一個成功的指令，就把目標 repo 加 branch 記進本 session 的關聯檔：
 
-- `git push`：另外把推上去的 head 寫進註冊表的最新推送 head。一般寫法取被推送 branch 本機 ref 當下的 head；`<src>:<branch>`（例如從 detached HEAD 推 `HEAD:feat/x`）取 `<src>` 在該 repo 解析出的 SHA，記在目的 branch 名下；目的 branch 已知但 `<src>` 解析不出來時，把推送未解析的標記記在該 branch。只推 tag 與刪除遠端 branch 不記錄、不關聯。`--all`、`--mirror` 對註冊表有條目或本 session 已關聯的每個 branch 以本機 ref 記錄，不新增關聯。只有真的判斷不了的推送（參數含解析不出的變數、不認得的選項、目錄解析不出來）才把整個 repo 標為推送未解析，詳見第 2 節的表。
+- `git push`：另外把推上去的 head 寫進註冊表的最新推送 head。一般寫法取被推送 branch 本機 ref 當下的 head；`<src>:<branch>`（例如從 detached HEAD 推 `HEAD:feat/x`）取 `<src>` 在該 repo 解析出的 SHA，記在目的 branch 名下；目的 branch 已知但 `<src>` 解析不出來時，把推送未解析的標記記在該 branch。只推 tag 與刪除遠端 branch 不記錄、不關聯。`--all`、`--mirror` 對註冊表有條目或本 session 已關聯的每個 branch 以本機 ref 記錄，不新增關聯。只有真的判斷不了推送目標時才把整個 repo 標為推送未解析：參數含解析不出的變數、不認得的選項、目錄解析不出來、目的是 `refs/` 下其他位置。推的是目前 branch 或 `HEAD` 類來源、而同一則指令在 push 之後又有 `git checkout` 或 `git switch` 時，hook 在整則指令跑完後讀到的 branch 可能已不是被推的那個：這時不關聯、不打任何標記，只在決策紀錄寫一筆 `push-unresolved`。push 之後接 `commit`、`reset`、`stash`、`log` 等不換 branch 的指令照常記錄；push 之前的 checkout（`git checkout feat && git push`）也照常記錄。詳見第 2 節的表。
 - `gh pr create`：另外在決策紀錄寫一筆 `link` 事件，把 session、repo、branch 接上 PR 號（從輸出中的 `/pull/<數字>` 取得）。帶 `--help`、`-h`、`--dry-run` 的不算建立 PR，不記錄。
 - `verify_engine.py pr register`：包含 skill 裡的寫法 `$E pr register --repo . --from-gh`（`E` 在同一則指令內定義，或根本沒定義），以及 `python3 ${AGENT_SKILLS_HOME:-...}/scripts/verify_engine.py pr register ...`。只在工具輸出含引擎的註冊成功字樣時才關聯（JSON 模式的 `"result": "registered"`，或文字模式以 `registered <branch>: pr=<n> state=<s>` 開頭的一行）；輸出被丟掉（`> /dev/null`、`| tail -0`）就不會關聯。只做驗收、沒有 push 的 session 靠這一步進入檢查，所以這一步的輸出要留在工具結果裡。
 
@@ -502,7 +502,7 @@ hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`�
 - 先賦值再使用：`WT=/abs/path; cd "$WT" && gh pr create`、`git -C "$WT" push`、`--repo "$WT"`、`--head "$BR"`
 - 命令替換與 subshell 內：`URL=$(gh pr create --fill)`、`` echo `gh pr create` ``、`... || (gh pr create)`、`(cd x && git push)`
 - `git push`、`git push -u origin HEAD`、`git -C <路徑> push origin <branch>`、`git -c k=v --no-pager push ...`
-- `cd <路徑> && gh pr create`（`cd` 之後以 `&&`、`;`、換行接續的指令都視為在該目錄執行）。`cd` 出現在關鍵字之後或複合指令裡（`if …; then cd X && gh pr create; fi`、`{ cd X && …; }`、`for …; do cd X …`）時不採用：作用範圍不模擬，之後所有段落的目錄一律算解析不出來，記 `cwd-unresolved`、不擋
+- `cd <路徑> && gh pr create`（`cd` 之後以 `&&`、`;`、換行接續的指令都視為在該目錄執行；`command cd`、`builtin cd` 同樣算 `cd`）。`cd` 的目標目錄不存在時：以 `&&` 接續的段落不會執行，不算；以 `;` 或換行接續的會在原目錄執行，判不準，記 `cwd-unresolved`。`cd` 出現在關鍵字之後或複合指令裡（`if …; then cd X && gh pr create; fi`、`{ cd X && …; }`、`for …; do cd X …`）時不採用：作用範圍不模擬，之後所有段落的目錄一律算解析不出來，記 `cwd-unresolved`、不擋
 - `python3 scripts/verify_engine.py pr register --from-gh`、`E="python3 .../verify_engine.py"` 之後的 `$E pr register ...`、只有尾段是字面的 `python3 ${...}/scripts/verify_engine.py pr register ...`
 
 明確不算的寫法（放行，不留紀錄）：
@@ -515,6 +515,8 @@ hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`�
 | 情況 | reason code |
 |---|---|
 | 認得 `gh pr create`，但目錄解析不出來（`cd "$WT" && gh pr create` 的 `WT` 沒有在同一則指令裡賦值，或值含命令替換） | `cwd-unresolved` |
+| `git push` 推的是目前 branch 或 `HEAD`、而同一則指令之後又 `checkout`／`switch`，判斷不了被推的是哪個 branch（見第 1 節）。不關聯、不打標記；這筆紀錄由 PostToolUse 寫，`gate` 與 `mode` 為 null | `push-unresolved` |
+| PostToolUse 的 payload 沒有 `tool_response`。照常判斷並關聯（`git push` 當成成功、`gh pr create` 沒有 PR 號），只多留這筆紀錄，供安裝後在真實 session 核對 payload 形狀；`gate` 與 `mode` 為 null | `payload-no-tool-response` |
 | 沒有認出任何 `gh pr create`（不論整段能不能解析），而引號、註解與 heredoc 之外出現 `gh pr create` 字樣：`xargs ... gh pr create` 這類不認得的包裝、process substitution、`case` 分支內等 | `unparsed` |
 
 `unparsed` 會有少量假紀錄：未加引號、當成參數傳給別的程式的 `echo gh pr create` 也會記一筆。只影響量測，不會擋。
@@ -525,8 +527,8 @@ hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`�
 
 | 寫法 | 判定 |
 |---|---|
-| 沒有位置參數，或只有 remote；refspec 為 `HEAD` 或 `@` | 目前 checkout 的 branch（detached HEAD 時把該 repo 標為推送未解析） |
-| `<remote> <branch>`、`<remote> +<branch>`、`<remote> refs/heads/<branch>`、`<remote> <branch>:<branch>` | 該 branch，取本機 ref；本機沒有這個 branch 時把標記記在該 branch |
+| 沒有位置參數，或只有 remote；refspec 為 `HEAD` 或 `@` | 目前 checkout 的 branch（同一則指令在 push 之後又 `checkout`／`switch` 時不關聯，只記 `push-unresolved`；detached HEAD 時 git 本身不會推，不記錄） |
+| `<remote> <branch>`、`<remote> +<branch>`、`<remote> refs/heads/<branch>`、`<remote> <branch>:<branch>` | 該 branch，取本機 ref；本機沒有這個 branch 時把標記記在該 branch。明寫 `refs/heads/<name>` 時一律當 branch，即使本機有同名 tag |
 | `<remote> <src>:<branch>`、`<remote> +<src>:refs/heads/<branch>`（兩邊不同名，例如 `HEAD:feat/x`、`v1:feat/x`） | 目的 branch；最新推送 head 取 `<src>` 解析出的 commit SHA（`<src>` 是 tag 也照常解析，tag 判斷只看目的），解析不出來就把標記記在該 branch |
 | 多個 refspec（`<remote> a b`） | 逐一依上面各列處理 |
 | `--tags` 且沒有 branch refspec、目的是 `refs/tags/*`、名稱在該 repo 解析為 tag 而不是 branch（`git push origin v1`）、`--delete`／`-d`、`<remote> :<branch>` | 不記錄、不標記、不關聯 |
@@ -536,8 +538,8 @@ hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`�
 
 「成功」的判定（PostToolUse 只拿得到工具輸出，判不準時寧可多記）：
 
-- `git push`：`interrupted` 為真，或輸出含 `failed to push`、`[rejected]`、`[remote rejected]`、`has no upstream branch`、`does not appear to be a git repository`、`could not read from remote repository`、`authentication failed`、`permission denied` 任一字樣（不分大小寫）時不算成功；其餘都算成功。多記的後果是多要求一次驗證，少記的後果是漏擋。
-- `gh pr create`：stdout 有 `/pull/<數字>`（或 stderr 寫明 PR 已存在且附網址）就算成功並記 PR 號；沒有網址時，`interrupted` 為假且輸出不含 `error:`、`fatal:`、`could not`、`must first push`、`no commits between` 等失敗字樣，才算成功（只記關聯、不寫 `link` 事件）。
+- `git push`：工具結果沒有 `tool_response` 時當成成功，照常記錄並關聯，另記 `payload-no-tool-response`。其餘情況：`interrupted` 為真，或輸出含 `failed to push`、`[rejected]`、`[remote rejected]`、`has no upstream branch`、`does not appear to be a git repository`、`could not read from remote repository`、`authentication failed`、`permission denied` 任一字樣（不分大小寫）時不算成功；其餘都算成功。多記的後果是多要求一次驗證，少記的後果是漏擋。
+- `gh pr create`：工具結果沒有 `tool_response` 時當成成功但沒有 PR 號，照常關聯 branch，另記 `payload-no-tool-response`；`pr register` 同樣照常關聯並記這筆。一則指令有多個 `gh pr create` 時共用同一份輸出，分不出哪個網址屬於哪一個，所以只關聯 branch、不記 PR 號、不寫 `link` 事件。stdout 有 `/pull/<數字>`（或 stderr 寫明 PR 已存在且附網址）就算成功並記 PR 號；沒有網址時，`interrupted` 為假且輸出不含 `error:`、`fatal:`、`could not`、`must first push`、`no commits between` 等失敗字樣，才算成功（只記關聯、不寫 `link` 事件）。
 - `pr register`：只有輸出含 `"result": "registered"`，或有一行以 `registered <branch>: pr=<n> state=<s>` 開頭，才算成功。其餘一律不算，避免把不是引擎的 `$X pr register` 誤認進來。
 
 ## 3. 安裝 wrapper
@@ -552,12 +554,14 @@ wrapper 依序取 `AGENT_SKILLS_DIR`、`AGENT_SKILLS_HOME`，都沒設就用 `~/
 
 ## 4. 追加到 `~/.claude/settings.json`
 
-**這是 additive 步驟，不是覆蓋。** 三處各在既有陣列的末端追加一個物件，既有的 hook 一個都不動。先備份：
+**這是 additive 步驟，不是覆蓋。** 三處各在既有陣列的末端追加一個物件，既有的 hook 一個都不動。先備份到一個新的目錄（目錄名帶到秒；`mkdir` 不加 `-p`，目錄已存在就失敗，重跑不會蓋掉先前的備份）：
 
 ```bash
-mkdir -p ~/.claude/backups/$(date +%F)-verify-gate
-cp ~/.claude/settings.json ~/.claude/backups/$(date +%F)-verify-gate/settings.json
+BACKUP="$HOME/.claude/backups/$(date +%Y%m%d-%H%M%S)-verify-gate"
+mkdir "$BACKUP" && cp ~/.claude/settings.json "$BACKUP/settings.json" && echo "$BACKUP"
 ```
+
+記下印出的路徑，下面的比對要用。
 
 要追加的三個物件：
 
@@ -579,14 +583,13 @@ cp ~/.claude/settings.json ~/.claude/backups/$(date +%F)-verify-gate/settings.js
 
 上面是三個陣列各自「要多出來的那一個元素」，不是整段貼上取代。hook 自己有 8 秒的總時限，超過就放行；`timeout` 設 15 秒留餘裕。
 
-落地後與備份逐字比對既有 hook，只比數量不夠：
+落地後與備份逐字比對既有 hook，只比數量不夠（`BACKUP` 是上面印出的目錄）：
 
 ```bash
-python3 - <<'EOF'
-import json, os, datetime
+BACKUP="$BACKUP" python3 - <<'EOF'
+import json, os
 cur = json.load(open(os.path.expanduser("~/.claude/settings.json")))["hooks"]
-bak_path = f"~/.claude/backups/{datetime.date.today()}-verify-gate/settings.json"
-bak = json.load(open(os.path.expanduser(bak_path)))["hooks"]
+bak = json.load(open(os.path.join(os.environ["BACKUP"], "settings.json")))["hooks"]
 for event in ("PreToolUse", "PostToolUse", "Stop"):
     old, new = bak.get(event, []), cur.get(event, [])
     same = [json.dumps(h, sort_keys=True) for h in new[:len(old)]] == [json.dumps(h, sort_keys=True) for h in old]
@@ -630,7 +633,8 @@ ci_evidence=observe
 ```bash
 python3 - <<'EOF'
 import collections, json, os
-path = os.path.expanduser("~/.claude/verify-gate/decisions.jsonl")
+state = os.environ.get("AGENT_SKILLS_VERIFY_STATE_DIR") or os.path.expanduser("~/.claude/verify-gate")
+path = os.path.join(state, "decisions.jsonl")
 rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
 count = collections.Counter((r["gate"], r["decision"], r["reason_code"])
                             for r in rows if r["event"] == "decision")
@@ -665,7 +669,7 @@ printf '%s' '{"session_id":"smoke-test","cwd":"'"$PWD"'","tool_name":"Bash","too
 必擋情境在 observe 下：在一個有 profile、目前 HEAD 沒有快檢 receipt 的 repo 根目錄執行。無輸出、exit 0，決策紀錄多一行 `would_block`。
 
 ```bash
-LOG=~/.claude/verify-gate/decisions.jsonl
+LOG="${AGENT_SKILLS_VERIFY_STATE_DIR:-$HOME/.claude/verify-gate}/decisions.jsonl"
 BEFORE=$(cat "$LOG" 2>/dev/null | wc -l)
 printf '%s' '{"session_id":"smoke-test","cwd":"'"$PWD"'","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"}}' \
   | AGENT_SKILLS_VERIFY_GATE_PRE_PR=observe bash ~/.claude/hooks/verify-gate.sh pre-tool; echo "rc=$?"
@@ -686,8 +690,8 @@ echo "多了 $((AFTER - BEFORE)) 行"; tail -1 "$LOG"
 先備份：
 
 ```bash
-mkdir -p ~/.claude/backups/$(date +%F)-verify-gate-uninstall
-cp ~/.claude/settings.json ~/.claude/hooks/verify-gate.sh ~/.claude/backups/$(date +%F)-verify-gate-uninstall/
+UNINSTALL="$HOME/.claude/backups/$(date +%Y%m%d-%H%M%S)-verify-gate-uninstall"
+mkdir "$UNINSTALL" && cp ~/.claude/settings.json ~/.claude/hooks/verify-gate.sh "$UNINSTALL/" && echo "$UNINSTALL"
 ```
 
 解除安裝（逐一列明確路徑，不用萬用字元）：
@@ -705,7 +709,20 @@ grep -c "verify-gate" ~/.claude/settings.json   # 預期 0
 test ! -e ~/.claude/hooks/verify-gate.sh && echo "wrapper removed"
 ```
 
-並以第 4 節的比對腳本確認三個事件的其餘 hook 與備份逐字相同。
+再與移除前的備份比對：每個事件都應是「移除前的數量 − 1」，而且移除前的備份去掉含 `verify-gate.sh` 的那一個物件之後，與現在逐字相同。不要拿安裝前的備份比，安裝之後你可能又加過別的 hook。
+
+```bash
+UNINSTALL="$UNINSTALL" python3 - <<'EOF'
+import json, os
+cur = json.load(open(os.path.expanduser("~/.claude/settings.json")))["hooks"]
+bak = json.load(open(os.path.join(os.environ["UNINSTALL"], "settings.json")))["hooks"]
+for event in ("PreToolUse", "PostToolUse", "Stop"):
+    old, new = bak.get(event, []), cur.get(event, [])
+    kept = [h for h in old if "verify-gate.sh" not in json.dumps(h)]
+    same = [json.dumps(h, sort_keys=True) for h in new] == [json.dumps(h, sort_keys=True) for h in kept]
+    print(event, "數量", len(old), "->", len(new), "其餘逐字相同:", same)
+EOF
+```
 
 ## 10. 已知盲點
 
@@ -722,12 +739,14 @@ test ! -e ~/.claude/hooks/verify-gate.sh && echo "wrapper removed"
 - 目錄解析不出來的 `gh pr create` 只記 `cwd-unresolved`，不擋；認不出來但引號外出現 `gh pr create` 字樣的只記 `unparsed`，不擋。兩者都是為了避免誤擋，代價是換成這類寫法就繞得過 enforce。
 - 關鍵字之後或複合指令裡的 `cd`、條件式裡的變數賦值都不採用，之後的目錄記 `cwd-unresolved`、不擋。
 - `cd "$變數"` 而變數不在同一則指令內賦值，是 worktree 流程最常見的寫法之一，在 enforce 下同樣不會被擋。observe 期應單獨統計 `cwd-unresolved` 佔 `pre_pr` 紀錄的比例，再決定升 enforce 時要不要改成擋。
-- `pre_pr` 檢查的是指令執行目錄的 `HEAD`：`gh pr create --head <別的 branch>` 或 `-R <別的 repo>` 時，檢查的不是 PR 實際的 head 或 repo。
+- `pre_pr` 檢查的是指令執行目錄的 `HEAD`：`gh pr create --head <別的 branch>` 或 `-R <別的 repo>` 時，檢查的不是 PR 實際的 head 或 repo。一則指令有多個 `gh pr create` 時逐一檢查各自目錄的 repo，任何一個該擋就擋。
+- 部分 ref 被拒的 push（輸出同時有 ` ! [rejected]` 與成功更新的 ref）整筆當成失敗，不記錄、不關聯；其中成功推上去的 branch 若沒有以其他方式關聯，Stop 不會檢查它。
+- 沒有寫 refspec 的 `git push` 一律當成推目前 branch 到同名 branch。若設了 `push.default=upstream` 且 upstream 名稱不同、或設了 `remote.<名稱>.push`，實際推的目的與 hook 記錄的不同。
 - push 的 branch 判斷不了時只標記推送未解析，不會建立 session 關聯；該 branch 若從未以其他方式關聯，Stop 不會檢查它。
 - worktree 被移除後，該 PR 不再被擋，只留 `receipts-unavailable` 紀錄：receipt 隨 worktree 一起消失，gate 分不出驗過與否。要保留檢查，就在移除前完成驗證，或從另一個 worktree 重跑 `receipt ci --from-gh`。
 - `pr register`（含 `$E pr register`）只在輸出含引擎的註冊成功字樣時才關聯；輸出被丟掉、截斷或導向檔案時不會關聯。
 - 目標 repo 或 branch 解析不出來的 `gh pr create` 與 `pr register` 只寫 `link-unresolved`，Stop 不會檢查那個 PR。
 - 指令失敗時 Claude Code 是否仍觸發 PostToolUse 依版本而定；沒觸發時那次推送不會被記錄。
-- hook payload 的欄位（`session_id`、`cwd`、`tool_input.command`、`tool_response`、`stop_hook_active`）取不到時一律放行。
+- hook payload 的欄位（`session_id`、`cwd`、`tool_input.command`、`tool_response`、`stop_hook_active`）取不到時一律不擋。其中 PostToolUse 缺 `tool_response` 時照常判斷、照常關聯、不打標記，只記一筆 `payload-no-tool-response`；這些欄位的形狀還沒有在真實 session 驗證過，安裝後先用這筆紀錄核對。
 - hook 的輸入格式（上述欄位的名稱與形狀、PreToolUse 以 exit 2 擋下）目前只以 stdin JSON 的測試驗證，尚未在真實 Claude Code session 驗證。安裝後先做第 7 節的自檢，再開一個真實 session 確認決策紀錄有寫入；欄位對不上時 gate 會全部放行，看起來像「沒有東西要擋」。
 - 總時限（8 秒）或未預期例外造成的放行，會盡力寫一筆 decision `allow`、reason code `hook-timeout` 或 `hook-error`（`path` 為當時所在的路徑）；狀態目錄本身不可用時連這筆都寫不出來。

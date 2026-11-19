@@ -57,7 +57,7 @@ C8b            同一項的補充視角（scrolled / 展開後）
 存放路徑：`<專案或知識庫>/.verification/<YYYY-MM-DD>-<slug>/<env>/`
 （`<env>` 例：`staging-v2`、`preview-8051`、`hotfix`）
 
-檔名 = `<編號>-<kebab-描述>.png`，與 Step 1 的清單一一對應。
+檔名 = `<編號>-<kebab-描述>.png`，與 Step 1 的清單一一對應。開拍前記下 `git rev-parse HEAD`（Step 5 寫驗收 receipt 前要比對）。
 
 ```bash
 agent-browser open <url> --headed     # headless 起過的 session 要先 close 再重開才會套用
@@ -184,7 +184,7 @@ gh pr view <num> --json comments --jq '.comments[-1].body' | grep -c "user-attac
 數字要等於上傳的檔案數。**不要用「沒有報錯」當成功**——沒有壞消息不是好消息（`git status` 空輸出同理，可能是已 commit，也可能是被 ignore）。
 
 同時把截圖清單與判定寫進知識庫 session 檔，標明證據路徑為**本機限定**。
-讀回成功後，有 profile 時寫驗收 receipt：`$E receipt acceptance --repo . --pr <num> --attachments <檔案數>`。
+讀回成功後，有 profile 時先比對 `git rev-parse HEAD` 與開拍時記下的 head：相同才寫驗收 receipt `$E receipt acceptance --repo . --pr <num> --attachments <檔案數>`；不同代表截圖後又有 commit，重驗變更後的畫面，或在 comment 明講截圖對應的 head 且不寫 receipt（receipt 綁的是寫入當下的 head）。
 
 ## 不重造的既有資源
 

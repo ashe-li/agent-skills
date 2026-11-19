@@ -245,7 +245,7 @@ Skill({ skill: "evidence-gate" })
      --log .verification/<date>/ci-<job>.log --runner unittest   # 或 pytest／jest／playwright
    ```
 
-4. 只有 PASS 才能在 Test plan 勾「變更的測試已在 CI 執行」；FAIL 列出 NOT-FOUND 並回頭修；UNVERIFIABLE 照實寫並附原因（如 log 不列識別碼），不寫「CI 綠」。checks 還在 pending 時留一條未勾選項並明講「CI 未跑完，收集狀況待確認」。
+4. 只有 PASS 才能在 Test plan 勾「變更的測試已在 CI 執行」；FAIL 列出 NOT-FOUND 與 SKIPPED（log 有列出但被跳過，不算已執行）並回頭修；UNVERIFIABLE 照實寫並附原因（如 log 不列識別碼），不寫「CI 綠」。checks 還在 pending 時留一條未勾選項並明講「CI 未跑完，收集狀況待確認」。
 5. 要附總數比較時（輔助，不能單獨當 PASS）：`count --before <base log> --after <head log> --pattern <Count-pattern>`；base 取 PR merge-base SHA 的 run、同一個 workflow 與 job，matrix 各 job 先去重再加總；找不到符合的 base run 就寫 UNVERIFIABLE。
 
 腳本不存在時照同樣步驟手動比對 log。取得結果後，有 profile 時跑 `$E receipt ci --from-gh`；CI 還沒跑完加 `--pending-declared`，回報明講「CI 未跑完，未宣稱完成」。

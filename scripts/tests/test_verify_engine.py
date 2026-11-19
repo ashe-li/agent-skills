@@ -676,5 +676,156 @@ class SubcommandTests(VerifyCase):
         self.assertEqual((status["status"], status["profile"]), ("MATCH", "example-web.md"))
 
 
+REWRITE_SCRIPT = "open('src/app.ts', 'w').write('export const app = 42;\\n')\n"
+CACHE_SCRIPT = ("import os\nos.makedirs('__pycache__', exist_ok=True)\n"
+                "open('__pycache__/app.cpython.pyc', 'w').write('x')\n")
+SPAWN_SCRIPT = (
+    "import subprocess, sys\n"
+    "subprocess.Popen([sys.executable, '-c', \"import time; time.sleep(2); "
+    "open('grandchild-survived', 'w').write('x')\"])\n"
+    "import time; time.sleep(30)\n")
+
+
+class CodeRabbitFixTests(VerifyCase):
+    """PR 105 CodeRabbit 意見的修正（編號對應 coderabbit-triage.md 總表）。"""
+
+    def _profile_repo(self, qcs, extra=None) -> Path:
+        self.use_kb(self.make_kb(profile_text(qcs=qcs)))
+        return self.make_repo(extra=extra)
+
+    def test_receipt_dirty_when_check_rewrites_tracked_file(self) -> None:
+        """C02／M2：快檢自己改了追蹤檔、之後還原，receipt 仍要記成 dirty。"""
+        qcs = (("QC-001 — formatter", {"Argv": "python3 tools/rewrite.py", "When": "always"}),)
+        repo = self._profile_repo(qcs, {"tools/rewrite.py": REWRITE_SCRIPT})
+        proc, data = self.checks(repo)
+        self.assertEqual((proc.returncode, data["verdict"], data["dirty"]), (0, "PASS", True))
+        self.assertTrue(any("快檢執行期間" in n for n in data["notices"]))
+        self.git(repo, "checkout", "--", ".")
+        receipt = json.loads(Path(data["receipt"]).read_text(encoding="utf-8"))
+        self.assertIs(receipt["dirty"], True)
+        _, show = self.engine_json("receipt", "show", "--repo", str(repo))
+        self.assertEqual((show["quick"]["valid"], show["quick"]["reason"]),
+                         (False, "dirty-at-verify"))
+
+    def test_untracked_files_created_by_check_do_not_mark_receipt_dirty(self) -> None:
+        """N1：快檢產生的未追蹤快取檔不算 dirty，但輸出要列出並提示會被 dirty-now 擋。"""
+        qcs = (("QC-001 — makes cache", {"Argv": "python3 tools/cache.py", "When": "always"}),)
+        repo = self._profile_repo(qcs, {"tools/cache.py": CACHE_SCRIPT})
+        proc, data = self.checks(repo)
+        self.assertEqual((proc.returncode, data["verdict"], data["dirty"]), (0, "PASS", False))
+        receipt = json.loads(Path(data["receipt"]).read_text(encoding="utf-8"))
+        self.assertIs(receipt["dirty"], False)
+        self.assertEqual(data["new_untracked"], ["__pycache__/app.cpython.pyc"])
+        self.assertTrue(any(".gitignore" in n and "dirty-now" in n for n in data["notices"]))
+        _, show = self.engine_json("receipt", "show", "--repo", str(repo))
+        self.assertEqual(show["quick"]["reason"], "dirty-now", "判定端的 dirty-now 規則不變")
+        shutil.rmtree(repo / "__pycache__")
+        _, show = self.engine_json("receipt", "show", "--repo", str(repo))
+        self.assertTrue(show["quick"]["valid"], "清掉快取後 receipt 有效")
+
+    def test_untracked_file_present_before_checks_marks_receipt_dirty(self) -> None:
+        """N1 對照：執行前工作樹就有未追蹤檔，照舊記 dirty。"""
+        repo = self._profile_repo(DEFAULT_QC)
+        (repo / "scratch.txt").write_text("x\n", encoding="utf-8")
+        _, data = self.checks(repo)
+        self.assertIs(data["dirty"], True)
+
+    def test_interrupt_kills_the_whole_process_group(self) -> None:
+        """N3：引擎被中斷（KeyboardInterrupt）時也要結束快檢的整個 process group。"""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        import verify_checks as vc
+        repo = self.make_repo(extra={"tools/spawn.py": SPAWN_SCRIPT})
+        real_wait = subprocess.Popen.wait
+
+        def interrupted(proc, timeout=None):
+            if timeout is not None:
+                subprocess.run([sys.executable, "-c", "import time; time.sleep(0.5)"])
+                raise KeyboardInterrupt
+            return real_wait(proc)
+
+        with open(os.devnull, "wb") as log, \
+                mock.patch.object(subprocess.Popen, "wait", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                vc._run_argv(["python3", "tools/spawn.py"], str(repo), log, 60)
+        subprocess.run([sys.executable, "-c", "import time; time.sleep(2.5)"], check=True)
+        self.assertFalse((repo / "grandchild-survived").exists(), "中斷後孫行程仍存活")
+
+    def test_timeout_kills_the_whole_process_group(self) -> None:
+        """C01／L-1：逾時要連快檢衍生的孫行程一起結束。"""
+        qcs = (("QC-001 — spawns", {"Argv": "python3 tools/spawn.py", "When": "always",
+                                    "Timeout": "1"}),)
+        repo = self._profile_repo(qcs, {"tools/spawn.py": SPAWN_SCRIPT})
+        proc, data = self.checks(repo)
+        self.assertEqual((data["checks"][0]["status"], proc.returncode), ("FAIL", 1))
+        subprocess.run([sys.executable, "-c", "import time; time.sleep(2.5)"], check=True)
+        self.assertFalse((repo / "grandchild-survived").exists(), "孫行程在逾時後仍存活")
+
+    def test_explicit_base_that_does_not_resolve_is_usage_error(self) -> None:
+        """R25：--base 解析不出 commit 時是用法錯誤，不寫 PASS receipt。"""
+        repo = self._profile_repo(DEFAULT_QC)
+        for sub in ("checks", "select"):
+            with self.subTest(sub):
+                proc, data = self.engine_json(sub, "--repo", str(repo), "--base", "nosuchref")
+                self.assertEqual((proc.returncode, data["reason"]), (2, "usage"))
+                self.assertIn("git fetch", data["message"], "N5：可能是尚未 fetch 的遠端 ref")
+        self.assertEqual(self.receipt_files(repo), [])
+
+    def test_non_ascii_digits_are_usage_errors(self) -> None:
+        """C06：`²` 通過 isdigit() 但不是可用的 PR 號，回用法錯誤而不是 traceback。"""
+        repo = self._profile_repo(DEFAULT_QC)
+        proc, data = self.engine_json("receipt", "acceptance", "--repo", str(repo),
+                                      "--pr", "\u00b2", "--attachments", "1")
+        self.assertEqual((proc.returncode, data["reason"]), (2, "usage"))
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_ssh_alias_remote_matches_profile(self) -> None:
+        """R22／M7：origin 是 SSH 別名（git@forge:team/app）時，profile 用同一個別名要比得上。"""
+        for listed in ("forge/team/app", "git@forge:team/app.git"):
+            with self.subTest(listed=listed):
+                self.fresh_root()
+                self.use_kb(self.make_kb(profile_text(remote=listed)))
+                repo = self.make_repo(remote="git@forge:team/app.git")
+                _, data = self.engine_json("status", "--repo", str(repo))
+                self.assertEqual((data["status"], data["profile"]), ("MATCH", "example-web.md"))
+
+    def test_concurrent_candidate_add_keeps_every_source(self) -> None:
+        """C03／L-2：同 slug 並行追加時讀改寫在鎖內，不遺失出處。"""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        import threading
+        import verify_kb as vk
+        kb = self.make_kb()
+        line = "2026-01-0{n} | example-org/example-web | src-{n} | x"
+        args = {"pattern": "p", "paths": "src/**", "occurrences": [line.format(n=1)]}
+        path = Path(vk.add_candidate(str(kb), "race", args).path)
+        real = vk._fresh_occurrences
+
+        def slow(doc, occurrences):
+            found = real(doc, occurrences)
+            threading.Event().wait(0.3)
+            return found
+
+        with mock.patch.object(vk, "_fresh_occurrences", side_effect=slow):
+            workers = [threading.Thread(target=vk.add_candidate, args=(
+                str(kb), "race", {**args, "occurrences": [line.format(n=n)]})) for n in (2, 3)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+        text = path.read_text(encoding="utf-8")
+        self.assertEqual([n for n in (1, 2, 3) if f"src-{n}" in text], [1, 2, 3])
+
+    def test_main_json_errors_follow_the_argv_passed_in(self) -> None:
+        """C05：以函式呼叫 main(argv) 時，--json 取自傳入的 argv，不是 sys.argv。"""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        import verify_engine as ve
+        out = __import__("io").StringIO()
+        with mock.patch.object(sys, "argv", ["verify_engine.py"]), \
+                mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", out):
+            with self.assertRaises(SystemExit) as caught:
+                ve.main(["checks", "--json", "--no-such-flag"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(json.loads(out.getvalue().splitlines()[0])["reason"], "usage")
+
+
 if __name__ == "__main__":
     unittest.main()

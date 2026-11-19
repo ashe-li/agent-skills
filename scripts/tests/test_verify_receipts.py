@@ -579,6 +579,47 @@ class CiReceiptTests(ReceiptCase):
         self.assertIn("pr register", proc.stdout)
         self.assertEqual(self.ci_receipts(repo), [])
 
+    def test_ci_same_named_jobs_in_one_run_must_all_succeed(self) -> None:
+        """CodeRabbit R06／M6：同一 run 內同名的必要 job 每一筆都要成功，與順序無關。"""
+        repo = self.setup_pr()
+        head = self.head(repo)
+        ok = {"name": "quality", "status": "completed", "conclusion": "success"}
+        bad = {**ok, "conclusion": "failure"}
+        unit = {"name": "unit-tests", "status": "completed", "conclusion": "success"}
+        for label, jobs in (("success first", [unit, ok, bad]), ("failure first", [unit, bad, ok])):
+            with self.subTest(label):
+                data = self.evidence_data("green-head.json", head)
+                data["runs"][0]["jobs"] = jobs
+                self.assert_written(*self.ci(repo, self.write_json(data)), "red", 1)
+
+    def test_ci_evidence_with_non_object_job_is_rejected(self) -> None:
+        """CodeRabbit C04：`jobs: [null]` 要被當成格式錯誤，不得丟 traceback。"""
+        repo = self.setup_pr()
+        data = self.evidence_data("green-head.json", self.head(repo))
+        data["runs"][0]["jobs"] = [None]
+        proc, out = self.ci(repo, self.write_json(data))
+        self.assertEqual((out["result"], out["reason"], proc.returncode),
+                         ("rejected", "evidence-invalid", 1))
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_ci_latest_attempt_wins_regardless_of_list_order(self) -> None:
+        """CodeRabbit R26：較大的 attempt 排在清單後面時也要採用它。"""
+        repo = self.setup_pr()
+        head = self.head(repo)
+        quality = {"name": "quality", "status": "completed", "conclusion": "success"}
+
+        def run(attempt: int, conclusion: str) -> dict:
+            unit = {"name": "unit-tests", "status": "completed", "conclusion": conclusion}
+            return {"run_id": 1000000001, "attempt": attempt, "workflow": "CI", "head_sha": head,
+                    "status": "completed", "conclusion": conclusion, "jobs": [unit, quality]}
+
+        for runs, conclusion, rc in (([run(1, "failure"), run(2, "success")], "green", 0),
+                                     ([run(1, "success"), run(2, "failure")], "red", 1)):
+            with self.subTest(conclusion):
+                ev = self.evidence("green-head.json", head, runs=runs)
+                receipt = self.assert_written(*self.ci(repo, ev), conclusion, rc)
+                self.assertEqual([r["attempt"] for r in receipt["runs"]], [2])
+
 
 class RegistryTests(ReceiptCase):
     def test_registry_exemption_invalid_after_head_change(self) -> None:

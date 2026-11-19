@@ -11,8 +11,10 @@ exit 127 is PROFILE-STALE, not FAIL. Logs go to
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import signal
 import subprocess
 import time
 from datetime import date
@@ -34,6 +36,12 @@ SHORT_SHA = 7
 DURATION_DIGITS = 3
 NON_DEFAULT_BASE_NOTICE = ("使用了非預設的 base：這張 receipt 的條件式快檢（When: paths:）"
                            "不能當開 PR 的憑證，被跳過的必要快檢一律算未完成")
+NEW_UNTRACKED_SHOWN = 10
+NEW_UNTRACKED_NOTICE = ("快檢執行期間新出現了未追蹤的檔（{paths}）：receipt 本身不因此記成 dirty，"
+                        "但 gate 判定時工作樹不乾淨會判 dirty-now 而使 receipt 無效；"
+                        "請把它們加進 .gitignore，或在開 PR 前清掉")
+CHANGED_DURING_NOTICE = ("快檢執行期間工作樹、HEAD 或 index 有變動（例如快檢自己改了追蹤檔），"
+                         "這張 receipt 記成 dirty，不能當作開 PR 的憑證")
 DIRTY_NOTICE = "工作樹不乾淨，這張 receipt 不能當作開 PR 的憑證（快檢跑的是工作樹內容，不是 HEAD 的 tree）"
 _LOG_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
@@ -75,12 +83,32 @@ def _open_log(path: Path):
     return os.fdopen(os.open(path, flags, vr.FILE_MODE), "wb")
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Kill the check and everything it spawned (it runs in its own session)."""
+    with contextlib.suppress(OSError):
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    proc.wait()
+
+
+def _run_argv(argv: Sequence[str], root: str, log, timeout: int) -> int:
+    """Run argv in a new session; on timeout kill the whole process group."""
+    proc = subprocess.Popen(list(argv), cwd=root, shell=False, stdin=subprocess.DEVNULL,
+                            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        return proc.wait(timeout=timeout)
+    except BaseException:  # timeout, KeyboardInterrupt, SystemExit: never leave orphans
+        _kill_group(proc)
+        raise
+
+
 def _execute(qc: vp.QuickCheck, root: str, log_path: Path, rel_log: str) -> CheckOutcome:
     start = time.monotonic()
     with _open_log(log_path) as log:
         try:
-            proc = subprocess.run(list(qc.argv), cwd=root, shell=False, stdin=subprocess.DEVNULL,
-                                  stdout=log, stderr=subprocess.STDOUT, timeout=qc.timeout)
+            returncode = _run_argv(qc.argv, root, log, qc.timeout)
         except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
             reason = f"{qc.id}: cannot start {qc.argv[0]!r} ({exc.strerror}); the profile is out of date"
             return _outcome(qc, STALE, reason, None, time.monotonic() - start, rel_log)
@@ -88,11 +116,50 @@ def _execute(qc: vp.QuickCheck, root: str, log_path: Path, rel_log: str) -> Chec
             reason = f"{qc.id}: timed out after {qc.timeout}s"
             return _outcome(qc, FAIL, reason, None, time.monotonic() - start, rel_log)
     duration = time.monotonic() - start
-    if proc.returncode == EXIT_NOT_FOUND:
+    if returncode == EXIT_NOT_FOUND:
         reason = f"{qc.id}: exit {EXIT_NOT_FOUND} (command not found); the profile is out of date"
-        return _outcome(qc, STALE, reason, proc.returncode, duration, rel_log)
-    status = PASS if proc.returncode == 0 else FAIL
-    return _outcome(qc, status, "", proc.returncode, duration, rel_log)
+        return _outcome(qc, STALE, reason, returncode, duration, rel_log)
+    status = PASS if returncode == 0 else FAIL
+    return _outcome(qc, status, "", returncode, duration, rel_log)
+
+
+class WorkState(NamedTuple):
+    tracked_dirty: bool
+    untracked: Optional[frozenset]
+    head: Optional[str]
+    tree: Optional[str]
+    index: Optional[str]
+
+    @property
+    def dirty(self) -> bool:
+        """Dirty as the validity check sees it: tracked changes or untracked files."""
+        return self.tracked_dirty or self.untracked is None or bool(self.untracked)
+
+
+def work_state(root: str) -> WorkState:
+    """Tracked changes, untracked paths, HEAD, its tree and the index, at one moment."""
+    status = vg.status_paths(root)
+    tracked_dirty = status is None or bool(status.tracked)
+    untracked = None if status is None else frozenset(status.untracked)
+    return WorkState(tracked_dirty, untracked, vg.resolve_commit(root, "HEAD"),
+                     vg.head_tree(root), vg.index_digest(root))
+
+
+def dirty_during(before: WorkState, after: WorkState) -> bool:
+    """True when the receipt cannot vouch for the HEAD tree: the tree was dirty
+    before the checks (untracked files included), or while they ran a tracked
+    file, the index, HEAD or its tree changed (for example a formatter).
+    Untracked files the checks created (caches) do not count here; see
+    new_untracked."""
+    moved = (before.head, before.tree, before.index) != (after.head, after.tree, after.index)
+    return before.dirty or after.tracked_dirty or moved
+
+
+def new_untracked(before: WorkState, after: WorkState) -> tuple:
+    """Untracked paths that appeared while the checks ran, sorted."""
+    if before.untracked is None or after.untracked is None:
+        return ()
+    return tuple(sorted(after.untracked - before.untracked))
 
 
 def _pre_run(qc: vp.QuickCheck, root: str, changes: Sequence[vg.Change]) -> Optional[CheckOutcome]:

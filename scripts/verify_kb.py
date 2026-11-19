@@ -23,6 +23,7 @@ from typing import NamedTuple, Optional, Sequence
 
 import kb_source
 import verify_profile as vp
+from verify_state import dir_lock
 
 EXEMPT_NAMES = frozenset({"README.md", ".gitkeep"})
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -398,9 +399,15 @@ def add_candidate(home: str, slug: str, text_args: dict, today: Optional[date] =
     directory = _target_dir(home, vp.CANDIDATES_DIR)
     if directory is None:
         return WriteResult("invalid", None, "_candidates resolves outside the KB root")
-    existing = _existing_candidate(directory, slug)
-    if existing is not None:
-        return _append_candidate(home, existing, text_args)
+    with dir_lock(directory):
+        existing = _existing_candidate(directory, slug)
+        if existing is not None:
+            return _append_candidate(home, existing, text_args)
+        return _create_candidate(directory, slug, scope, text_args, today)
+
+
+def _create_candidate(directory: Path, slug: str, scope: str, text_args: dict,
+                      today: Optional[date]) -> WriteResult:
     created = (today or date.today()).isoformat()
     path = directory / f"{created}-{slug}.md"
     text = candidate_text(f"CAND-{slug.upper()}", scope, text_args.get("pattern", ""),

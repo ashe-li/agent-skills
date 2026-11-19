@@ -72,6 +72,16 @@ class LintNewFormat(unittest.TestCase):
         text = section(1, cmd=r"grep -E 'a\|b' file.txt")
         self.assertIn("SCHEMA-DEFECT", codes(text))
 
+    def test_escaped_pipe_with_extended_regex_tools_is_schema_defect(self) -> None:
+        """複驗 N4：ERE／PCRE 下的 `\\|` 比對的是字面直線，會靜默回 0 筆，仍要擋。"""
+        for cmd in (r"grep -iE 'a\|b' f", r"grep -P 'a\|b' f", r"egrep 'a\|b' f",
+                    r"rg 'a\|b' src", r"awk '/a\|b/' f", r"sed -E 's/a\|b/x/' f",
+                    r"git log | grep --extended-regexp 'a\|b'"):
+            with self.subTest(cmd=cmd):
+                result = cs.lint_text(section(1, cmd=cmd), "f.md")
+                self.assertIn("SCHEMA-DEFECT", [i.code for i in result.issues])
+                self.assertEqual(result.errors, 1)
+
     def test_plain_pipe_and_ere_alternation_are_fine(self) -> None:
         text = section(1, cmd="git log | grep -E 'a|b' | wc -l")
         self.assertEqual(codes(text), [])
@@ -95,6 +105,20 @@ class LintNewFormat(unittest.TestCase):
         self.assertRegex(lines[0], r"^.+:\d+: NO-VERDICT: .+")
         self.assertRegex(lines[-1], r"1 條宣稱.*1 個錯誤.*0 個警告")
         self.assertEqual(proc.returncode, 1)
+
+    def test_bre_alternation_in_block_is_not_an_error(self) -> None:
+        """CodeRabbit：`grep 'a\\|b'` 是合法的 BRE 交替，fenced block 內只警告。"""
+        result = cs.lint_text(section(1, cmd=r"grep 'a\|b' f.txt"), "f.md")
+        self.assertEqual([(i.code, i.severity) for i in result.issues],
+                         [("ESCAPED-PIPE", cs.EC_WARNING)])
+
+    def test_missing_key_output_line_is_error(self) -> None:
+        """CodeRabbit L-4：缺「關鍵輸出：」行要擋；fence 內的同字樣不算。"""
+        text = section(1).replace("關鍵輸出：ok\n", "")
+        self.assertIn("NO-KEY-OUTPUT", codes(text))
+        inside = section(1, cmd="echo '關鍵輸出：假的'").replace("關鍵輸出：ok\n", "")
+        self.assertIn("NO-KEY-OUTPUT", codes(inside))
+        self.assertNotIn("NO-KEY-OUTPUT", codes(section(1)))
 
     def test_usage_error_exit_2(self) -> None:
         self.assertEqual(run_cli().returncode, 2)
@@ -199,6 +223,16 @@ class Extract(unittest.TestCase):
         )
         out = cs.extract_text(section(1, cmd=body))
         self.assertIn(body, out)
+
+    def test_extract_isolates_shell_state_between_claims(self) -> None:
+        """CodeRabbit M8：前一條宣稱的 cd、變數、set -e 不得影響下一條。"""
+        text = (section(1, cmd="cd /\nX=leaked\nset -e\nfalse") + "\n"
+                + section(2, cmd='pwd\necho "x=${X:-unset}"'))
+        script = cs.extract_text(text)
+        with tempfile.TemporaryDirectory() as tmp:
+            here = str(Path(tmp).resolve())
+            proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, cwd=here)
+        self.assertEqual(proc.stdout.splitlines(), ["=== #1", "=== #2", here, "x=unset"])
 
     def test_extracted_sample_is_valid_bash_syntax(self) -> None:
         out = run_cli("extract", str(SAMPLE)).stdout

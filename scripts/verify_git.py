@@ -10,6 +10,7 @@ reach git, so a value such as `--output=x` can never be read as an option.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from typing import Mapping, NamedTuple, Optional, Sequence
@@ -119,13 +120,18 @@ def _outside_verification(path: str) -> bool:
     return path != VERIFICATION_DIRNAME and not path.startswith(VERIFICATION_DIRNAME + "/")
 
 
-def dirty_paths(repo: str) -> Optional[tuple]:
-    """Changed or untracked paths, excluding `.verification/`; None on failure."""
+class StatusPaths(NamedTuple):
+    tracked: tuple
+    untracked: tuple
+
+
+def status_paths(repo: str) -> Optional[StatusPaths]:
+    """Changed tracked paths and untracked paths, excluding `.verification/`."""
     out = run_git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     if out is None:
         return None
     tokens = out.split("\x00")
-    paths, index = [], 0
+    tracked, untracked, index = [], [], 0
     while index < len(tokens):
         token = tokens[index]
         index += 1
@@ -133,8 +139,15 @@ def dirty_paths(repo: str) -> Optional[tuple]:
             continue
         if token[0] in "RC":
             index += 1  # the original path of a rename/copy follows
-        paths.append(token[3:])
-    return tuple(p for p in paths if _outside_verification(p))
+        (untracked if token[:2] == "??" else tracked).append(token[3:])
+    keep = lambda paths: tuple(p for p in paths if _outside_verification(p))  # noqa: E731
+    return StatusPaths(keep(tracked), keep(untracked))
+
+
+def dirty_paths(repo: str) -> Optional[tuple]:
+    """Changed or untracked paths, excluding `.verification/`; None on failure."""
+    status = status_paths(repo)
+    return None if status is None else status.tracked + status.untracked
 
 
 def is_dirty(repo: str) -> bool:
@@ -222,6 +235,12 @@ def added_lines(repo: str, base: str, head: str) -> Mapping[str, tuple]:
             old, new = _hunk_counts(line)
             index = _collect_hunk(lines, index, old + new, found.setdefault(current, []))
     return {path: tuple(added) for path, added in found.items()}
+
+
+def index_digest(repo: str) -> Optional[str]:
+    """sha256 of the staged entries (`ls-files -s`), or None on failure."""
+    out = run_git(repo, "ls-files", "-s", "-z")
+    return None if out is None else hashlib.sha256(out.encode("utf-8", "replace")).hexdigest()
 
 
 def ls_files(repo: str) -> tuple:

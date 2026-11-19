@@ -1,6 +1,6 @@
 ---
 name: figma-verify
-description: Figma 對齊與 UI ship gate — 把實作與 Figma 設計稿逐項比對（視覺、design token、文案）。用於：任何設計稿與 local 或 code 的比對需求；UI 或文案 PR 即將 ship；code 裡出現 placeholder、follow-up、待 designer 確認這類暫代字串。
+description: Figma 對齊與 UI ship gate — 把實作與 Figma 設計稿逐項比對（視覺、design token、文案）。用於：任何設計稿與 local 或 code 的比對需求；ticket 或 PR description 帶 Figma 連結；UI 或文案 PR 即將 ship；code 裡出現 placeholder、follow-up、待 designer 確認這類暫代字串。
 allowed-tools: Read, Bash, AskUserQuestion, mcp__figma__authenticate, mcp__figma__get_design_context, mcp__figma__get_variable_defs, mcp__figma__get_screenshot, mcp__figma__get_metadata, mcp__playwright__browser_navigate, mcp__playwright__browser_resize, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_snapshot, mcp__playwright__browser_close
 argument-hint: <Figma node-id 或 figma.com URL>
 ---

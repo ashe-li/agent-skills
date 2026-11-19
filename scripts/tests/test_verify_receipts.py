@@ -283,6 +283,22 @@ class QuickReceiptTests(ReceiptCase):
             self.assertEqual(vr.check_quick_receipt(str(repo)).reason, "required-incomplete",
                              "verdict 是 PASS 但有 required 的快檢沒過，仍須判無效")
 
+    def test_quick_receipt_invalid_when_verified_on_dirty_tree(self) -> None:
+        """S3.3 補充：快檢跑的是工作樹，驗證當下不乾淨的 receipt 不能代表 HEAD 的 tree。"""
+        repo = self._verified_repo()
+        original = (repo / "src/app.ts").read_text(encoding="utf-8")
+        (repo / "src/app.ts").write_text("export const app = 3;\n", encoding="utf-8")
+        proc, data = self.checks(repo)
+        self.assertEqual((proc.returncode, data["verdict"]), (0, "PASS"))
+        self.assertIs(json.loads(Path(data["receipt"]).read_text(encoding="utf-8"))["dirty"], True)
+        text = self.engine("checks", "--repo", str(repo))
+        self.assertIn("不能當作開 PR 的憑證", text.stdout)
+        (repo / "src/app.ts").write_text(original, encoding="utf-8")
+        got = vr.check_quick_receipt(str(repo))
+        self.assertEqual((got.valid, got.reason), (False, "dirty-at-verify"))
+        self.checks(repo)
+        self.assertTrue(vr.check_quick_receipt(str(repo)).valid, "乾淨時重跑即恢復有效")
+
 
 class CiReceiptTests(ReceiptCase):
     def test_ci_receipt_rejects_evidence_for_old_head(self) -> None:
@@ -418,6 +434,42 @@ class CiReceiptTests(ReceiptCase):
         got = vr.check_ci_receipt(str(repo), FEATURE)
         self.assertFalse(got.valid)
         self.assertEqual(got.reason, "stale-ci-config")
+
+    def test_ci_receipt_ignores_failure_of_non_required_job(self) -> None:
+        """S3.3 補充：Required-jobs 以外的 job 失敗不影響結論。"""
+        repo = self.setup_pr()
+        data = self.evidence_data("green-head.json", self.head(repo))
+        data["runs"][0]["jobs"].append({"name": "docs-preview", "status": "completed",
+                                        "conclusion": "failure"})
+        data["runs"][0]["conclusion"] = "failure"
+        receipt = self.assert_written(*self.ci(repo, self.write_json(data)), "green")
+        self.assertEqual(sorted(receipt["required_jobs"]), ["quality", "unit-tests"])
+
+    def test_ci_receipt_required_jobs_span_multiple_runs(self) -> None:
+        """S3.3 補充：必要 job 分屬不同 workflow 的 run 時跨 run 合起來看。
+
+        同一 run 多個 attempt 只認最大者，已由 test_ci_receipt_uses_latest_attempt_per_run
+        涵蓋（含 attempt 順序顛倒的兩個情境）。
+        """
+        repo = self.setup_pr()
+        head = self.head(repo)
+
+        def split_runs(second_head: str) -> Path:
+            data = self.evidence_data("green-head.json", head)
+            first = data["runs"][0]
+            unit, quality = first["jobs"]
+            data["runs"] = [{**first, "jobs": [unit]},
+                            {**first, "run_id": 1000000002, "workflow": "Quality",
+                             "head_sha": second_head, "jobs": [quality]}]
+            return self.write_json(data)
+
+        with self.subTest("both runs on the branch head"):
+            receipt = self.assert_written(*self.ci(repo, split_runs(head)), "green")
+            self.assertEqual(sorted(r["run_id"] for r in receipt["runs"]),
+                             [1000000001, 1000000002])
+        with self.subTest("one run is for another head"):
+            self.assert_rejected(*self.ci(repo, split_runs(self.head(repo, "main"))),
+                                 "head-mismatch")
 
 
 class RegistryTests(ReceiptCase):
@@ -572,6 +624,93 @@ class AcceptanceReceiptTests(ReceiptCase):
         got = vr.check_acceptance_receipt(str(repo), FEATURE)
         self.assertFalse(got.valid)
         self.assertEqual(got.reason, "ui-changed")
+
+
+class SubcommandReceiptTests(ReceiptCase):
+    """S3.3 補充：測試清單沒涵蓋到的子命令與狀態目錄的安全要求。"""
+
+    def test_receipt_show_reports_each_validity(self) -> None:
+        repo = self.setup_pr()
+        self.checks(repo)
+        self.assert_written(*self.ci(repo, self.evidence("green-head.json", self.head(repo))),
+                            "green")
+        proc, data = self.engine_json("receipt", "show", "--repo", str(repo))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(data["branch"], FEATURE)
+        got = {k: (data[k]["valid"], data[k]["reason"])
+               for k in ("quick", "ci", "acceptance", "exemption")}
+        self.assertEqual(got, {"quick": (True, ""), "ci": (True, ""),
+                               "acceptance": (False, "no-receipt"),
+                               "exemption": (False, "not-exempt")})
+
+    def test_receipt_record_generic_only_without_profile(self) -> None:
+        repo = self.setup_pr()
+        proc, data = self.engine_json("receipt", "record-generic", "--repo", str(repo),
+                                      "--summary", "ran unit tests by hand")
+        self.assertEqual((proc.returncode, data["result"], data["reason"]),
+                         (1, "rejected", "profile-present"))
+        self.use_kb(eng.EMPTY_KB)
+        proc, data = self.engine_json("receipt", "record-generic", "--repo", str(repo),
+                                      "--summary", "ran unit tests by hand")
+        receipt = self.assert_written(proc, data, "NO-PROFILE")
+        self.assertEqual((receipt["method"], receipt["verdict"], receipt["summary"]),
+                         ("generic", "NO-PROFILE", "ran unit tests by hand"))
+        self.assertEqual(vr.check_quick_receipt(str(repo)).reason, "required-incomplete")
+
+    def test_receipt_exempt_writes_exempt_acceptance_receipt(self) -> None:
+        repo = self.setup_pr()
+        proc = self.engine("receipt", "exempt", "--repo", str(repo), "--pr", "42")
+        self.assertEqual(proc.returncode, 2, "exempt 缺 --reason 屬用法錯誤")
+        receipt = self.assert_written(*self.engine_json(
+            "receipt", "exempt", "--repo", str(repo), "--pr", "42", "--reason", "copy only"), None)
+        self.assertEqual((receipt["kind"], receipt["reason"], receipt["attachments"]),
+                         ("exempt", "copy only", 0))
+        self.assertTrue(vr.check_acceptance_receipt(str(repo), FEATURE).valid)
+
+    def test_pr_show_reports_entry_and_head_source(self) -> None:
+        repo = self.setup_pr(pr_state="closed")
+        registered = self.head(repo)
+        proc, data = self.engine_json("pr", "show", "--repo", str(repo))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((data["entry"]["pr"], data["head"]["source"]), (42, "local-ref"))
+        self.delete_branch(repo)
+        _, data = self.engine_json("pr", "show", "--repo", str(repo), "--branch", FEATURE)
+        self.assertEqual((data["head"]["sha"], data["head"]["source"]), (registered, "registration"))
+        self.assertEqual(data["exemption"]["reason"], "exempt-closed")
+
+    def test_state_files_are_private_and_symlinks_are_refused(self) -> None:
+        repo = self.setup_pr()
+        self.assertEqual(self.state_dir.stat().st_mode & 0o777, 0o700)
+        files = [p for p in self.state_dir.rglob("*.json")]
+        self.assertTrue(files)
+        for path in files:
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600, path.name)
+        target = self.root / "elsewhere.json"
+        target.write_text("{}", encoding="utf-8")
+        files[0].unlink()
+        files[0].symlink_to(target)
+        proc, data = self.register(repo, self.evidence("green-head.json", self.head(repo)))
+        self.assertEqual((proc.returncode, data["reason"]), (1, "state-error"))
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(target.read_text(encoding="utf-8"), "{}")
+        linked = self.root / "linked-state"
+        linked.symlink_to(self._mkdir("real-state"), target_is_directory=True)
+        with self.assertRaises(vr.StateError):
+            vr.record_push(str(repo), FEATURE, state_dir=str(linked))
+        self.assertEqual(list((self.root / "real-state").iterdir()), [])
+
+    def test_session_link_and_push_without_local_ref(self) -> None:
+        repo = self.setup_pr()
+        session = vr.record_session_link("sess/../1 x", str(repo), FEATURE, pr=42)
+        self.assertEqual(session["session_id"], "sess_.._1_x")
+        again = vr.read_session("sess/../1 x")
+        self.assertEqual([(l["repo"], l["branch"], l["pr"]) for l in again["links"]],
+                         [(EXAMPLE_KEY, FEATURE, 42)])
+        self.assertFalse(any(p.name.startswith("..") for p in self.state_dir.rglob("*")))
+        self.delete_branch(repo)
+        vr.record_push(str(repo), FEATURE)
+        self.assertEqual(vr.resolve_head(str(repo), FEATURE).reason, "head-unresolved",
+                         "解析不出推送的 head 時要標記為推送未解析")
 
 
 if __name__ == "__main__":

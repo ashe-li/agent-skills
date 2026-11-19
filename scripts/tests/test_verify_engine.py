@@ -159,7 +159,9 @@ class VerifyCase(unittest.TestCase):
 
     def commit(self, repo: Path, files: Mapping[str, str], message: str = "change") -> str:
         self.write_files(repo, files)
-        self.git(repo, "add", "-A")
+        # .verification/ 是引擎的輸出，契約要求不進版控；`add -A` 若把它收進 commit，
+        # 之後切 branch 時 git 會刪掉 receipt，測試就驗不到想驗的條件。
+        self.git(repo, "add", "-A", "--", ".", ":(exclude).verification")
         self.git(repo, "commit", "-q", "-m", message)
         return self.git(repo, "rev-parse", "HEAD")
 
@@ -500,6 +502,60 @@ class LintTests(VerifyCase):
         self.assertEqual(proc.returncode, 1)
         flagged = sorted(Path(e["file"]).name for e in data["errors"])
         self.assertEqual(flagged, ["_draft.md", "notes.txt"])
+
+
+class SubcommandTests(VerifyCase):
+    """S3.3 補充：測試清單沒涵蓋到的子命令。"""
+
+    def test_checks_dry_run_lists_argv_and_runs_nothing(self) -> None:
+        qcs = (("QC-001 — would touch", {"Argv": "touch dry-run-marker", "When": "always"}),)
+        self.use_kb(self.make_kb(profile_text(qcs=qcs)))
+        repo = self.make_repo()
+        proc, data = self.checks(repo, "--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(data["verdict"], "DRY-RUN")
+        self.assertIsNone(data["receipt"])
+        self.assertEqual(data["argv"]["QC-001"], ["touch", "dry-run-marker"])
+        self.assertFalse((repo / "dry-run-marker").exists(), "--dry-run 不得執行任何快檢")
+        self.assertEqual(self.receipt_files(repo), [])
+
+    def test_candidate_add_writes_new_file_and_never_overwrites(self) -> None:
+        kb = self.make_kb()
+        self.use_kb(kb)
+        args = ("candidate", "add", "--slug", "flag-cleanup",
+                "--pattern", "flag removed \x1b[31mwhile still read",
+                "--trigger-paths", "src/flags/**",
+                "--occurrence", "2026-01-03 | example-org/example-web | incident 1 | a",
+                "--occurrence", "2026-01-04 | example-org/example-api | incident 2 | b")
+        proc, data = self.engine_json(*args)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(data["result"], "created")
+        path = Path(data["path"])
+        self.assertEqual(path.parent, (kb / "verification" / "_candidates").resolve())
+        original = path.read_text(encoding="utf-8")
+        self.assertNotIn("\x1b", original)
+        _, listed = self.engine_json("candidate", "list")
+        got = {c["id"]: c["promotable"] for c in listed["candidates"]}
+        self.assertIs(got["CAND-FLAG-CLEANUP"], True)
+        proc, data = self.engine_json(*args[:-2])
+        self.assertEqual((proc.returncode, data["result"]), (1, "exists"))
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+        proc, data = self.engine_json("candidate", "add", "--slug", "../escape",
+                                      "--pattern", "x", "--occurrence", "y")
+        self.assertEqual((proc.returncode, data["result"]), (1, "invalid"))
+
+    def test_init_profile_skeleton_passes_lint(self) -> None:
+        kb = self.root / "fresh-kb"
+        (kb / "verification").mkdir(parents=True)
+        self.use_kb(kb)
+        repo = self.make_repo()
+        proc, data = self.engine_json("init-profile", "--repo", str(repo))
+        self.assertEqual((proc.returncode, data["result"]), (0, "created"))
+        proc, data = self.engine_json("lint")
+        self.assertEqual(proc.returncode, 0, data)
+        self.assertEqual(data["errors"], [])
+        _, status = self.engine_json("status", "--repo", str(repo))
+        self.assertEqual((status["status"], status["profile"]), ("MATCH", "example-web.md"))
 
 
 if __name__ == "__main__":

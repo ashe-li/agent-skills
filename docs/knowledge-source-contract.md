@@ -260,12 +260,15 @@ frontmatter：
 |---|---|
 | 有鍵值等於目前 `HEAD^{tree}` 的 receipt | `no-receipt` |
 | 工作樹現在是乾淨的（含未追蹤檔，排除 `.verification/`） | `dirty-now` |
+| 驗證當下工作樹是乾淨的（receipt 的 `dirty` 為 `false`） | `dirty-at-verify` |
 | 目前的設定 digest 等於 receipt 的 `config_digest` | `stale-config` |
 | 目前 HEAD 與 `default_base` 的 merge-base 等於 receipt 的 `base_sha` | `stale-base` |
 | 目前的引擎版本等於 receipt 的 `engine_version` | `engine-changed` |
 | verdict 是 `PASS`，而且每個 `required` 為 true 的快檢都是 `PASS` | `required-incomplete` |
 
 只改 profile、不動產品程式，receipt 一樣會失效（`stale-config`）。
+
+工作樹不乾淨時 `checks` 照常執行並寫出 receipt（`dirty: true`），輸出會提示這張 receipt 不能當作開 PR 的憑證。快檢跑的是工作樹內容，不是 HEAD 的 tree；之後把未提交的修改丟掉，receipt 的鍵值會剛好等於 HEAD 的 tree，所以 `dirty: true` 的 receipt 一律無效（`dirty-at-verify`），要在乾淨的工作樹重跑。
 
 ### 驗收 receipt
 
@@ -384,6 +387,7 @@ CI receipt 的結論有四種：`green`、`red`、`pending-declared`、`exempt`�
 |---|---|
 | `no-receipt` | 找不到對應目前狀態的 receipt |
 | `dirty-now` | 工作樹現在不乾淨 |
+| `dirty-at-verify` | receipt 是在工作樹不乾淨時寫出的 |
 | `stale-config` | profile、`_common.md` 或內建項目在驗證後變了 |
 | `stale-base` | merge-base 在驗證後變了 |
 | `engine-changed` | 引擎版本在驗證後變了 |

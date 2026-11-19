@@ -143,6 +143,29 @@ class ParseSummaryPartsTests(unittest.TestCase):
         self.assertEqual(parts["deferred"], "d")
         self.assertEqual(parts["deviation"], "b")
 
+    def test_example_taught_by_dispatch_loop_skill_is_parsed(self):
+        """輸入直接取自 dispatch-loop/SKILL.md 的 --summary 範例，不另外手寫一份。"""
+        skill = (SCRIPTS_DIR.parent / "dispatch-loop" / "SKILL.md").read_text(encoding="utf-8")
+        examples = re.findall(r'--summary="(1\.[^"]+)"', skill)
+        self.assertTrue(examples, "dispatch-loop/SKILL.md 裡找不到 --summary 範例")
+        for text in examples:
+            with self.subTest(text=text):
+                parts = self.parse(text)
+                self.assertNotIn("raw", parts)
+                self.assertTrue(all(parts[key] for key in ("did", "deviation", "side_effects", "deferred")))
+
+    def test_marker_right_after_semicolon_or_full_stop_opens_a_segment(self):
+        expected = {"did": "a", "deviation": "b", "side_effects": "c", "deferred": "d"}
+        for text in ("1. a；2. b；3. c；4. d", "1. a;2. b;3. c;4. d", "1. a。2. b。3. c。4. d"):
+            with self.subTest(text=text):
+                self.assertEqual(self.parse(text), expected)
+
+    def test_separator_before_a_decimal_or_out_of_order_number_does_not_split(self):
+        self.assertEqual(
+            self.parse("1. 改了兩處；3.5 倍快 2. 無；1. 重跑一次 3. 無 4. 無"),
+            {"did": "改了兩處；3.5 倍快", "deviation": "無；1. 重跑一次", "side_effects": "無", "deferred": "無"},
+        )
+
     def test_missing_trailing_segment_is_none(self):
         self.assertEqual(
             self.parse("1.a 2.b 3.c"),

@@ -95,10 +95,12 @@ NONE_LIKE_SEGMENTS = (
     "", "無", "無偏離", "無偏離 plan", "無新增", "無新增項目", "—", "-", "N/A", "無新教訓",
 )
 # Whitespace plus the separators people leave between segments ("2.無；").
-_SEGMENT_TRIM_CHARS = " \t\r\n；;，,"
-# `1.` / `１．` / `1、`, preceded by start-of-text or whitespace and not
-# followed by a digit, so `S1.10`, `1.5`, `L142-179` never split a segment.
-_SECTION_MARKER_RE = re.compile(r"(?<!\S)([1-4１-４])([.．、])(?![0-9０-９])")
+_SEGMENT_TRIM_CHARS = " \t\r\n；;，,。"
+# `1.` / `１．` / `1、`, preceded by start-of-text, whitespace or a segment
+# separator (`；`, `;`, `。` — the form dispatch-loop/SKILL.md teaches is
+# "1. …；2. …") and not followed by a digit, so `S1.10`, `1.5`, `L142-179`
+# never split a segment.
+_SECTION_MARKER_RE = re.compile(r"(?<![^\s；;。])([1-4１-４])([.．、])(?![0-9０-９])")
 # Separator families: markers 2-4 must use marker 1's family, so a "、"
 # enumeration ("隱藏 6、bridge 2、") never opens a segment in a `1.` summary.
 _MARKER_FAMILY = {".": "period", "．": "period", "、": "dunhao"}

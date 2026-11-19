@@ -15,6 +15,10 @@
 - **`/pr-evidence-comment` Step 4 的上傳步驟在新版 GitHub PR 頁走不通**：PR 頁的留言框改成 React 版後，`#new_comment_field` 與隱藏的 `#fc-new_comment_field` 都不存在，照舊步驟會找不到元素。現在先用一段 eval 判斷留言框是哪一版；React 版改為自建隱藏的 file input、塞入檔案後對留言框送合成的貼上事件，上傳完再用原生 setter 寫入最終內文並送出。classic 表單的步驟保留。
 - **`/pr-evidence-comment` 會多開一個 Chrome 並搶走前景**：Step 4 原本一律啟動新的 Chrome。現在先探 `9222` 是否已有一個在跑，有就直接接；並寫明接既有 Chrome 時用另開的分頁、不帶前景、做完只關自己的分頁、不結束 Chrome 行程（結束前景 app 會打斷同機其他 session 的 headed 驗收）。
 - **`/notion-report` 沒有提醒寫入前要重讀頁面、也沒有 CLI 卡住時的處置**：補上「共用頁面可能已被人改過，第二次寫入前先重讀」，以及 `playwright-cli` 指令卡住、圖片張數不符、圖片超過上限三種情況的處置。
+
+## [v3.7.1] - 2026-11-20
+
+### Fixed
 - **`plan_report.py` 解析不了 `dispatch-loop` 教的摘要格式**：`/dispatch-loop` 的 `--summary` 範例是「1. …；2. …；3. …；4. …」，但解析器只在編號前面是空白時才切段，分號或句號直接接編號時四段都切不開，整則摘要落進「未分類摘要」，報告彙整段的「偏離 plan／副作用／延後待辦」三張清單全是（無）。現在編號前面是 `；`、`;`、`。` 也會切段；`3.5` 這類小數與順序不對的編號仍不切。新增的測試直接從 `dispatch-loop/SKILL.md` 取範例當輸入，文件與解析器之後不會再各走各的。測試：`scripts/tests/test_plan_report_rollup.py`。
 
 ## [v3.7.0] - 2026-11-19
@@ -773,7 +777,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
 [Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.8.0...HEAD
-[v3.8.0]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...v3.8.0
+[v3.8.0]: https://github.com/ashe-li/agent-skills/compare/v3.7.1...v3.8.0
+[v3.7.1]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...v3.7.1
 [v3.7.0]: https://github.com/ashe-li/agent-skills/compare/v3.6.1...v3.7.0
 [v3.6.1]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...v3.6.1
 [v3.6.0]: https://github.com/ashe-li/agent-skills/compare/v3.5.2...v3.6.0

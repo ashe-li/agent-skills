@@ -446,7 +446,7 @@ echo '{"prompt":"幫我實作這個 plan","cwd":"/path/to/normal/repo"}' \
 
 # 四、驗證 gate hook（PreToolUse、PostToolUse、Stop）
 
-三個選用的 gate，把「未驗證就開 PR、未驗證就收工」從「靠模型記得」換成機械檢查。三個 gate **預設全部關閉**，建議先以 observe 模式只記錄、不介入，量到數字後再逐一決定要不要升 enforce。
+三個選用的 gate，在 enforce 模式下把「未驗證就開 PR、未驗證就收工」從「靠模型記得」換成機械檢查。三個 gate **預設全部關閉**；observe 模式只記錄、不介入，不算防護，建議先用它量到數字，再逐一決定要不要升 enforce。
 
 一支 wrapper `scripts/hooks/verify-gate.sh` 掛三個事件，第一個參數決定子命令：
 

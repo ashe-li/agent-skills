@@ -9,8 +9,8 @@
 | imgproxy 422 兩個子根因皆 real，runbook 歸因（doc 119）被推翻；marker 只記「已嘗試」 | 01 | real（HIGH） | Step 3 stated_cause 對賭、Step 4 規則 2、Step 6 guardrail | reports/2026-05-27-imgproxy-422-alert-rca-two-classes-marker-flaw-recurrence.md |
 | CF Tunnel 粗層 404 持續，實為舊 buildId 的 `/_next/data` prefetch noise，精準層未 fire | 02 | benign（HIGH） | Step 3 stated_cause 對賭、Step 4 規則 1、G2 | reports/2026-05-27-cf-tunnel-404-fallback-stale-client-prefetch-not-cdn-cache.md |
 | ARC arm64 runner KubePodNotReady，Karpenter 冷啟加 dedicated taint 疊加，5 分鐘自癒 | 03 | benign（HIGH） | Step 3 對照組（KubeDeploymentNotReady 未響）、Step 4 規則 1、G2 | reports/2026-05-26-arc-arm64-runner-kubepodnotready-info-triage.md |
-| cert-manager webhook "no endpoints" 單次 transient，`status.history` 已自癒，stg replica=1 by design（禁推 HA PR） | 04 | benign（HIGH） | Step 3 以 status.history 判斷、Step 4 規則 1、G2、G3（deployment-eks 屬後端） | reports/2026-05-23-cert-manager-webhook-transient-fail-triage.md |
-| Loki OOM 來自 dashboard `unwrap [$__range]` 查詢成本；共用 Prometheus 與預設 stg context 會誤判 benign | 05 | real（HIGH） | Step 3 多 cluster 陷阱、Step 4 規則 2、Step 6 guardrail、G3 | reports/2026-05-25-prod-loki-oom-sw-cache-dashboard-range-unwrap.md |
+| cert-manager webhook "no endpoints" 單次 transient，`status.history` 已自癒，stg replica=1 by design（禁推 HA PR） | 04 | benign（HIGH） | Step 3 以 status.history 判斷、Step 4 規則 1、G2、G3（cert-manager 副本配置屬後端） | reports/2026-05-23-cert-manager-webhook-transient-fail-triage.md |
+| Loki OOM 來自 dashboard `unwrap [$__range]` 查詢成本；共用 Prometheus 與預設 stg context 會誤判 benign | 05 | real（HIGH） | Step 3 多 cluster 陷阱、Step 4 規則 2、Step 6 guardrail、G1 | reports/2026-05-25-prod-loki-oom-sw-cache-dashboard-range-unwrap.md |
 
 ## 未涵蓋 / 待補
 

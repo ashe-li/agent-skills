@@ -13,7 +13,7 @@ argument-hint: <firing alert payload / alertname / Grafana alert URL>
 
 1. **分類先驗來自內部 KB，不是通用 SRE 知識**（pattern: `incident-kb-as-llm-prompt-corpus`）。每次 triage 先從知識來源（見 Step 2）撈既有 RCA 當 priors，再對照當前 alert。
 2. **下任何結論前先 live verify**。只靠 alert 描述 / runbook / config / 記憶推論的結論，一律標 `provisional`，等 live 證據確認。
-3. **alert 描述與 runbook 歸因會 rot**（memory `verify-runbook-attribution-before-citing`）。annotation 寫的「根因」視為**待驗證假設**，不是事實；實測 header/metric/log 與它衝突時，以 live 為準並明確標示「runbook 說 X，實測 Y」。
+3. **alert 描述與 runbook 歸因會 rot**。annotation 寫的「根因」視為**待驗證假設**，不是事實；實測 header/metric/log 與它衝突時，以 live 為準並明確標示「runbook 說 X，實測 Y」。
 4. **benign vs real 不是純二元**。同一個 alert 可能部分 benign、部分 real（典型：imgproxy 422 marker-flaw 的 two-classes），決策樹要能拆分 sub-signal 分別處理。
 5. **編排既有資源，不重造輪子**。本 skill 整合既有 grafana MCP + kubectl + KB 慣例；report 沉澱、topic-grouped commit、`/kb-query`、`/verify-live-state` 都沿用，不重寫。
 
@@ -72,7 +72,7 @@ KB_HOME="${AGENT_SKILLS_KB_HOME:-$(head -n 1 "${XDG_CONFIG_HOME:-$HOME/.config}/
 
 | Alert 類別 | 典型 KB 先驗 | 預設傾向 | 關鍵驗證點 |
 |-----------|-------------|---------|-----------|
-| cert-manager / webhook "no endpoints available" | `flux-kustomization-webhook-transient-fail-triage`(learned)、`2026-05-23-cert-manager-webhook-transient-fail-triage` | **benign** (by design) | Kustomization `status.history` 是否已自癒；webhook Pod AGE ≈ fail 時間；stg `cert-manager` replica=1 是刻意的（memory `cert-manager-stg-replica-1-by-design`）——**不要推 HA PR** |
+| cert-manager / webhook "no endpoints available" | `flux-kustomization-webhook-transient-fail-triage`(learned)、`2026-05-23-cert-manager-webhook-transient-fail-triage` | **benign** (by design) | Kustomization `status.history` 是否已自癒；webhook Pod AGE ≈ fail 時間；stg `cert-manager` replica=1 是刻意的——**不要推 HA PR** |
 | Karpenter cold-start / replicas-mismatch noise | `2026-05-08-frontend-prod-replicas-mismatch-karpenter-noise`、`2026-04-28-frontend-cold-start-3-change-cascade`、`hpa-cold-start-scaleup-policy-sizing`(learned) | **benign** | 新 node 是否剛 provision；Pod 是否在 warm-up 窗；是否單純 scale 事件 |
 | Alert flapping on single replica | `grafana-alert-query-aggregation-per-series-trap`(learned) | **benign**(alert rule 設計缺陷) | Query A 是否漏 `sum()/avg()`，per-series 在單 replica transient 上抖動 → 修 rule 而非修服務 |
 | CF Tunnel 404 / prefetch noise | `2026-05-27-cf-tunnel-404-fallback-stale-client-prefetch-not-cdn-cache`、`2026-05-15-cf-tunnel-alert-prefetch-404-regression`、`2026-05-22-cf-tunnel-alert-multi-build-cdn-noise` | **benign**(多數) | **實測 HTML response header**：若 `no-store`/`DYNAMIC` 則非 CDN cache，是 client stale prefetch 自癒；runbook 若寫「CDN HTML cache」是 **attribution 錯誤**，要標示 |
@@ -179,7 +179,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 - **real**：附證據連結進 Step 6（Loki query 字串 / `mcp__grafana__generate_deeplink` 生的 Grafana deeplink / kubectl 輸出片段）。
 - 文件原則：Markdown report，**不寫一次性 `.sh` 驗證腳本**（rule `documentation-style`）；commit 依主題分組。
 
-### Action Items 固定 schema（S3.6 digest 會解析，不可更動）
+### Action Items 固定 schema（下游 digest 會解析，不可更動）
 
 表頭、欄位順序、分隔符一字不改：
 
@@ -200,22 +200,24 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 - **`action_items_open`**：必須等於表中狀態為 `open` 的筆數；改了 row 狀態要同步改這個數字。
 - **格式約束**：每筆一行；任一欄位內不得出現 `|` 或換行（需要時用全形 `｜` 或改寫）；不得合併儲存格、不得在表格中間插入空行或註解。
 
-> **解析契約**：S3.6 的 digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
+> **解析契約**：下游的 action item digest 會用 shell 解析這張表，欄位順序和分隔符（`|`）不可更動；格式錯誤（表頭不符、欄數不是 6、AI-ID／狀態不合規、期限不是 `YYYY-MM-DD` 也不是 `TBD`、`action_items_open` 與 open 筆數不一致）會被列為「解析失敗」。
 
 完整範例：[`examples/action-items-open.md`](examples/action-items-open.md)（2 筆 open）、[`examples/action-items-benign.md`](examples/action-items-benign.md)（benign 寫「無」）。
 
 ## Step 6 — Guardrail Fix 草案（僅 real）
 
 1. **定位該修的 repo + base 規則**：
-   - `web-app`：PR base **一律 hotfix**（memory `web-app-pr-base-hotfix`）。
-   - `deployment-eks`：後端團隊負責，**不直接改**（ownership 邊界依本機規則）→ 只產建議 / 開 issue（HITL G3）。
-   - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（memory `helm-persist-before-apply`）。
+   - `web-app`：PR base **一律 hotfix**（PR base 是目標 repo 自己的規則，跨 repo 工作前先讀它的 CLAUDE.md）。
+   - `deployment-eks`：依歸屬分兩類（ownership 邊界依本機規則）。
+     - **屬使用者，照常走 PR（G1）**：cluster infra（NodePool、PDB、Karpenter）、network／gateway、observability（Alloy、Loki、Grafana）、Flux，以及一般業務 deployment 的 PDB／HPA／副本數／resources。prod 的 cloudflared／alloy 走 `make PHASE=prod`，deploy trigger 預設由後端執行：做到 values PR 為止，不主動代跑；使用者明示授權時才代跑。
+     - **屬後端，不動也不寫提案（G3）**：`smb-*`／`payment-*` 的 helm values 與 secrets、託管資料庫、cert-manager 的副本配置、後端 EC2。只在報告正文用一句話標「屬後端」。
+   - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（先把變更寫進 chart 再 apply）。
 2. **產 guardrail**（對症）：
    - OOM → resource limit / HPA scaleUp 平滑 / memory guardrail。
    - Loki query 成本 → 限 range / 降頻 / unwrap 上限。
-   - alert flap → Query A 補 `sum()/avg()`（修 alert rule 經 `mcp__grafana__alerting_manage_rules`，或走 Grafana-as-code PR）。**alert rule 一律不自動 apply**：先附 backfit query 建議交 G1 確認；update 草案須帶**完整既有 payload（含 `notification_settings` + `org_id`）**，漏帶會清空 routing（memory `grafana-alert-update-notification-settings`）。
+   - alert flap → Query A 補 `sum()/avg()`（修 alert rule 經 `mcp__grafana__alerting_manage_rules`，或走 Grafana-as-code PR）。**alert rule 一律不自動 apply**：先附 backfit query 建議交 G1 確認；update 草案須帶**完整既有 payload（含 `notification_settings` + `org_id`）**，漏帶會清空 routing。
    - config gap（allowed-sources）→ 補設定 + regression test。
-3. **開 PR**：繁體中文 body（memory `pr-traditional-chinese`），附 RCA report 連結 + 證據；external system 用全名引用（`Linear ABC-1234`、`Sentry Issue N`），不用裸 `#數字`。
+3. **開 PR**：繁體中文 body，附 RCA report 連結 + 證據；external system 用全名引用（`Linear ABC-1234`、`Sentry Issue N`），不用裸 `#數字`。
 
 ## HITL Gates（G1–G4）
 
@@ -223,10 +225,10 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 
 - **G1 — 開 PR 前**：呈現分類結論 + live 證據 + 擬修方案，確認後才開 PR。
 - **G2 — benign 自動關閉 / 標記前**：列出為何 benign（prior + 證據），確認後才記錄關閉。
-- **G3 — 跨 repo / 後端 repo**：涉及 `deployment-eks` 等非自有 repo 時，只產建議不直接改，由人決定。
+- **G3 — 後端 own 或歸屬不明的資源**：修法落在後端 own 的範圍（見 Step 6 第 1 點）時，不改、不寫提案，正文標「屬後端」後交由人決定；歸屬不明的資源同樣先停下來問，不自行假設可以改。
 - **G4 — low-confidence real**：信心不足以支撐 real 開 PR 時，不開 PR，回 Step 3 補證據或交人判斷。
 
-> headless/cron 觸發時，G1/G3 不可略過（real 開 PR、跨 repo 改動須留 HITL）；唯一可放寬的是 G2 benign 自動關閉，且前提是**信心 HIGH 且命中已知 benign prior**——LOW/MEDIUM 信心的 benign 即使 headless 也須人工確認。所有自動關閉一律留 report audit。
+> headless/cron 觸發時，G1/G3 不可略過（real 開 PR、碰到後端 own 或歸屬不明的資源須留 HITL）；唯一可放寬的是 G2 benign 自動關閉，且前提是**信心 HIGH 且命中已知 benign prior**——LOW/MEDIUM 信心的 benign 即使 headless 也須人工確認。所有自動關閉一律留 report audit。
 
 ## Tools（MCP / kubectl gotcha）
 
@@ -243,23 +245,13 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 | panel PNG（貼報告/PR）| `mcp__grafana__get_panel_image` | — |
 | 任意 Grafana API | `mcp__grafana__grafana_api_request` | — |
 
-- **寫入類工具不預先核准**：`alerting_manage_rules`、`grafana_api_request` 可以建立、修改或刪除 prod 規則與 Grafana 資源。本 skill 會讀 Loki log，log 內容可受外部影響，所以這兩個工具刻意不放進 `allowed-tools`，每次呼叫都要經過權限確認，list／get 也一樣。唯讀查詢優先用上表其他工具（2026-10-21 S6.3 security review）。
+- **寫入類工具不預先核准**：`alerting_manage_rules`、`grafana_api_request` 可以建立、修改或刪除 prod 規則與 Grafana 資源。本 skill 會讀 Loki log，log 內容可受外部影響，所以這兩個工具刻意不放進 `allowed-tools`，每次呼叫都要經過權限確認，list／get 也一樣。唯讀查詢優先用上表其他工具。
 - **kubectl** 一律透過 Bash（`get` / `describe` / `logs --previous` / `top` / `get events`）。
 - grafana MCP 無 offset 的 timestamp 視為 **UTC**；跨 Loki/Prometheus/kubectl 比對時先對齊時區。
-- ALB/AWS 原生 metric grafana MCP 查不到（memory `grafana-mcp-cloudwatch-gap`）→ 走 Athena / AWS console。
-- **`alerting_manage_rules` update footgun**：要 update/edit alert rule 前先 get 完整 rule，update 時帶回**全部欄位**（含 `notification_settings` + `org_id`），漏帶會被靜默清空（memory `grafana-alert-update-notification-settings`）；且預設**不自動 apply**，產草案交 HITL G1。
+- ALB/AWS 原生 metric grafana MCP 查不到→ 走 Athena / AWS console。
+- **`alerting_manage_rules` update footgun**：要 update/edit alert rule 前先 get 完整 rule，update 時帶回**全部欄位**（含 `notification_settings` + `org_id`），漏帶會被靜默清空；且預設**不自動 apply**，產草案交 HITL G1。
 
 ## 不重造既有流程（編排，非取代）
 
 - **report 沉澱 / commit**：沿用 KB 既有慣例（topic-grouped commit、Markdown runbook、不裸 `.sh`）；**learned skill 先驗**每次從知識來源的 learned 索引撈（如 `flux-kustomization-webhook-transient-fail-triage`、`grafana-alert-query-aggregation-per-series-trap`、`karpenter-*`、`hpa-cold-start-scaleup-policy-sizing`）。
 - **不重寫** `/kb-query`、`/verify-live-state`、`/release-pr`、`/pr`——本 skill 在對應步驟**引用**它們。
-
-## Trigger Options（觸發層 — 僅選項分析，本次不實作）
-
-| 選項 | 機制 | 優點 | 缺點 | 適用階段 |
-|------|------|------|------|---------|
-| **A 手動貼** | 使用者貼 payload 跑 `/alert-triage` | 零基建、HITL 天然內建、可控 | 需人起手、非即時 | 現況 / MVP |
-| **C cron 輪詢** | cron 定期撈 firing alerts 批次 triage | 實作簡單、頻率可控、無常駐 webhook | 非即時、需去重避免重跑同 alert | 過渡 |
-| **B alertmanager webhook** | AM webhook → headless Claude SDK agent | 即時、無人值守、可自動關 benign | 需 webhook 接收端 + 認證 + 去重 + rate limit + 防 alert storm 自我 DoS | 目標（成熟後）|
-
-**推薦演進路徑**：A（現在，驗證分類品質）→ C（過渡，低風險自動化）→ B（目標，需 SDK headless + 去重 + rate limit + G1/G3 HITL 保留）。觸發層實作不在本 skill 範圍，本節僅供選型。

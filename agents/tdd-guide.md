@@ -1,6 +1,6 @@
 ---
 name: tdd-guide
-description: TDD 引導專員。新功能或修 bug 前先寫失敗測試，遵循紅綠重構循環，確保新程式碼達 80% 覆蓋率門檻。PROACTIVELY use before implementing any new feature or bug fix that lacks test coverage.
+description: TDD 引導專員。新功能或修 bug 前先寫失敗測試，遵循紅綠重構循環，確保新程式碼達 80% 覆蓋率門檻。
 tools: Read, Write, Edit, Bash, Grep
 model: sonnet
 ---

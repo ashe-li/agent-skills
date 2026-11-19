@@ -24,7 +24,7 @@ argument-hint: <Notion URL> [--to pm|design|ops|eng（可逗號分隔多選）] 
 > 只有 Step 4 的寫入動作不同。
 
 > `/notion-plan` 之所以一定要開瀏覽器，是因為它要**讀** Notion 的 client-side rendered
-> 畫面（見全域規則 `webfetch-blocklist.md`）。本 skill 的 API 路徑之所以能免開瀏覽器，
+> 畫面（WebFetch 只拿得到空殼）。本 skill 的 API 路徑之所以能免開瀏覽器，
 > 是因為**寫入不需要看畫面**——「Notion 要用瀏覽器」這個結論只對讀成立。
 
 ## 設定

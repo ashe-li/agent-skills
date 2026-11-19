@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Changed
+- **`alert-triage` 的 repo 歸屬改為與 ownership 規則一致**：Step 6 原本把整個 `deployment-eks` 寫成「後端團隊負責，不直接改，只產建議或開 issue」，與同檔 Action Items 段及 ownership 規則相反，會讓 skill 對 infra 類告警（OOM、查詢成本、HPA）判定為 real 之後只寫建議、不開 guardrail PR。改為分兩類：cluster infra、network、observability、Flux 與一般業務 deployment 的 PDB／HPA／副本數／resources 屬使用者，照常走 PR；`smb-*`／`payment-*`、託管資料庫、cert-manager 副本配置、後端 EC2 屬後端，不動也不寫提案。G3 關卡的觸發條件同步改為「後端 own 或歸屬不明的資源」。這是放寬原本的禁令，由使用者裁決後才改。
+- **`/pr` 的 PR 描述模板拿掉寫死的「Generated with Claude Code」**：署名是否加上改由使用者的 Claude Code attribution 設定決定。原本寫死在模板裡，關掉署名的使用者每次都要手動刪。
+- **`/evidence-check` 兩路調查改用 `sonnet`**：原本用 `haiku`，與 `/dispatch-loop` 角色分工（Haiku 只接「錯了很容易看出來」的工作、研究查證用 `sonnet`）不一致。Step 0 的成本預估同步改為「2 路 Sonnet・中」。成本會上升，尚未量測。
+- **`/figma-verify` 的 description 改為意圖類別**：原本列 11 個近義觸發詞並夾帶流程摘要，改成比對對象加三種觸發情境。觸發率可能改變，尚未量測。
+- **`/update` 的記憶落點加上優先序**：使用者的 `CLAUDE.md` 或專案指示若另外指定了記憶、learned skill 的落點，以該指示為準；skill 內寫的位置只是沒有指定時的預設。
+- **`/rca` 硬規則 5 收緊為「只調查，不代修、不主動寫提案」**：與同檔 Action Items 段的「不寫提案」一致。Step 2 第 5 項同步補上：根因落在後端 own 的資源時不寫修復草稿，交付格式的草稿路徑改為有草稿才附。
+- **`alert-triage` 的觸發層選項分析移到 `docs/alert-triage-trigger-options.md`**：那一節是選型筆記，不是執行步驟，內容逐字搬移。
+- **`agents/*.md` 的 description 拿掉「PROACTIVELY use …」**：這些檔不註冊成 agent type（`agents/README.md` 禁止直呼），該句沒有作用。`agents/doc-updater.md` 紅旗第一條改寫成要求本身，不再描述審查機制。
+
+### Fixed
+- **修正互相矛盾或指向不存在目標的引用**（來源：2026-11-18 以 Claude Fable 5.2 為目標的 prompt 稽核）：`evidence-gate` 第 6 節的「三項查核」改為四項，對齊 `/release-pr` Step 2.5；`rules/security-guidance/skill-integration.md` 的 `code-reviewer` 改為 `agents/doc-reviewer.md`；`notion-plan`、`notion-report`、`figma-verify` 拿掉不存在的 `webfetch-blocklist.md` 指標，理由直接寫在句子裡；`/design` 的「line 57」改用段落名、plan 模板範例的 `planner` 改為 `general-purpose`、Step 4a 移除 `architect` 禁用說明；`alert-triage` 的 9 處「memory `<slug>`」改指 KB 內的實際路徑；`plan-archive` 目錄規範的 `/plan` 改為 `/design` 並補上 `backlog/`。
+- **`plan-run` 更正 JSON 模式下 attach 訊息的說明**：原文說 attach 結果會印到 stdout、JSON 模式一律要帶 `--no-attach`，並把改走 stderr 寫成待辦。runner 的 `_attach_after_init` 在 JSON 模式已把訊息寫到 stderr，stdout 是可解析的；改為只在不想掛 cwd pointer 時才帶 `--no-attach`。
+- **移除相對於舊版本或單次事件的措辭**：`plan-run`（重複的事故敘述）、`agents/README.md`（改名沿革）、`update`（「廢棄…單行格式」）、`rules/teammate-fleet.md`（「本 session」）、`handoff`（與已停用工具的比較）、`alert-triage` 與 `rca`（plan step 代號改為功能描述）。
+
 ## [v3.6.0] - 2026-11-11
 
 ### Added

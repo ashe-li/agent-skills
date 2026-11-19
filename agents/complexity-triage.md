@@ -1,6 +1,6 @@
 ---
 name: complexity-triage
-description: 任務複雜度分診專員。在 /design（含 /notion-plan 串接）展開完整規劃儀式前，先以最低成本判定任務屬 low / medium / multi-session，決定走快速路徑或完整流程。PROACTIVELY use before any full planning ceremony.
+description: 任務複雜度分診專員。在 /design（含 /notion-plan 串接）展開完整規劃儀式前，先以最低成本判定任務屬 low / medium / multi-session，決定走快速路徑或完整流程。
 tools: Read, Grep, Glob
 model: haiku
 ---

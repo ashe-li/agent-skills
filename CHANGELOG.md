@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v3.7.0] - 2026-11-19
+
 ### Added
 - **知識來源契約與 `kb_source`**：新增 `docs/knowledge-source-contract.md` 與解析模組 `scripts/kb_source.py`。agent-skills 只放引擎，驗證 profile、checklist、既往 RCA 等知識放在使用者自己的知識庫；根目錄由環境變數 `AGENT_SKILLS_KB_HOME` 或 `${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/kb-home` 檔案第一行指定。契約文件定義目錄結構、profile 與 checklist 的 schema、降級矩陣（未設定、路徑不存在、沒有符合的 profile、多份符合都降級而非報錯）與信任邊界。解決的問題：數支 skill 各自寫死作者本機的知識庫路徑，其他使用者跑到那幾步只會撞到不存在的目錄。測試：`scripts/tests/test_kb_source.py`。
 - **驗證引擎 `scripts/verify_engine.py`**：依 profile 判定而不是每次由模型重新判讀。子命令：`status`（哪份 profile 適用）、`select`（依 diff 挑出該驗的 checklist 項目與命中原因，同時印 UI 判定）、`checks`（在最終 HEAD 跑 profile 宣告的快檢，argv 以 `shell=False` 執行）、`receipt`、`pr`（PR 註冊表，`register`、`show`）、`candidate`（漏接回寫候選）、`init-profile`（空 profile 骨架）、`lint`（檢查知識庫 `verification/` 目錄）。三種 receipt 各對應一個驗證面：快檢 receipt 以 `HEAD^{tree}` 為鍵，HEAD、profile、base 或引擎版本任一變動即失效；驗收 receipt（含免驗收 `exempt`）在 PR 的 UI 路徑之後又有變動時失效；CI receipt 在 head 或 CI 設定變動時失效。解決的問題：每次臨場重組快檢指令、「最終 HEAD 有沒有重跑」靠回想。這些是腳本，判定結果機械化。實作分在 `scripts/verify_*.py`，測試為 `test_verify_engine.py` 與 `test_verify_receipts.py`。
@@ -754,7 +756,8 @@ Notion 已將主網域遷至 `notion.com` 並新增 `app.notion.com/p/...` 連�
 - `/assist`: 萬用助手，智慧路由至最佳 agent pipeline
 
 <!-- 版本比較連結（Keep a Changelog 慣例）；補歷史版本連結時比照下方格式沿用即可 -->
-[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...HEAD
+[Unreleased]: https://github.com/ashe-li/agent-skills/compare/v3.7.0...HEAD
+[v3.7.0]: https://github.com/ashe-li/agent-skills/compare/v3.6.0...v3.7.0
 [v3.6.0]: https://github.com/ashe-li/agent-skills/compare/v3.5.2...v3.6.0
 [v3.5.2]: https://github.com/ashe-li/agent-skills/compare/v3.5.1...v3.5.2
 [v3.5.1]: https://github.com/ashe-li/agent-skills/compare/v3.5.0...v3.5.1

@@ -729,4 +729,5 @@ test ! -e ~/.claude/hooks/verify-gate.sh && echo "wrapper removed"
 - 目標 repo 或 branch 解析不出來的 `gh pr create` 與 `pr register` 只寫 `link-unresolved`，Stop 不會檢查那個 PR。
 - 指令失敗時 Claude Code 是否仍觸發 PostToolUse 依版本而定；沒觸發時那次推送不會被記錄。
 - hook payload 的欄位（`session_id`、`cwd`、`tool_input.command`、`tool_response`、`stop_hook_active`）取不到時一律放行。
+- hook 的輸入格式（上述欄位的名稱與形狀、PreToolUse 以 exit 2 擋下）目前只以 stdin JSON 的測試驗證，尚未在真實 Claude Code session 驗證。安裝後先做第 7 節的自檢，再開一個真實 session 確認決策紀錄有寫入；欄位對不上時 gate 會全部放行，看起來像「沒有東西要擋」。
 - 總時限（8 秒）或未預期例外造成的放行，會盡力寫一筆 decision `allow`、reason code `hook-timeout` 或 `hook-error`（`path` 為當時所在的路徑）；狀態目錄本身不可用時連這筆都寫不出來。

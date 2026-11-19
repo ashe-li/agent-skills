@@ -209,7 +209,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 1. **定位該修的 repo + base 規則**：
    - `web-app`：PR base **一律 hotfix**（KB `wiki/rules/read-target-repo-claude-md-before-cross-repo-work-pr-base-is-repo-rule.md`）。
    - `deployment-eks`：依歸屬分兩類（KB `wiki/rules/repo-ownership.md`）。
-     - **屬使用者，照常走 PR（G1）**：cluster infra（NodePool、PDB、Karpenter）、network／gateway、observability（Alloy、Loki、Grafana）、Flux，以及一般業務 deployment 的 PDB／HPA／副本數／resources。prod 的 cloudflared／alloy 走 `make PHASE=prod`，deploy trigger 由後端執行：做到 values PR 為止，不代跑。
+     - **屬使用者，照常走 PR（G1）**：cluster infra（NodePool、PDB、Karpenter）、network／gateway、observability（Alloy、Loki、Grafana）、Flux，以及一般業務 deployment 的 PDB／HPA／副本數／resources。prod 的 cloudflared／alloy 走 `make PHASE=prod`，deploy trigger 預設由後端執行：做到 values PR 為止，不主動代跑；使用者明示授權時才代跑。
      - **屬後端，不動也不寫提案（G3）**：`smb-*`／`payment-*` 的 helm values 與 secrets、託管資料庫、cert-manager 的副本配置、後端 EC2。只在報告正文用一句話標「屬後端」。
    - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（KB `wiki/rules/helm-persist-before-apply.md`）。
 2. **產 guardrail**（對症）：

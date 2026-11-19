@@ -12,8 +12,11 @@ created with O_EXCL and never overwrite an existing file.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import stat
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import NamedTuple, Optional, Sequence
@@ -30,6 +33,8 @@ MAX_NOTES_LINES = 20
 MAX_FLOW_NOTES = 200
 MIN_DISTINCT_SOURCES = 2
 OCCURRENCE_FIELDS = 4
+_DATED_CANDIDATE = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+)\.md$")
+_OCCURRENCES_HEADING = re.compile(r"^##\s+Occurrences\s*$")
 SECTION_PATTERN, SECTION_TRIGGER, SECTION_OCCURRENCES = "Pattern", "Proposed trigger", "Occurrences"
 
 
@@ -296,7 +301,95 @@ def candidate_text(cid: str, scope: str, pattern: str, paths: str, added: str,
     return "\n".join(lines)
 
 
+def _occurrence_key(line: str) -> str:
+    """The 出處 field of an occurrence line, or the whole line when malformed."""
+    parts = [p.strip() for p in line.split("|")]
+    return parts[2] if len(parts) >= OCCURRENCE_FIELDS and parts[2] else line.strip()
+
+
+def _existing_candidate(directory: Path, slug: str) -> Optional[Path]:
+    found = sorted(p for p in directory.iterdir()
+                   if _DATED_CANDIDATE.match(p.name)
+                   and _DATED_CANDIDATE.match(p.name).group(1) == slug)
+    return found[0] if found else None
+
+
+def _fresh_occurrences(doc: vp.Doc, occurrences: Sequence[str]) -> list:
+    occ = vp.section(doc, SECTION_OCCURRENCES)
+    seen = {_occurrence_key(l) for l in (occ.text if occ else "").splitlines() if l.strip()}
+    fresh = []
+    for raw in occurrences:
+        line = vp.clean_line(raw)
+        if line and _occurrence_key(line) not in seen:
+            fresh.append(line)
+            seen.add(_occurrence_key(line))
+    return fresh
+
+
+def _insert_occurrences(text: str, lines: Sequence[str]) -> str:
+    rows = text.rstrip("\n").split("\n")
+    start = next((i for i, r in enumerate(rows) if _OCCURRENCES_HEADING.match(r)), None)
+    if start is None:
+        return "\n".join(rows + ["", f"## {SECTION_OCCURRENCES}", "", *lines, ""])
+    end = next((i for i in range(start + 1, len(rows))
+                if rows[i].startswith("## ")), len(rows))
+    at = end
+    while at > start + 1 and not rows[at - 1].strip():
+        at -= 1
+    block = list(lines) if at > start + 1 else ["", *lines]
+    return "\n".join(rows[:at] + block + rows[at:] + [""])
+
+
+def _ignored_inputs(doc: vp.Doc, text_args: dict) -> list:
+    pattern = vp.section(doc, SECTION_PATTERN)
+    trigger = vp.section(doc, SECTION_TRIGGER)
+    fields = trigger.fields if trigger else {}
+    given = vp.clean_text(text_args.get("pattern", ""), max_chars=2000, max_lines=20).strip()
+    ignored = ["--pattern"] if given and given != (pattern.text.strip() if pattern else "") else []
+    for flag, key, field in (("--trigger-paths", "paths", "Trigger-paths"),
+                             ("--trigger-added", "added", "Trigger-added")):
+        value = vp.clean_line(text_args.get(key) or "")
+        if value and value != fields.get(field, ""):
+            ignored.append(flag)
+    return ignored
+
+
+def _rewrite(home: str, path: Path, text: str) -> bool:
+    """Replace a KB file atomically, keeping its mode; refuse symlinks."""
+    if path.is_symlink() or not vp.inside(home, path):
+        return False
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        return False
+    return True
+
+
+def _append_candidate(home: str, path: Path, text_args: dict) -> WriteResult:
+    text = _read_text(home, path)
+    if text is None:
+        return WriteResult("invalid", str(path), "candidate resolves outside the KB root")
+    doc = vp.parse_doc(text)
+    ignored = _ignored_inputs(doc, text_args)
+    note = (f"ignored {', '.join(ignored)}: an existing candidate keeps its Pattern and "
+            "Proposed trigger") if ignored else ""
+    fresh = _fresh_occurrences(doc, text_args.get("occurrences") or ())
+    if not fresh:
+        return WriteResult("unchanged", str(path), note or "every source is already listed")
+    if not _rewrite(home, path, _insert_occurrences(text, fresh)):
+        return WriteResult("invalid", str(path), "cannot rewrite the candidate file")
+    return WriteResult("appended", str(path), note)
+
+
 def add_candidate(home: str, slug: str, text_args: dict, today: Optional[date] = None) -> WriteResult:
+    """Create a candidate, or append new occurrences to the one with this slug."""
     if not SLUG_RE.match(slug):
         return WriteResult("invalid", None, "slug must be lowercase letters, digits and '-'")
     scope = text_args.get("scope") or "common"
@@ -305,13 +398,16 @@ def add_candidate(home: str, slug: str, text_args: dict, today: Optional[date] =
     directory = _target_dir(home, vp.CANDIDATES_DIR)
     if directory is None:
         return WriteResult("invalid", None, "_candidates resolves outside the KB root")
+    existing = _existing_candidate(directory, slug)
+    if existing is not None:
+        return _append_candidate(home, existing, text_args)
     created = (today or date.today()).isoformat()
     path = directory / f"{created}-{slug}.md"
     text = candidate_text(f"CAND-{slug.upper()}", scope, text_args.get("pattern", ""),
                           text_args.get("paths", ""), text_args.get("added", ""),
                           text_args.get("occurrences") or (), created)
     if not _create_exclusive(path, text):
-        return WriteResult("exists", str(path), "candidate file already exists")
+        return WriteResult("invalid", str(path), "candidate file appeared concurrently")
     return WriteResult("created", str(path), "")
 
 

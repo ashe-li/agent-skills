@@ -265,7 +265,7 @@ PR 建立／更新完成後，判斷本次變更**是否需要截圖驗收**，�
 
 ### 5.5a 分類（沿用 `/pr-evidence-comment` Step 0 的同一張表）
 
-以 Step 2 的「視覺驗收面」判定與 `gh pr diff <PR> --name-only` 為依據分類（有 profile 時 UI 與否以 profile 的 `Paths` UI／UI-exclude 為準，引擎不印 UI 判定，見 `/verify-change` Step 3）：
+以 Step 2 的「視覺驗收面」判定與 `gh pr diff <PR> --name-only` 為依據分類（有 profile 時 UI 與否以 profile 的 `Paths` UI／UI-exclude 為準，以 `$E select` 印出的 ui 判定為準）：
 
 | 變更類型 | 驗收手段 | 本步驟動作 |
 |---|---|---|

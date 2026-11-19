@@ -82,6 +82,9 @@ R_NOT_EXEMPT = "not-exempt"
 R_UNREGISTERED = "pr-unregistered"
 R_EXEMPT_CLOSED = "exempt-closed"
 R_EXEMPT_NONE = "exempt-none"
+R_UI_NO_PROFILE = "no-profile"
+R_UI_NO_PATHS = "no-ui-paths"
+R_UI_DIFF_UNAVAILABLE = "diff-unavailable"
 
 _ACCEPTANCE_NAME = re.compile(r"^acceptance-pr-(\d+)-([0-9a-f]{40}(?:[0-9a-f]{24})?)\.json$")
 
@@ -621,13 +624,43 @@ def acceptance_receipts(root: str, key: str, pr: int) -> tuple:
     return tuple(found)
 
 
-def _ui_untouched(root: str, profile: Optional[vp.Profile], old: str, new: str) -> Optional[bool]:
-    if old == new:
-        return True
-    names = vg.diff_names(root, old, new)
+class UiJudgement(NamedTuple):
+    is_ui: Optional[bool]
+    files: tuple
+    reason: str
+
+
+def ui_changes(root: str, profile: Optional[vp.Profile], old: Optional[str],
+               new: Optional[str]) -> UiJudgement:
+    """The single UI decision: which files in old..new match UI and not UI-exclude.
+
+    Used by `select`, check_acceptance_receipt and the ui_acceptance gate.
+    is_ui is None when there is no profile or the diff cannot be computed.
+    """
+    if profile is None:
+        return UiJudgement(None, (), R_UI_NO_PROFILE)
+    if not vp.path_globs(profile, "UI"):
+        return UiJudgement(False, (), R_UI_NO_PATHS)
+    names = () if old and old == new else (vg.diff_names(root, old, new) if old and new else None)
     if names is None:
-        return None
-    return not any(vp.is_ui_path(profile, name) for name in names)
+        return UiJudgement(None, (), R_UI_DIFF_UNAVAILABLE)
+    files = tuple(n for n in names if vp.is_ui_path(profile, n))
+    return UiJudgement(bool(files), files, "")
+
+
+def branch_ui_changes(root: str, profile: Optional[vp.Profile], head: str,
+                      base: Optional[str] = None) -> UiJudgement:
+    """ui_changes over merge-base(head, base or default_base)..head."""
+    ref = base or vp.default_base(profile)
+    merge = vg.merge_base(root, head, ref) or vg.merge_base(root, head, f"origin/{ref}")
+    return ui_changes(root, profile, merge, head)
+
+
+def _ui_untouched(root: str, profile: Optional[vp.Profile], old: str, new: str) -> Optional[bool]:
+    judgement = ui_changes(root, profile, old, new)
+    if judgement.reason == R_UI_NO_PROFILE:
+        return True
+    return None if judgement.is_ui is None else not judgement.is_ui
 
 
 def check_acceptance_receipt(repo: str, branch: str, *, kb_home: Optional[str] = None,

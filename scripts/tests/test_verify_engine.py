@@ -335,6 +335,30 @@ class SelectTests(VerifyCase):
         self.assertEqual([(r["trigger"], r["file"]) for r in by_id["CM-003"]["reasons"]],
                          [("Trigger-added", "src/工具/日誌.ts")])
 
+    def test_select_reports_ui_judgement(self) -> None:
+        paths = {"UI": "src/components/**", "UI-exclude": "src/components/**/*.test.tsx",
+                 "Tests": "tests/**"}
+        cases = (("UI file changed", {"src/components/Card.tsx": "x\n"}, VERIFY_KB,
+                  (True, ["src/components/Card.tsx"], "")),
+                 ("only UI-exclude files changed", {"src/components/Card.test.tsx": "x\n"},
+                  None, (False, [], "")),
+                 ("no profile", {"src/components/Card.tsx": "x\n"}, EMPTY_KB,
+                  (None, [], "no-profile")))
+        for label, files, kb, expected in cases:
+            with self.subTest(label):
+                self.fresh_root()
+                self.use_kb(kb or self.make_kb(profile_text(paths=paths)))
+                repo = self.make_repo()
+                self.commit(repo, files, label)
+                proc, data = self.engine_json("select", "--repo", str(repo), "--base", "main")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                ui = data["ui"]
+                self.assertEqual((ui["is_ui"], ui["files"], ui["reason"]), expected)
+                text = self.engine("select", "--repo", str(repo), "--base", "main").stdout
+                line = {True: "ui: yes (1 files)", False: "ui: no (0 files)",
+                        None: "ui: unknown (no-profile)"}[expected[0]]
+                self.assertIn(line, text)
+
 
 class ChecksTests(VerifyCase):
     def _run(self, profile: str, remote: str = EXAMPLE_REMOTE):
@@ -546,7 +570,7 @@ class SubcommandTests(VerifyCase):
         self.assertFalse((repo / "dry-run-marker").exists(), "--dry-run 不得執行任何快檢")
         self.assertEqual(self.receipt_files(repo), [])
 
-    def test_candidate_add_writes_new_file_and_never_overwrites(self) -> None:
+    def test_candidate_add_writes_new_file_and_never_overwrites_existing_content(self) -> None:
         kb = self.make_kb()
         self.use_kb(kb)
         args = ("candidate", "add", "--slug", "flag-cleanup",
@@ -565,11 +589,41 @@ class SubcommandTests(VerifyCase):
         got = {c["id"]: c["promotable"] for c in listed["candidates"]}
         self.assertIs(got["CAND-FLAG-CLEANUP"], True)
         proc, data = self.engine_json(*args[:-2])
-        self.assertEqual((proc.returncode, data["result"]), (1, "exists"))
+        self.assertEqual((proc.returncode, data["result"]), (0, "unchanged"))
         self.assertEqual(path.read_text(encoding="utf-8"), original)
         proc, data = self.engine_json("candidate", "add", "--slug", "../escape",
                                       "--pattern", "x", "--occurrence", "y")
         self.assertEqual((proc.returncode, data["result"]), (1, "invalid"))
+
+    def test_candidate_add_appends_new_source_to_existing_candidate(self) -> None:
+        kb = self.make_kb()
+        self.use_kb(kb)
+        base = ("candidate", "add", "--slug", "retry-storm", "--pattern", "retries without backoff",
+                "--trigger-added", "retry\\(")
+        first = "2026-01-03 | example-org/example-web | incident 7 | first"
+        proc, data = self.engine_json(*base, "--occurrence", first)
+        self.assertEqual((proc.returncode, data["result"]), (0, "created"))
+        path = Path(data["path"])
+        listed = lambda: {c["id"]: c["promotable"]
+                          for c in self.engine_json("candidate", "list")[1]["candidates"]}
+        self.assertIs(listed()["CAND-RETRY-STORM"], False)
+        second = "2026-02-09 | example-org/example-api | incident 8 | second"
+        proc, data = self.engine_json("candidate", "add", "--slug", "retry-storm",
+                                      "--pattern", "a different description",
+                                      "--occurrence", second)
+        self.assertEqual((proc.returncode, data["result"]), (0, "appended"))
+        self.assertIn("--pattern", data["message"])
+        self.assertEqual(Path(data["path"]), path, "沿用第一次建立的檔，不另開新檔")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("retries without backoff", text)
+        self.assertNotIn("a different description", text)
+        self.assertIn(second, text)
+        self.assertIs(listed()["CAND-RETRY-STORM"], True)
+        again = "2026-03-01 | example-org/example-api | incident 8 | same source"
+        proc, data = self.engine_json(*base, "--occurrence", again)
+        self.assertEqual((proc.returncode, data["result"]), (0, "unchanged"))
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+        self.assertEqual(len(list(path.parent.glob("*-retry-storm.md"))), 1)
 
     def test_init_profile_skeleton_passes_lint(self) -> None:
         kb = self.root / "fresh-kb"

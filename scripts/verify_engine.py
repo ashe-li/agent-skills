@@ -50,6 +50,9 @@ EXIT_OK, EXIT_FAIL, EXIT_USAGE = 0, 1, 2
 RESULT_WRITTEN, RESULT_REJECTED = vci.WRITTEN, vci.REJECTED
 R_EVIDENCE_UNAVAILABLE = "evidence-unavailable"
 R_PROFILE_PRESENT = "profile-present"
+R_ACCEPTANCE_EXISTS = "acceptance-exists"
+KIND_EVIDENCE, KIND_EXEMPT = "evidence-comment", "exempt"
+CANDIDATE_OK = frozenset({"created", "appended", "unchanged"})
 METHODS_GENERIC = ("generic", "none")
 
 
@@ -115,6 +118,12 @@ def _fenced_item(sel: vs.Selected) -> list:
     return [f"- {sel.item.id} [{sel.item.source}]", vp.fence(body)]
 
 
+def _ui_line(ui: vr.UiJudgement) -> str:
+    if ui.is_ui is None:
+        return f"ui: unknown ({ui.reason})"
+    return f"ui: {'yes' if ui.is_ui else 'no'} ({len(ui.files)} files)"
+
+
 def cmd_select(args: argparse.Namespace) -> int:
     info, ctx = _context(args)
     root = _require_root(info)
@@ -123,9 +132,12 @@ def cmd_select(args: argparse.Namespace) -> int:
         raise UsageError("--base and --head must be plain git refs")
     diff = vs.load_diff(root, base, args.head)
     selected = vs.select(ctx, root, diff)
+    ui = vr.ui_changes(root, ctx.profile, diff.base, diff.head)
     data = {"status": ctx.status, "profile": ctx.profile.filename if ctx.profile else None,
-            "base": diff.base, "head": diff.head, "items": vs.selected_json(selected)}
-    lines = [_status_line(ctx), f"base {diff.base} head {diff.head}: {len(selected)} item(s)"]
+            "base": diff.base, "head": diff.head, "items": vs.selected_json(selected),
+            "ui": {"is_ui": ui.is_ui, "files": list(ui.files), "reason": ui.reason}}
+    lines = [_status_line(ctx), f"base {diff.base} head {diff.head}: {len(selected)} item(s)",
+             _ui_line(ui)]
     notes = vp.section(ctx.profile.doc, vp.SECTION_NOTES) if ctx.profile else None
     if notes and notes.text.strip():
         lines += ["Verifier notes:", vp.fence(notes.text)]
@@ -177,10 +189,11 @@ def cmd_checks(args: argparse.Namespace) -> int:
 
 def _receipt_result(args: argparse.Namespace, result: str, reason: str = "",
                     path: Optional[str] = None, conclusion: Optional[str] = None,
-                    message: str = "") -> int:
+                    message: str = "", label: Optional[str] = None) -> int:
     data = {"result": result, "conclusion": conclusion, "reason": reason, "receipt": path,
             "message": message}
-    line = f"{result}: {conclusion or '-'} {reason} {path or ''} {message}".rstrip()
+    shown = label or conclusion or "-"
+    line = f"{result}: {shown} {reason} {path or ''} {message}".rstrip()
     emit(args, data, [line])
     failed = result == RESULT_REJECTED or conclusion == vci.RED
     return EXIT_FAIL if failed else EXIT_OK
@@ -248,22 +261,28 @@ def _write_acceptance(args: argparse.Namespace, kind: str, attachments: int,
     if head is None:
         return _receipt_result(args, RESULT_REJECTED, vr.R_HEAD_UNRESOLVED,
                                message="the PR branch has no local ref")
+    name = vr.acceptance_receipt_name(pr, head)
+    existing = vr.read_receipt(root, name)
+    if kind == KIND_EXEMPT and existing and existing.get("kind") == KIND_EVIDENCE:
+        return _receipt_result(args, RESULT_REJECTED, R_ACCEPTANCE_EXISTS,
+                               message="this head already has a real acceptance receipt; "
+                                       "an exemption may not replace it")
     receipt = {"schema": vr.SCHEMA_ACCEPTANCE, "repo": info.key, "pr": pr, "head_sha": head,
                "kind": kind, "attachments": attachments, "reason": reason,
                "created": vr.now_iso()}
-    path = vr.write_receipt(root, vr.acceptance_receipt_name(pr, head), receipt)
-    return _receipt_result(args, RESULT_WRITTEN, path=path)
+    path = vr.write_receipt(root, name, receipt)
+    return _receipt_result(args, RESULT_WRITTEN, path=path, label=kind)
 
 
 def cmd_receipt_acceptance(args: argparse.Namespace) -> int:
-    return _write_acceptance(args, "evidence-comment",
+    return _write_acceptance(args, KIND_EVIDENCE,
                              _positive(args.attachments, "--attachments"), "")
 
 
 def cmd_receipt_exempt(args: argparse.Namespace) -> int:
     if not args.reason.strip():
         raise UsageError("--reason must not be empty")
-    return _write_acceptance(args, "exempt", 0, vp.clean_line(args.reason, 500))
+    return _write_acceptance(args, KIND_EXEMPT, 0, vp.clean_line(args.reason, 500))
 
 
 def _load_evidence(args: argparse.Namespace, info: vr.RepoInfo) -> vci.Evidence:
@@ -371,7 +390,7 @@ def cmd_candidate_add(args: argparse.Namespace) -> int:
         "added": args.trigger_added or "", "occurrences": args.occurrence,
         "scope": args.scope})
     emit(args, out._asdict(), [f"{out.result}: {out.path or ''} {out.message}".rstrip()])
-    return EXIT_OK if out.result == "created" else EXIT_FAIL
+    return EXIT_OK if out.result in CANDIDATE_OK else EXIT_FAIL
 
 
 def cmd_init_profile(args: argparse.Namespace) -> int:

@@ -337,18 +337,13 @@ def ui_change(root: str, profile, head: str) -> bool:
     """True when the branch (merge-base with the default base .. head) touches UI.
 
     When no merge-base can be found the branch is treated as a UI change, so
-    the acceptance gate asks for evidence rather than silently passing.
+    the acceptance gate asks for evidence rather than silently passing. The
+    decision itself is verify_receipts.ui_changes, shared with `select` and
+    check_acceptance_receipt.
     """
-    import verify_git as vg
-    import verify_profile as vp
-    if not vp.path_globs(profile, "UI"):
-        return False
-    base = vp.default_base(profile)
-    merge = vg.merge_base(root, head, base) or vg.merge_base(root, head, f"origin/{base}")
-    names = vg.diff_names(root, merge, head) if merge else None
-    if names is None:
-        return True
-    return any(vp.is_ui_path(profile, name) for name in names)
+    import verify_receipts as vr
+    judgement = vr.branch_ui_changes(root, profile, head)
+    return bool(judgement.is_ui) or judgement.reason == vr.R_UI_DIFF_UNAVAILABLE
 
 
 # --- stop: per-link evaluation ----------------------------------------------------------

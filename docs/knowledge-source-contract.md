@@ -205,6 +205,8 @@ default_base: main
 
 `select` 對每個選入的項目附上命中原因：觸發方式（`Trigger-paths`、`Trigger-added` 或 `builtin`）、命中的檔案、命中的 glob 或 regex，`Trigger-paths` 另附檔案狀態。
 
+`select` 同時輸出 UI 判定：`--json` 帶 `"ui": {"is_ui": true|false|null, "files": [...], "reason": str}`，`files` 是同一段 diff 中符合 `UI` 且不符合 `UI-exclude` 的變更檔；文字模式印一行 `ui: yes (<n> files)` 或 `ui: no (0 files)`。沒有 profile（含 NO-KB、AMBIGUOUS）時 `is_ui` 為 null、文字印 `ui: unknown (no-profile)`；diff 算不出來時同樣為 null，reason 為 `diff-unavailable`；profile 沒有 `UI` glob 時為 false，reason 為 `no-ui-paths`。這個判定由 `verify_receipts.ui_changes` 提供，驗收 receipt 的 `ui-changed` 與 gate 的 `ui_acceptance` 呼叫的是同一個函式，skill 不要自己比對 glob。
+
 ### 內建項目
 
 引擎自帶一個項目，不寫在任何知識檔裡：
@@ -232,6 +234,13 @@ frontmatter：
 - `Pattern`：一段描述。
 - `Proposed trigger`：與 checklist 項目相同的 `- Trigger-paths: ...`、`- Trigger-added: ...` 欄位行。
 - `Occurrences`：每行一筆，格式為 `日期 | repo | 出處 | 一句話`。
+
+`candidate add --slug <slug>` 依 slug 找既有候選檔（`<日期>-<slug>.md`，日期沿用第一次建立的檔）：
+
+- 沒有既有檔：建立新檔，回 `created`。
+- 有既有檔：把新的 `--occurrence` 追加到 `Occurrences` 尾端，回 `appended`；`出處` 已出現過的行不重複加，全部都已存在時回 `unchanged`，檔案不動。既有的 `Pattern` 與 `Proposed trigger` 不會被改寫，傳入不同值時忽略，並在輸出的 `message` 註明被忽略的旗標。
+
+三種結果的 exit code 都是 0；slug、scope 不合法或目錄在 KB 根目錄之外時回 `invalid`、exit 1。
 
 可升級（promotable）的條件：至少兩筆 `出處` 不同的 Occurrences，而且 Proposed trigger 通過 checklist 項目的 lint 規則（至少一個 trigger、regex 可編譯）。`candidate list` 對每個候選項目標出是否可升級與原因，不會自動升級。被否決的候選項目保留檔案，把 `status` 改成 `rejected` 並寫下原因。
 
@@ -278,7 +287,7 @@ frontmatter：
 
 ### 驗收 receipt
 
-位置是 `.verification/receipts/acceptance-pr-<n>-<head_sha>.json`，由 `receipt acceptance`（附件讀回成功後）或 `receipt exempt`（附理由免驗收）寫入。`head_sha` 取該 PR branch 寫入當下的本機 ref，不接受參數傳入。PR 號必須是註冊表中該 repo 的 PR，否則拒絕（`repo-or-pr-mismatch`）。
+位置是 `.verification/receipts/acceptance-pr-<n>-<head_sha>.json`，由 `receipt acceptance`（附件讀回成功後）或 `receipt exempt`（附理由免驗收）寫入。`head_sha` 取該 PR branch 寫入當下的本機 ref，不接受參數傳入。PR 號必須是註冊表中該 repo 的 PR，否則拒絕（`repo-or-pr-mismatch`）。同一 PR 同一 head 已有 `kind` 為 `evidence-comment` 的 receipt 時，`receipt exempt` 拒絕（`acceptance-exists`，exit 1）且不覆寫；反過來，先寫了 `exempt`、之後真的驗收，`receipt acceptance` 會覆寫成 `evidence-comment`。兩者的文字輸出為 `written: <kind> <路徑>`，`--json` 的形狀與 `receipt ci` 相同（`conclusion` 為 null）。
 
 | 欄位 | 說明 |
 |---|---|
@@ -468,6 +477,7 @@ ci_evidence=enforce
 | `head-unresolved` | 無法決定 branch 的 head |
 | `evidence-invalid` | `--evidence` 的證據檔讀不到或不符 schema |
 | `evidence-unavailable` | `--from-gh` 時 `gh` 失敗，取不到證據 |
+| `acceptance-exists` | 該 head 已有真的驗收 receipt，`receipt exempt` 不得覆寫 |
 | `profile-present` | 有 profile 符合，不接受 `receipt record-generic` |
 | `state-error` | 狀態目錄或狀態檔不可安全使用（例如是 symlink、權限不足），引擎拒絕寫入 |
 

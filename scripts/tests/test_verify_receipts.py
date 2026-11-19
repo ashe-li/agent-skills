@@ -691,6 +691,31 @@ class SubcommandReceiptTests(ReceiptCase):
                          ("exempt", "copy only", 0))
         self.assertTrue(vr.check_acceptance_receipt(str(repo), FEATURE).valid)
 
+    def test_receipt_exempt_never_replaces_real_acceptance(self) -> None:
+        def accept(repo: Path, *extra: str):
+            return self.engine_json("receipt", *extra, "--repo", str(repo), "--pr", "42")
+
+        with self.subTest("real acceptance first, then exempt"):
+            repo = self.setup_pr()
+            self.assert_written(*accept(repo, "acceptance", "--attachments", "2"), None)
+            text = self.engine("receipt", "acceptance", "--repo", str(repo), "--pr", "42",
+                               "--attachments", "2").stdout
+            self.assertIn("written: evidence-comment", text)
+            proc, data = accept(repo, "exempt", "--reason", "copy only")
+            self.assert_rejected(proc, data, "acceptance-exists")
+            got = vr.check_acceptance_receipt(str(repo), FEATURE)
+            self.assertEqual((got.valid, got.receipt["kind"], got.receipt["attachments"]),
+                             (True, "evidence-comment", 2))
+        with self.subTest("exempt first, then real acceptance"):
+            self.fresh_root()
+            repo = self.setup_pr()
+            text = self.engine("receipt", "exempt", "--repo", str(repo), "--pr", "42",
+                               "--reason", "copy only").stdout
+            self.assertIn("written: exempt", text)
+            self.assert_written(*accept(repo, "acceptance", "--attachments", "1"), None)
+            got = vr.check_acceptance_receipt(str(repo), FEATURE)
+            self.assertEqual(got.receipt["kind"], "evidence-comment")
+
     def test_pr_show_reports_entry_and_head_source(self) -> None:
         repo = self.setup_pr(pr_state="closed")
         registered = self.head(repo)

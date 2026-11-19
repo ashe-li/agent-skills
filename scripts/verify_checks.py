@@ -28,9 +28,12 @@ PASS, FAIL, SKIPPED = "PASS", "FAIL", "SKIPPED"
 STALE, INVALID = "PROFILE-STALE", "PROFILE-INVALID"
 NO_KB, NO_PROFILE = "NO-KB", "NO-PROFILE"
 METHOD_PROFILE, METHOD_GENERIC = "profile-quick-checks", "generic"
+SKIPPED_BY_DRY_RUN = "dry-run"
 EXIT_NOT_FOUND = 127
 SHORT_SHA = 7
 DURATION_DIGITS = 3
+NON_DEFAULT_BASE_NOTICE = ("使用了非預設的 base：這張 receipt 的條件式快檢（When: paths:）"
+                           "不能當開 PR 的憑證，被跳過的必要快檢一律算未完成")
 DIRTY_NOTICE = "工作樹不乾淨，這張 receipt 不能當作開 PR 的憑證（快檢跑的是工作樹內容，不是 HEAD 的 tree）"
 _LOG_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
@@ -44,10 +47,12 @@ class CheckOutcome(NamedTuple):
     log: Optional[str]
     reason: str
     argv: tuple
+    skipped_by: Optional[str] = None
 
     def as_json(self) -> dict:
         return {"id": self.id, "required": self.required, "status": self.status,
-                "exit": self.exit, "duration_s": self.duration_s, "log": self.log}
+                "exit": self.exit, "duration_s": self.duration_s, "log": self.log,
+                "skipped_by": self.skipped_by}
 
 
 class ChecksRun(NamedTuple):
@@ -59,9 +64,10 @@ class ChecksRun(NamedTuple):
 
 
 def _outcome(qc: vp.QuickCheck, status: str, reason: str = "", exit_code: Optional[int] = None,
-             duration: float = 0.0, log: Optional[str] = None) -> CheckOutcome:
+             duration: float = 0.0, log: Optional[str] = None,
+             skipped_by: Optional[str] = None) -> CheckOutcome:
     return CheckOutcome(qc.id, qc.required, status, exit_code, round(duration, DURATION_DIGITS),
-                        log, reason, qc.argv)
+                        log, reason, qc.argv, skipped_by)
 
 
 def _open_log(path: Path):
@@ -97,7 +103,8 @@ def _pre_run(qc: vp.QuickCheck, root: str, changes: Sequence[vg.Change]) -> Opti
         return _outcome(qc, STALE, f"{qc.id}: Requires-path {qc.requires_path} does not exist")
     if qc.when_paths is not None and not any(
             vp.first_match(c.path, qc.when_paths) for c in changes):
-        return _outcome(qc, SKIPPED, f"{qc.id}: no changed file matches When")
+        return _outcome(qc, SKIPPED, f"{qc.id}: no changed file matches When",
+                        skipped_by=vr.SKIPPED_BY_WHEN)
     return None
 
 
@@ -115,7 +122,8 @@ def run_quick_checks(root: str, head: str, profile: vp.Profile, changes: Sequenc
     for qc in vp.quick_checks(profile):
         decided = _pre_run(qc, root, changes)
         if decided is None and dry_run:
-            decided = _outcome(qc, SKIPPED, f"{qc.id}: dry run, not executed")
+            decided = _outcome(qc, SKIPPED, f"{qc.id}: dry run, not executed",
+                               skipped_by=SKIPPED_BY_DRY_RUN)
         if decided is None:
             logs = logs or log_dir(root, head)
             name = _LOG_NAME_UNSAFE.sub("_", qc.id) + ".log"

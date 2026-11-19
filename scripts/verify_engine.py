@@ -160,6 +160,14 @@ def _checks_lines(data: dict, run: vc.ChecksRun) -> list:
     return lines
 
 
+def _checks_notices(dirty: bool, receipt: Optional[dict], custom_base: bool,
+                    root: str, profile: Optional[vp.Profile]) -> list:
+    notices = [vc.DIRTY_NOTICE] if dirty else []
+    if custom_base and receipt is not None and not vr.when_skip_trusted(receipt, root, profile):
+        notices.append(vc.NON_DEFAULT_BASE_NOTICE)
+    return notices
+
+
 def cmd_checks(args: argparse.Namespace) -> int:
     info, ctx = _context(args)
     root = _require_root(info)
@@ -171,7 +179,7 @@ def cmd_checks(args: argparse.Namespace) -> int:
     diff = vs.load_diff(root, base)
     run = vc.evaluate(root, head, ctx, diff.changes, args.dry_run)
     selected = vs.select(ctx, root, diff)
-    path = None
+    path, receipt = None, None
     if not args.dry_run:
         receipt = vc.build_receipt(info, ctx, run, head=head, tree=tree, dirty=dirty,
                                    selected=selected, diff_base=diff.base)
@@ -180,7 +188,7 @@ def cmd_checks(args: argparse.Namespace) -> int:
             "checks": [o.as_json() for o in run.outcomes], "dirty": dirty,
             "stale_reasons": list(run.stale), "invalid_reasons": list(run.invalid),
             "argv": {o.id: list(o.argv) for o in run.outcomes},
-            "notices": [vc.DIRTY_NOTICE] if dirty else []}
+            "notices": _checks_notices(dirty, receipt, bool(args.base), root, ctx.profile)}
     emit(args, data, _checks_lines(data, run))
     return EXIT_FAIL if data["verdict"] == vc.FAIL else EXIT_OK
 

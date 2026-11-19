@@ -470,14 +470,18 @@ echo '{"prompt":"幫我實作這個 plan","cwd":"/path/to/normal/repo"}' \
 
 **本 session 關聯哪些 PR**：PostToolUse 在指令位置看到下列任一個成功的指令，就把目標 repo 加 branch 記進本 session 的關聯檔：
 
-- `git push`：另外把被推送 branch 本機 ref 當下的 head 寫進註冊表的最新推送 head。解析不出推的是哪個 branch 時不寫入，改把該 repo 標為推送未解析。
-- `gh pr create`：另外在決策紀錄寫一筆 `link` 事件，把 session、repo、branch 接上 PR 號（從輸出中的 `/pull/<數字>` 取得）。
-- `verify_engine.py pr register`：只做驗收、沒有 push 的 session 靠這一步進入檢查。
+- `git push`：另外把推上去的 head 寫進註冊表的最新推送 head。一般寫法取被推送 branch 本機 ref 當下的 head；`<src>:<branch>`（例如從 detached HEAD 推 `HEAD:feat/x`）取 `<src>` 在該 repo 解析出的 SHA，記在目的 branch 名下；目的 branch 已知但 `<src>` 解析不出來時，把推送未解析的標記記在該 branch。只推 tag 與刪除遠端 branch 不記錄、不關聯。`--all`、`--mirror` 對註冊表有條目或本 session 已關聯的每個 branch 以本機 ref 記錄，不新增關聯。只有真的判斷不了的推送（參數含解析不出的變數、不認得的選項、目錄解析不出來）才把整個 repo 標為推送未解析，詳見第 2 節的表。
+- `gh pr create`：另外在決策紀錄寫一筆 `link` 事件，把 session、repo、branch 接上 PR 號（從輸出中的 `/pull/<數字>` 取得）。帶 `--help`、`-h`、`--dry-run` 的不算建立 PR，不記錄。
+- `verify_engine.py pr register`：包含 skill 裡的寫法 `$E pr register --repo . --from-gh`（`E` 在同一則指令內定義，或根本沒定義），以及 `python3 ${AGENT_SKILLS_HOME:-...}/scripts/verify_engine.py pr register ...`。只在工具輸出含引擎的註冊成功字樣時才關聯（JSON 模式的 `"result": "registered"`，或文字模式以 `registered <branch>: pr=<n> state=<s>` 開頭的一行）；輸出被丟掉（`> /dev/null`、`| tail -0`）就不會關聯。只做驗收、沒有 push 的 session 靠這一步進入檢查，所以這一步的輸出要留在工具結果裡。
+
+`gh pr create` 成功（有 PR 號）或 `pr register` 成功，但目標 repo 或 branch 解析不出來時（目錄或 `--repo`、`--branch`、`--head` 的值含解析不出的變數），不關聯，改寫一筆 `link` 事件：`branch` 為 null、reason code `link-unresolved`、`pr` 填拿得到的號碼。量測看得到「這個 session 建了或註冊了一個沒被追蹤的 PR」。
+
+每個關聯另外記下該 worktree 的 git common dir（存在狀態目錄的 `gate-worktrees.json`）。worktree 之後被移除時，Stop 改用同一個 repo 仍存在的其他 worktree 評估，全都不在才記 `repo-unavailable` 放行。receipt 存在被移除的 worktree 的 `.verification/` 裡，會跟著消失；gate 分不出「驗過但檔案沒了」與「從沒驗過」，所以在替代的 worktree 找不到 receipt 時不擋，記 `allow`、reason code `receipts-unavailable`。替代的 worktree 裡找得到 receipt（例如在那裡重跑過 `receipt ci --from-gh`）就照常評估。
 
 **Stop 怎麼判**：
 
 - 檢查本 session 關聯過的**所有** PR，不以目前 checkout 的 branch 篩選。push 完切到別的 branch 再結束，原本的 PR 一樣要檢查。
-- 每個 PR 的 head：本機 ref 存在就用它；不存在時只能用最新推送 head 或時間更晚的註冊紀錄；決定不了就是 `head-unresolved`，視為缺證據，不會退回較早的 head、也不會沿用舊 receipt。
+- 每個 PR 的 head 依契約文件的「head 決定順序」：原則上用本機 ref，但最新推送 head 不是本機 ref 的祖先（實際推上去的內容本機 ref 沒有）時改用最新推送 head；本機 ref 不存在時只能用最新推送 head 或時間更晚的註冊紀錄；推送未解析的標記晚於這些紀錄、或決定不了，就是 `head-unresolved`，視為缺證據，不會退回較早的 head、也不會沿用舊 receipt。
 - 推了沒註冊的 branch：`pr-unregistered`，要求跑 `pr register --from-gh`，或以 `--none` 標記沒有 PR。
 - 註冊為 closed 或 `--none` 的 branch 免檢，但只在 head 沒變時成立；head 變了是 `registration-stale`。
 - `ui_acceptance` 只管 UI PR：branch 與預設 base 的 merge-base 到 head 之間，有檔案符合 profile 的 `Paths` `UI` 且不被 `UI-exclude` 排除。找不到 merge-base 時當作 UI PR。
@@ -486,34 +490,55 @@ echo '{"prompt":"幫我實作這個 plan","cwd":"/path/to/normal/repo"}' \
 
 ## 2. 指令判讀規則
 
-hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`），只認「指令位置」：以 `;`、`&&`、`||`、`|`、`&`、換行分隔後，每段去掉開頭的 `NAME=value` 之後的第一個字。
+hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`），只認「指令位置」：以 `;`、`&&`、`||`、`|`、`&`、換行分隔後，每段去掉開頭的 `NAME=value`、`if`／`then`／`else`／`elif`／`while`／`until`／`do`／`{`／`!` 這類關鍵字與包裝指令之後的第一個字。命令替換 `$(...)`、反引號與 `( ... )` subshell 裡的指令會執行，所以也會掃，各自沿用當下的目錄。
+
+同一則指令裡先賦值再使用的變數（`WT=/abs/path; cd "$WT" && ...`、`export BR=feat/x`、`${WT}`）以賦值的靜態字串展開後照常判斷。值本身含命令替換或未知變數（`WT=$(git rev-parse --show-toplevel)`）、或在這則指令裡沒有賦值的變數，算解析不出來。只採信無條件執行的賦值：出現在 `if`／`then`／`do`／`{` 等關鍵字之後或複合指令裡、`&&`／`||`／`|` 右側、`|` 左側、subshell 或命令替換裡的賦值，以及被 `unset`、`read`、`for <名稱> in`、`export -n`、`local`、`declare` 碰過的名稱，一律視為未知，之後用到它就記 `cwd-unresolved`（或 `link-unresolved`），不會落到某個具體路徑。
 
 認得的寫法（舉例）：
 
 - `gh pr create --fill`、`GH_DEBUG=1 gh pr create ...`、`gh pr create --body "$(cat <<'EOF' ... EOF)"`
+- 包裝指令之後：`command gh pr create`、`env [-i] [-u X] [NAME=V]... gh pr create`、`timeout [-s SIG] [-k 時間] [--foreground] <時間> gh pr create`、`nohup ...`、`exec ...`、`time [-p] ...`、`sudo [-u X] [-E] ...`、`nice [-n N] ...`，可疊用（`env X=1 timeout 60 command gh pr create`）
+- 關鍵字之後：`if gh pr create ...; then`、`then gh pr create`、`do gh pr create`、`else ...`、`{ gh pr create; }`、`! gh pr create`
+- 先賦值再使用：`WT=/abs/path; cd "$WT" && gh pr create`、`git -C "$WT" push`、`--repo "$WT"`、`--head "$BR"`
+- 命令替換與 subshell 內：`URL=$(gh pr create --fill)`、`` echo `gh pr create` ``、`... || (gh pr create)`、`(cd x && git push)`
 - `git push`、`git push -u origin HEAD`、`git -C <路徑> push origin <branch>`、`git -c k=v --no-pager push ...`
-- `cd <路徑> && gh pr create`（`cd` 之後以 `&&`、`;`、換行接續的指令都視為在該目錄執行）
-- `python3 scripts/verify_engine.py pr register --from-gh`
+- `cd <路徑> && gh pr create`（`cd` 之後以 `&&`、`;`、換行接續的指令都視為在該目錄執行）。`cd` 出現在關鍵字之後或複合指令裡（`if …; then cd X && gh pr create; fi`、`{ cd X && …; }`、`for …; do cd X …`）時不採用：作用範圍不模擬，之後所有段落的目錄一律算解析不出來，記 `cwd-unresolved`、不擋
+- `python3 scripts/verify_engine.py pr register --from-gh`、`E="python3 .../verify_engine.py"` 之後的 `$E pr register ...`、只有尾段是字面的 `python3 ${...}/scripts/verify_engine.py pr register ...`
 
-明確不算的寫法（放行）：
+明確不算的寫法（放行，不留紀錄）：
 
-- 註解裡（`# gh pr create`）、heredoc 內文、引號內（`echo "gh pr create"`、`git commit -m "... gh pr create ..."`）、命令替換內（`x=$(gh pr create)`）
-- 解析不了的複雜指令一律當作不符合：subshell 或 `{ ...; }` 群組、process substitution、`case`、未閉合的引號、`if ...; then ...; fi` 這類保留字開頭的段落、指令名本身是變數（`$GIT push`）、`git --git-dir=...`
+- 註解裡（`# gh pr create`）、heredoc 內文、引號內（`echo "gh pr create"`、`git commit -m "... gh pr create ..."`、`grep "gh pr create" f`）
+- `gh pr create --help`、`-h`、`--dry-run`（不建立 PR）；`command -v gh`（查詢，不執行）
+
+放行但留紀錄（decision `allow`，observe 與 enforce 都寫，讓量測看得到覆蓋缺口）：
+
+| 情況 | reason code |
+|---|---|
+| 認得 `gh pr create`，但目錄解析不出來（`cd "$WT" && gh pr create` 的 `WT` 沒有在同一則指令裡賦值，或值含命令替換） | `cwd-unresolved` |
+| 沒有認出任何 `gh pr create`（不論整段能不能解析），而引號、註解與 heredoc 之外出現 `gh pr create` 字樣：`xargs ... gh pr create` 這類不認得的包裝、process substitution、`case` 分支內等 | `unparsed` |
+
+`unparsed` 會有少量假紀錄：未加引號、當成參數傳給別的程式的 `echo gh pr create` 也會記一筆。只影響量測，不會擋。
+
+選項的值解析不出來時（`pr register --repo "$WT"`、`--branch "$BR"`、`gh pr create --head "$BR"`，且變數沒有在同一則指令裡賦值），不退回目前目錄或目前 branch 去猜，那一筆不關聯，改寫 `link-unresolved`；`git push` 的目錄解析不出來時，若 payload 的 `cwd` 是有 profile 的 repo，就把它標為推送未解析。
 
 `git push` 推的是哪個 branch：
 
 | 寫法 | 判定 |
 |---|---|
-| 沒有位置參數，或只有 remote；refspec 為 `HEAD` 或 `@` | 目前 checkout 的 branch（detached HEAD 視為未解析） |
-| `<remote> <branch>`、`<remote> +<branch>`、`<remote> refs/heads/<branch>`、`<remote> <branch>:<branch>` | 該 branch |
-| `<remote> HEAD:refs/...`、`<remote> a:b`（兩邊不同名）、多個 refspec、`--all`、`--mirror`、`--tags`、`--delete`、`--prune`、不認得的選項、參數含變數 | 未解析：不寫最新推送 head，把該 repo 標為推送未解析 |
+| 沒有位置參數，或只有 remote；refspec 為 `HEAD` 或 `@` | 目前 checkout 的 branch（detached HEAD 時把該 repo 標為推送未解析） |
+| `<remote> <branch>`、`<remote> +<branch>`、`<remote> refs/heads/<branch>`、`<remote> <branch>:<branch>` | 該 branch，取本機 ref；本機沒有這個 branch 時把標記記在該 branch |
+| `<remote> <src>:<branch>`、`<remote> +<src>:refs/heads/<branch>`（兩邊不同名，例如 `HEAD:feat/x`、`v1:feat/x`） | 目的 branch；最新推送 head 取 `<src>` 解析出的 commit SHA（`<src>` 是 tag 也照常解析，tag 判斷只看目的），解析不出來就把標記記在該 branch |
+| 多個 refspec（`<remote> a b`） | 逐一依上面各列處理 |
+| `--tags` 且沒有 branch refspec、目的是 `refs/tags/*`、名稱在該 repo 解析為 tag 而不是 branch（`git push origin v1`）、`--delete`／`-d`、`<remote> :<branch>` | 不記錄、不標記、不關聯 |
+| `--all`、`--branches`、`--mirror` | 註冊表有條目或本 session 已關聯的每個 branch，以本機 ref 記錄；不新增關聯、不打 repo 層級標記 |
+| 目的是 `refs/` 下其他位置（例如 `HEAD:refs/remotes/x`）、不認得的選項、參數含解析不出的變數、目錄解析不出來 | 判斷不了：把整個 repo 標為推送未解析 |
 | `-n`、`--dry-run` | 不算推送，不記錄 |
 
 「成功」的判定（PostToolUse 只拿得到工具輸出，判不準時寧可多記）：
 
 - `git push`：`interrupted` 為真，或輸出含 `failed to push`、`[rejected]`、`[remote rejected]`、`has no upstream branch`、`does not appear to be a git repository`、`could not read from remote repository`、`authentication failed`、`permission denied` 任一字樣（不分大小寫）時不算成功；其餘都算成功。多記的後果是多要求一次驗證，少記的後果是漏擋。
 - `gh pr create`：stdout 有 `/pull/<數字>`（或 stderr 寫明 PR 已存在且附網址）就算成功並記 PR 號；沒有網址時，`interrupted` 為假且輸出不含 `error:`、`fatal:`、`could not`、`must first push`、`no commits between` 等失敗字樣，才算成功（只記關聯、不寫 `link` 事件）。
-- `pr register`：輸出含 `"result": "registered"` 就算成功；否則 `interrupted` 為假且不含上述失敗字樣才算。
+- `pr register`：只有輸出含 `"result": "registered"`，或有一行以 `registered <branch>: pr=<n> state=<s>` 開頭，才算成功。其餘一律不算，避免把不是引擎的 `$X pr register` 誤認進來。
 
 ## 3. 安裝 wrapper
 
@@ -614,7 +639,7 @@ for key, n in sorted(count.items(), key=str):
 EOF
 ```
 
-看三件事再決定：`would_block` 佔 Stop 次數的比例（升 enforce 後會被擋的頻率）；`would_block` 裡有多少是誤判（逐筆對照當時的 PR，確認真的缺證據）；`declared-unverified` 與 `ci-not-configured` 的量（這兩類放行但沒有真正驗證，量測時要單獨看）。一次只升一個 gate。
+看三件事再決定：`would_block` 佔 Stop 次數的比例（升 enforce 後會被擋的頻率）；`would_block` 裡有多少是誤判（逐筆對照當時的 PR，確認真的缺證據）；`declared-unverified` 與 `ci-not-configured` 的量（這兩類放行但沒有真正驗證，量測時要單獨看）；`cwd-unresolved`、`unparsed`、`link-unresolved` 的量（指令寫法超出掃描器能判讀的範圍，是覆蓋缺口）；`receipts-unavailable` 的量（worktree 移除後無從檢查）；`hook-timeout` 與 `hook-error` 的量（hook 自己 fail-open 放行的次數）。一次只升一個 gate。
 
 **observe 不是防護。** off 與 observe 都屬「僅 observe」：只留紀錄、不阻止任何事；只有 enforce 才是機械化的檢查，而且仍有下面「已知盲點」列的缺口。
 
@@ -671,7 +696,7 @@ cp ~/.claude/settings.json ~/.claude/hooks/verify-gate.sh ~/.claude/backups/$(da
 2. `rm -f ~/.claude/hooks/verify-gate.sh`
 3. 想保留 hook 但暫停時，不必移除：把三個 gate 的模式設回 `off`（刪掉模式檔或環境變數）即可。
 
-清除狀態（可選）：`~/.claude/verify-gate/` 是狀態不是安裝，裡面有 PR 註冊表、session 關聯檔與決策紀錄。註冊表也是引擎 `pr register` 的寫入位置，刪掉會讓既有註冊失效；只在確定不再使用驗證引擎時才 `rm -rf ~/.claude/verify-gate`。
+清除狀態（可選）：`~/.claude/verify-gate/` 是狀態不是安裝，裡面有 PR 註冊表、session 關聯檔、worktree 對照（`gate-worktrees.json`）與決策紀錄。註冊表也是引擎 `pr register` 的寫入位置，刪掉會讓既有註冊失效；只在確定不再使用驗證引擎時才 `rm -rf ~/.claude/verify-gate`。
 
 驗證：
 
@@ -693,7 +718,15 @@ test ! -e ~/.claude/hooks/verify-gate.sh && echo "wrapper removed"
 
 實作上的取捨，同樣會漏：
 
-- 指令掃描器保守：寫在 subshell、`{ ...; }` 群組、條件式裡，或指令名由變數組成的 `gh pr create` 與 `git push` 不會被認出。
-- push 的 branch 解析不出來時只標記推送未解析，不會建立 session 關聯；該 branch 若從未以其他方式關聯，Stop 不會檢查它。
+- 指令掃描器仍認不得的寫法：`case` 分支內、process substitution、`xargs`、`find -exec`、`bash -c '...'`／`sh -c '...'`（引號內，連 `unparsed` 都不會記）、陣列展開（`"${E[@]}"`）、指令名由解析不出的變數組成（`$GIT push`）、`git --git-dir=...`。
+- 目錄解析不出來的 `gh pr create` 只記 `cwd-unresolved`，不擋；認不出來但引號外出現 `gh pr create` 字樣的只記 `unparsed`，不擋。兩者都是為了避免誤擋，代價是換成這類寫法就繞得過 enforce。
+- 關鍵字之後或複合指令裡的 `cd`、條件式裡的變數賦值都不採用，之後的目錄記 `cwd-unresolved`、不擋。
+- `cd "$變數"` 而變數不在同一則指令內賦值，是 worktree 流程最常見的寫法之一，在 enforce 下同樣不會被擋。observe 期應單獨統計 `cwd-unresolved` 佔 `pre_pr` 紀錄的比例，再決定升 enforce 時要不要改成擋。
+- `pre_pr` 檢查的是指令執行目錄的 `HEAD`：`gh pr create --head <別的 branch>` 或 `-R <別的 repo>` 時，檢查的不是 PR 實際的 head 或 repo。
+- push 的 branch 判斷不了時只標記推送未解析，不會建立 session 關聯；該 branch 若從未以其他方式關聯，Stop 不會檢查它。
+- worktree 被移除後，該 PR 不再被擋，只留 `receipts-unavailable` 紀錄：receipt 隨 worktree 一起消失，gate 分不出驗過與否。要保留檢查，就在移除前完成驗證，或從另一個 worktree 重跑 `receipt ci --from-gh`。
+- `pr register`（含 `$E pr register`）只在輸出含引擎的註冊成功字樣時才關聯；輸出被丟掉、截斷或導向檔案時不會關聯。
+- 目標 repo 或 branch 解析不出來的 `gh pr create` 與 `pr register` 只寫 `link-unresolved`，Stop 不會檢查那個 PR。
 - 指令失敗時 Claude Code 是否仍觸發 PostToolUse 依版本而定；沒觸發時那次推送不會被記錄。
 - hook payload 的欄位（`session_id`、`cwd`、`tool_input.command`、`tool_response`、`stop_hook_active`）取不到時一律放行。
+- 總時限（8 秒）或未預期例外造成的放行，會盡力寫一筆 decision `allow`、reason code `hook-timeout` 或 `hook-error`（`path` 為當時所在的路徑）；狀態目錄本身不可用時連這筆都寫不出來。

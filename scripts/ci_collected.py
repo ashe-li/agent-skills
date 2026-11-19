@@ -20,7 +20,13 @@ ids-file: one changed-test identifier per line; blank lines and `#` lines skip.
 --runner: built-in list pattern for unittest (-v), pytest (-v), jest, playwright.
 --match: how an ids-file value is compared with a log identifier.
     exact (default)  strictly equal
-    suffix           either side ends with the other at a `/` or `.` boundary
+    suffix           the log identifier ends with the value at a `/` or `.`
+                     boundary (ids short, log complete)
+    suffix-of-id     the value ends with the log identifier at a `/` or `.`
+                     boundary (ids from the repo root, log relative to the
+                     runner dir). Misjudges FOUND when the log identifier is
+                     short (any package's `TestRefund` matches); use it only
+                     when both the ids and the log list paths.
     prefix           the log identifier starts with the value at a `.`/`/`/`:` boundary
 Several --log files (matrix jobs) are unioned and deduplicated.
 
@@ -41,7 +47,8 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
 MATCH_EXACT, MATCH_SUFFIX, MATCH_PREFIX = "exact", "suffix", "prefix"
-MATCH_MODES = (MATCH_EXACT, MATCH_SUFFIX, MATCH_PREFIX)
+MATCH_SUFFIX_OF_ID = "suffix-of-id"
+MATCH_MODES = (MATCH_EXACT, MATCH_SUFFIX, MATCH_SUFFIX_OF_ID, MATCH_PREFIX)
 SUFFIX_BOUNDARIES = ("/", ".")
 PREFIX_BOUNDARIES = (".", "/", ":")
 
@@ -110,10 +117,9 @@ def is_match(wanted: str, seen: str, mode: str = MATCH_EXACT) -> bool:
     if wanted == seen:
         return True
     if mode == MATCH_SUFFIX:
-        return any(
-            seen.endswith(b + wanted) or wanted.endswith(b + seen)
-            for b in SUFFIX_BOUNDARIES
-        )
+        return any(seen.endswith(b + wanted) for b in SUFFIX_BOUNDARIES)
+    if mode == MATCH_SUFFIX_OF_ID:
+        return any(wanted.endswith(b + seen) for b in SUFFIX_BOUNDARIES)
     if mode == MATCH_PREFIX:
         return any(seen.startswith(wanted + b) for b in PREFIX_BOUNDARIES)
     return False
@@ -193,7 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
     source = ids.add_mutually_exclusive_group(required=True)
     source.add_argument("--pattern")
     source.add_argument("--runner", choices=sorted(RUNNER_PATTERNS))
-    ids.add_argument("--match", choices=MATCH_MODES, default=MATCH_EXACT)
+    ids.add_argument(
+        "--match", choices=MATCH_MODES, default=MATCH_EXACT,
+        help="exact (default); suffix: log id ends with the value; suffix-of-id: "
+             "value ends with the log id, misjudges FOUND for short log ids, use only "
+             "when ids and log are both paths; prefix: log id starts with the value",
+    )
     count = sub.add_parser("count", help="auxiliary totals; never PASS")
     count.add_argument("--before", required=True)
     count.add_argument("--after", required=True)

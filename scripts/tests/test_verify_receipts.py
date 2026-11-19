@@ -299,6 +299,67 @@ class QuickReceiptTests(ReceiptCase):
         self.checks(repo)
         self.assertTrue(vr.check_quick_receipt(str(repo)).valid, "乾淨時重跑即恢復有效")
 
+    def test_quick_receipt_valid_when_required_check_skipped_by_when(self) -> None:
+        """S5.1 H4：必要快檢因 When 不命中而 SKIPPED 不算未完成；其他原因的非 PASS 仍算。"""
+        ok = ("QC-001 — ok", {"Argv": "python3 tools/ok.py", "When": "always"})
+        migrations = ("QC-002 — migrations", {"Argv": "python3 tools/ok.py",
+                                              "When": "paths: migrations/**"})
+        repo = self._verified_repo(qcs=(ok, migrations))
+        proc, data = self.checks(repo)
+        self.assertEqual((proc.returncode, data["verdict"]), (0, "PASS"))
+        path = Path(data["receipt"])
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        skipped = receipt["checks"][1]
+        self.assertEqual((skipped["status"], skipped["required"], skipped["skipped_by"]),
+                         ("SKIPPED", True, "when"))
+        self.assertTrue(vr.check_quick_receipt(str(repo)).valid)
+        receipt["checks"][1]["skipped_by"] = "dry-run"
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+        self.assertEqual(vr.check_quick_receipt(str(repo)).reason, "required-incomplete")
+
+    def test_quick_receipt_invalid_when_when_skip_used_non_default_base(self) -> None:
+        """S5.1 N1：`checks --base` 用較新的 ref 讓 diff 變空時，被跳過的條件式必要快檢不算通過。"""
+        ok = ("QC-001 — ok", {"Argv": "python3 tools/ok.py", "When": "always"})
+        migrations = ("QC-002 — migrations", {"Argv": "python3 tools/fail.py",
+                                              "When": "paths: migrations/**"})
+        repo = self._verified_repo(qcs=(ok, migrations))
+        self.commit(repo, {"migrations/1.sql": "alter table t add c int;\n"}, "migration")
+        proc, data = self.checks(repo)
+        self.assertEqual((proc.returncode, data["verdict"], data["checks"][1]["status"]),
+                         (1, "FAIL", "FAIL"))
+        proc, data = self.checks(repo, "--base", "HEAD")
+        self.assertEqual((proc.returncode, data["verdict"]), (0, "PASS"))
+        self.assertEqual((data["checks"][1]["status"], data["checks"][1]["skipped_by"]),
+                         ("SKIPPED", "when"))
+        self.assertTrue(any("不能當開 PR 的憑證" in n for n in data["notices"]))
+        got = vr.check_quick_receipt(str(repo))
+        self.assertEqual((got.valid, got.reason), (False, "required-incomplete"))
+
+    def test_quick_receipt_when_skip_trusted_with_origin_default_base(self) -> None:
+        """S5.1 R3-5：本機 main 落後 origin/main 時，--base origin/main 的 When 跳過仍採信。"""
+        ok = ("QC-001 — ok", {"Argv": "python3 tools/ok.py", "When": "always"})
+        migrations = ("QC-002 — migrations", {"Argv": "python3 tools/ok.py",
+                                              "When": "paths: migrations/**"})
+        self.use_kb(self.make_kb(eng.profile_text(qcs=(ok, migrations))))
+        repo = self.make_repo()
+        self.git(repo, "checkout", "-q", "-b", "upstream-main", "main")
+        upstream = self.commit(repo, {"migrations/0002.sql": "alter table t add c int;\n"},
+                               "main moved on the remote")
+        self.git(repo, "update-ref", "refs/remotes/origin/main", upstream)
+        self.git(repo, "checkout", "-q", FEATURE)
+        self.git(repo, "branch", "-q", "-D", "upstream-main")
+        self.git(repo, "reset", "-q", "--hard", upstream)
+        self.commit(repo, {"src/app.ts": "export const app = 2;\n"}, "feature on origin/main")
+        self.assertNotEqual(self.head(repo, "main"), upstream, "前提：本機 main 落後")
+        cases = ((None, "PASS", ""), ("origin/main", "SKIPPED", ""),
+                 ("HEAD", "SKIPPED", "required-incomplete"))
+        for base, qc2, expected in cases:
+            with self.subTest(base=base):
+                proc, data = self.checks(repo, *(("--base", base) if base else ()))
+                self.assertEqual((proc.returncode, data["verdict"]), (0, "PASS"))
+                self.assertEqual(data["checks"][1]["status"], qc2)
+                self.assertEqual(vr.check_quick_receipt(str(repo)).reason, expected)
+
 
 class CiReceiptTests(ReceiptCase):
     def test_ci_receipt_rejects_evidence_for_old_head(self) -> None:
@@ -495,6 +556,29 @@ class CiReceiptTests(ReceiptCase):
         self.assert_gh_read_only()
         self.assertEqual(self.ci_receipts(repo), [])
 
+    def test_ci_superseded_cancelled_run_does_not_force_red(self) -> None:
+        """S5.1 M5：同一 workflow 較舊 run_id 的取消／失敗 run 被較新的 run 取代。"""
+        repo = self.setup_pr()
+        head = self.head(repo)
+        data = self.evidence_data("green-head.json", head)
+        newer = data["runs"][0]
+        cancelled = [{**job, "conclusion": "cancelled"} for job in newer["jobs"]]
+        data["runs"] = [{**newer, "run_id": 999999999, "conclusion": "cancelled",
+                         "jobs": cancelled}, newer]
+        self.assert_written(*self.ci(repo, self.write_json(data)), "green")
+        data["runs"] = [{**newer, "run_id": 2000000000, "conclusion": "failure",
+                         "jobs": [{**newer["jobs"][0], "conclusion": "failure"},
+                                  newer["jobs"][1]]}, newer]
+        self.assert_written(*self.ci(repo, self.write_json(data)), "red", 1)
+
+    def test_ci_receipt_rejects_when_registry_entry_not_open(self) -> None:
+        """S5.1 L6：註冊表條目不是 open 時不寫 CI receipt（plan 決策 4）。"""
+        repo = self.setup_pr(pr_state="closed")
+        proc, data = self.ci(repo, self.evidence("green-head.json", self.head(repo)))
+        self.assert_rejected(proc, data, "repo-or-pr-mismatch")
+        self.assertIn("pr register", proc.stdout)
+        self.assertEqual(self.ci_receipts(repo), [])
+
 
 class RegistryTests(ReceiptCase):
     def test_registry_exemption_invalid_after_head_change(self) -> None:
@@ -624,6 +708,117 @@ class RegistryTests(ReceiptCase):
         self.assertEqual(vr.check_ci_receipt(str(repo), FEATURE).reason, "no-receipt")
         self.assertEqual(vr.check_acceptance_receipt(str(repo), FEATURE).reason, "no-receipt")
         self.assertIn(f"ci-pr-42-{head}.json", self.receipt_files(repo), "舊 receipt 保留但不適用")
+
+    def _behind_setup(self) -> tuple:
+        """PR 42 with a green CI receipt at H1 and an unpushed-locally H2.
+
+        The commits carry an old committer date, so the branch's reflog time is
+        clearly (more than a second) before a push recorded now.
+        """
+        os.environ["GIT_COMMITTER_DATE"] = "2001-01-01T00:00:00Z"
+        repo = self.setup_pr()
+        h1 = self.head(repo)
+        self.assert_written(*self.ci(repo, self.evidence("green-head.json", h1)), "green")
+        self.git(repo, "checkout", "-q", "--detach")
+        h2 = self.commit(repo, {"src/app.ts": "export const app = 3;\n"}, "untested")
+        self.git(repo, "checkout", "-q", FEATURE)
+        del os.environ["GIT_COMMITTER_DATE"]
+        return repo, h1, h2
+
+    def test_resolve_head_uses_pushed_head_when_local_ref_is_behind(self) -> None:
+        """S5.1 H3 (a)：推上去的內容本機 ref 沒有時，以推送的 head 判定，不沿用舊 receipt。"""
+        repo, h1, h2 = self._behind_setup()
+        self.assertTrue(vr.check_ci_receipt(str(repo), FEATURE).valid)
+        vr.record_push(str(repo), FEATURE, head_sha=h2)
+        self.assertEqual(self.head(repo, FEATURE), h1, "前提：本機 ref 仍是 H1")
+        got = vr.resolve_head(str(repo), FEATURE)
+        self.assertEqual((got.sha, got.source), (h2, "last-pushed"))
+        self.assertEqual(vr.check_ci_receipt(str(repo), FEATURE).reason, "no-receipt")
+
+    def test_resolve_head_keeps_local_ref_when_ahead_of_push(self) -> None:
+        """S5.1 H3 (a) 對照：本機較新、尚未推送時照舊用本機 ref。"""
+        repo = self.setup_pr()
+        vr.record_push(str(repo), FEATURE)
+        local = self.commit(repo, {"src/app.ts": "export const app = 4;\n"}, "not pushed yet")
+        got = vr.resolve_head(str(repo), FEATURE)
+        self.assertEqual((got.sha, got.source), (local, "local-ref"))
+
+    def test_resolve_head_unresolved_when_pushed_object_missing(self) -> None:
+        """S5.1 H3 (a)：祖先關係算不出來（物件不在本機）就判 head-unresolved。"""
+        repo = self.setup_pr()
+        vr.record_push(str(repo), FEATURE, head_sha="f" * 40)
+        self.assertEqual(vr.resolve_head(str(repo), FEATURE).reason, "head-unresolved")
+
+    def test_resolve_head_unresolved_when_marker_after_records_even_with_local_ref(self) -> None:
+        """S5.1 H3 (b)：推送未解析的標記晚於註冊與推送紀錄時，本機 ref 在也不採用。"""
+        repo = self.setup_pr()
+        self.assert_written(*self.ci(repo, self.evidence("green-head.json", self.head(repo))),
+                            "green")
+        vr.mark_push_unresolved(str(repo))
+        got = vr.resolve_head(str(repo), FEATURE)
+        self.assertEqual((got.sha, got.reason), (None, "head-unresolved"))
+        self.assertEqual(vr.check_ci_receipt(str(repo), FEATURE).reason, "head-unresolved")
+        vr.record_push(str(repo), FEATURE)
+        self.assertEqual(vr.resolve_head(str(repo), FEATURE).source, "local-ref",
+                         "之後一次可解析的 push 讓它恢復可判定")
+        self.assertTrue(vr.check_ci_receipt(str(repo), FEATURE).valid)
+
+    def test_head_uses_local_ref_after_unpushed_amend(self) -> None:
+        """S5.1 N3：推送後本機 amend 尚未推送，以本機 ref 判定；推送較晚則以推送的 head 判定。"""
+        repo = self.setup_pr()
+        pushed = self.head(repo)
+        vr.record_push(str(repo), FEATURE, pushed_at="2020-01-01T00:00:00.000000Z")
+        self.write_files(repo, {"src/app.ts": "export const app = 8;\n"})
+        os.environ["GIT_COMMITTER_DATE"] = "2021-01-01T00:00:00Z"
+        self.git(repo, "commit", "-q", "-a", "--amend", "-m", "amended, not pushed")
+        del os.environ["GIT_COMMITTER_DATE"]
+        amended = self.head(repo)
+        got = vr.resolve_head(str(repo), FEATURE)
+        self.assertEqual((got.sha, got.source), (amended, "local-ref"))
+        vr.record_push(str(repo), FEATURE, head_sha=pushed, pushed_at="2022-01-01T00:00:00.000000Z")
+        got = vr.resolve_head(str(repo), FEATURE)
+        self.assertEqual((got.sha, got.source), (pushed, "last-pushed"),
+                         "推送時間晚於本機最後一次改動時，以推送的 head 為準")
+
+    def test_same_second_rewrite_after_push_is_unresolved(self) -> None:
+        """S5.1 R3-3：reflog 只有秒級；同一秒或推送時間在未來（時鐘倒退）時判不出先後。"""
+        repo = self.setup_pr()
+        pushed = self.head(repo)
+        self.write_files(repo, {"src/app.ts": "export const app = 9;\n"})
+        os.environ["GIT_COMMITTER_DATE"] = "2021-06-01T00:00:00Z"
+        self.git(repo, "commit", "-q", "-a", "--amend", "-m", "rewritten in the push second")
+        del os.environ["GIT_COMMITTER_DATE"]
+        cases = (("same second as the rewrite", "2021-06-01T00:00:00.500000Z", None),
+                 ("push time in the future", "2999-01-01T00:00:00.000000Z", None),
+                 ("push one second later", "2021-06-01T00:00:01.000000Z", "last-pushed"))
+        for label, pushed_at, source in cases:
+            with self.subTest(label):
+                vr.record_push(str(repo), FEATURE, head_sha=pushed, pushed_at=pushed_at)
+                got = vr.resolve_head(str(repo), FEATURE)
+                if source is None:
+                    self.assertEqual((got.sha, got.reason), (None, "head-unresolved"))
+                else:
+                    self.assertEqual((got.sha, got.source), (pushed, source))
+
+    def test_branch_level_push_marker_only_affects_that_branch(self) -> None:
+        """S5.1 N2：branch 層級的推送未解析標記只影響該 branch；repo 層級影響全部。"""
+        repo = self.setup_pr()
+        other = "feat/other"
+        self.git(repo, "branch", other)
+        vr.register(str(repo), other, None, vr.STATE_NONE)
+        self.assertEqual(vr.registered_branches(str(repo)), tuple(sorted((FEATURE, other))))
+        vr.mark_push_unresolved(str(repo), branch=other)
+        self.assertEqual(vr.resolve_head(str(repo), other).reason, "head-unresolved")
+        self.assertEqual(vr.resolve_head(str(repo), FEATURE).source, "local-ref")
+        self.assertEqual(vr.check_exemption(str(repo), other).reason, "head-unresolved")
+        vr.mark_push_unresolved(str(repo))
+        self.assertEqual(vr.resolve_head(str(repo), FEATURE).reason, "head-unresolved")
+        vr.record_push(str(repo), FEATURE)
+        self.assertEqual(vr.resolve_head(str(repo), FEATURE).source, "local-ref")
+        self.assertEqual(vr.resolve_head(str(repo), other).reason, "head-unresolved")
+        vr.register(str(repo), other, None, vr.STATE_NONE)
+        self.assertNotIn("push_unresolved_at", self.entry(repo, other))
+        self.assertEqual(vr.resolve_head(str(repo), other).source, "local-ref")
 
 
 class AcceptanceReceiptTests(ReceiptCase):
@@ -761,6 +956,16 @@ class SubcommandReceiptTests(ReceiptCase):
         self.assertEqual(vr.resolve_head(str(repo), FEATURE).reason, "head-unresolved",
                          "解析不出推送的 head 時要標記為推送未解析")
 
+
+class AcceptanceRenameTests(ReceiptCase):
+    def test_acceptance_receipt_invalid_when_ui_file_renamed_out(self) -> None:
+        """S5.1 L7：UI 檔整檔搬出 UI glob 也算 UI 變更（檔名 diff 不做 rename 偵測）。"""
+        repo = self.setup_pr()
+        self.assert_written(*self.engine_json("receipt", "acceptance", "--repo", str(repo),
+                                              "--pr", "42", "--attachments", "1"), None)
+        self.git(repo, "mv", "src/components/Button.tsx", "src/Button.tsx")
+        self.git(repo, "commit", "-q", "-m", "move UI file out")
+        self.assertEqual(vr.check_acceptance_receipt(str(repo), FEATURE).reason, "ui-changed")
 
 if __name__ == "__main__":
     unittest.main()

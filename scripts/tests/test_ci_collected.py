@@ -192,10 +192,33 @@ class MatchModeTests(unittest.TestCase):
         self.assertFalse(cc.is_match("b.c", "a.b.c", cc.MATCH_EXACT))
         self.assertFalse(cc.is_match("a.b", "a.b.c", cc.MATCH_EXACT))
 
-    def test_suffix_matches_either_direction_at_boundary(self):
-        self.assertTrue(cc.is_match("e2e/tests/a.spec.ts", "tests/a.spec.ts", cc.MATCH_SUFFIX))
+    def test_suffix_matches_only_log_ending_with_id_at_boundary(self):
+        self.assertFalse(cc.is_match("e2e/tests/a.spec.ts", "tests/a.spec.ts", cc.MATCH_SUFFIX))
         self.assertTrue(cc.is_match("tests/a.spec.ts", "e2e/tests/a.spec.ts", cc.MATCH_SUFFIX))
         self.assertTrue(cc.is_match("Cls.test_x", "pkg.mod.Cls.test_x", cc.MATCH_SUFFIX))
+
+    def test_suffix_does_not_match_shorter_log_identifier(self):
+        """S5.1 M4：log 只有短名 TestRefund 時，不得把別的套件的同名測試判成 FOUND。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = write_tmp(tmp, "ids.txt", "pkg/billing.TestRefund\n")
+            log = write_tmp(tmp, "log.txt", "--- PASS: TestRefund (0.00s)\n")
+            proc = run_cli("ids", "--ids-file", ids, "--log", log,
+                           "--pattern", r"^--- PASS: (\w+)", "--match", "suffix")
+        self.assertEqual(verdict_of(proc), "VERDICT: FAIL")
+
+    def test_suffix_of_id_matches_repo_rooted_id_against_runner_relative_log(self):
+        self.assertTrue(cc.is_match("e2e/tests/a.spec.ts", "tests/a.spec.ts",
+                                    cc.MATCH_SUFFIX_OF_ID))
+        self.assertFalse(cc.is_match("tests/a.spec.ts", "e2e/tests/a.spec.ts",
+                                     cc.MATCH_SUFFIX_OF_ID))
+        self.assertFalse(cc.is_match("e2e/xa.spec.ts", "a.spec.ts", cc.MATCH_SUFFIX_OF_ID))
+        with tempfile.TemporaryDirectory() as tmp:
+            ids = write_tmp(tmp, "ids.txt", "e2e/tests/a.spec.ts\n")
+            log = write_tmp(tmp, "log.txt", "PASS tests/a.spec.ts (1.2 s)\n")
+            proc = run_cli("ids", "--ids-file", ids, "--log", log,
+                           "--runner", "jest", "--match", "suffix-of-id")
+        self.assertIn("MATCH: suffix-of-id", proc.stdout)
+        self.assertEqual(verdict_of(proc), "VERDICT: PASS")
 
     def test_suffix_requires_a_boundary_character(self):
         self.assertFalse(cc.is_match("a.spec.ts", "xa.spec.ts", cc.MATCH_SUFFIX))

@@ -17,6 +17,8 @@ from typing import Mapping, NamedTuple, Optional, Sequence
 GIT_TIMEOUT_SECONDS = 30
 VERIFICATION_DIRNAME = ".verification"
 NULL_TREE_TARGET = "/dev/null"
+DIFF_PREFIXES = ("--src-prefix=a/", "--dst-prefix=b/")
+_REFLOG_TIME = re.compile(r"@\{(\d+)\}$")
 _SAFE_REF = re.compile(r"^[A-Za-z0-9._/@^~{}+-]+$")
 _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
@@ -37,14 +39,29 @@ def safe_ref(ref: Optional[str]) -> bool:
     return bool(ref) and not ref.startswith("-") and bool(_SAFE_REF.match(ref))
 
 
-def run_git(repo: str, *args: str) -> Optional[str]:
+def _git(repo: str, *args: str) -> Optional[subprocess.CompletedProcess]:
     argv = ["git", "-c", "core.quotePath=false", "-C", repo, *args]
     try:
-        proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
+        return subprocess.run(argv, shell=False, capture_output=True, text=True,
                               timeout=GIT_TIMEOUT_SECONDS, errors="replace")
     except (OSError, subprocess.SubprocessError):
         return None
-    return proc.stdout if proc.returncode == 0 else None
+
+
+def run_git(repo: str, *args: str) -> Optional[str]:
+    proc = _git(repo, *args)
+    return proc.stdout if proc is not None and proc.returncode == 0 else None
+
+
+def is_ancestor(repo: str, ancestor: str, descendant: str) -> Optional[bool]:
+    """True/False from `merge-base --is-ancestor`; None when git cannot tell
+    (for example the ancestor object is not in this clone)."""
+    if not (is_sha(ancestor) and is_sha(descendant)):
+        return None
+    proc = _git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    if proc is None or proc.returncode not in (0, 1):
+        return None
+    return proc.returncode == 0
 
 
 def git_line(repo: str, *args: str) -> Optional[str]:
@@ -75,6 +92,16 @@ def branch_head(repo: str, branch: str) -> Optional[str]:
         return None
     return git_line(repo, "rev-parse", "--verify", "--quiet",
                     f"refs/heads/{branch}^{{commit}}")
+
+
+def reflog_time(repo: str, branch: str) -> Optional[int]:
+    """Unix time (seconds) of the newest reflog entry of `refs/heads/<branch>`."""
+    if not branch or "\x00" in branch or ".." in branch:
+        return None
+    line = git_line(repo, "reflog", "show", "-1", "--format=%gd", "--date=unix",
+                    f"refs/heads/{branch}", "--")
+    match = _REFLOG_TIME.search(line or "")
+    return int(match.group(1)) if match else None
 
 
 def current_branch(repo: str) -> Optional[str]:
@@ -129,7 +156,8 @@ def changed_files(repo: str, base: str, head: str) -> tuple:
     """`Change(status, path)` for base..head; renames report the new path."""
     if not (is_sha(base) and is_sha(head)):
         return ()
-    out = run_git(repo, "diff", "--name-status", "-z", "-M", "--no-ext-diff", base, head)
+    out = run_git(repo, "diff", *DIFF_PREFIXES, "--name-status", "-z", "-M",
+                  "--no-ext-diff", base, head)
     if out is None:
         return ()
     tokens = [t for t in out.split("\x00")]
@@ -177,7 +205,8 @@ def added_lines(repo: str, base: str, head: str) -> Mapping[str, tuple]:
     """Map path -> added lines for base..head, parsed by hunk line counts."""
     if not (is_sha(base) and is_sha(head)):
         return {}
-    out = run_git(repo, "diff", "-U0", "-M", "--no-color", "--no-ext-diff", base, head)
+    out = run_git(repo, "diff", *DIFF_PREFIXES, "-U0", "-M", "--no-color",
+                  "--no-ext-diff", base, head)
     if out is None:
         return {}
     lines, found = out.split("\n"), {}
@@ -206,7 +235,8 @@ def diff_names(repo: str, old: str, new: str) -> Optional[tuple]:
     """Paths that differ between two commits, or None if either is unknown."""
     if not (is_sha(old) and is_sha(new)):
         return None
-    out = run_git(repo, "diff", "--name-only", "-z", "--no-ext-diff", old, new)
+    out = run_git(repo, "diff", *DIFF_PREFIXES, "--name-only", "-z", "--no-renames",
+                  "--no-ext-diff", old, new)
     if out is None:
         return None
     return tuple(p for p in out.split("\x00") if p)

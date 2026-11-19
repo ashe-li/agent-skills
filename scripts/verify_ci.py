@@ -9,9 +9,11 @@ every required job present; then a completed required job that did not
 succeed makes the conclusion red even while others are still running (so
 --pending-declared can never cover a known failure), and only then must
 every required job be completed. Only the highest
-attempt of each run_id counts. Required jobs are looked up across all runs,
-so jobs from several workflows combine; a job outside Required-jobs never
-affects the conclusion.
+attempt of each run_id counts, and within one workflow a job from a newer
+run_id supersedes the same job from older runs on the same head. Required
+jobs are looked up across workflows, so jobs from several workflows combine;
+a job outside Required-jobs never affects the conclusion. The registry entry
+of the PR must be open (plan decision 4), else repo-or-pr-mismatch.
 
 `gh` is only ever called with fixed read-only subcommands (repo view, pr
 view, run list, run view), argv form, shell=False and a timeout. PR numbers
@@ -198,6 +200,9 @@ def _attribution(info: vr.RepoInfo, data: dict, state_dir: Optional[str]) -> tup
     if (kb_source.normalize_remote_or_key(str(data.get("repo"))) != info.key or entry is None
             or (branch is not None and branch != entry["branch"])):
         return _reject(R_MISMATCH, "evidence is not for a PR registered in this repo"), None
+    if entry.get("state") != vr.STATE_OPEN:
+        return _reject(R_MISMATCH, "the registry entry for this PR is not open; re-run "
+                                   "`pr register` so it reflects the PR's current state"), None
     if data.get("pr_state") != vr.STATE_OPEN:
         return _reject(R_NOT_OPEN, "the PR is closed or merged; re-run `pr register` "
                                    "to record that instead of writing a CI receipt"), None
@@ -210,12 +215,29 @@ def _attribution(info: vr.RepoInfo, data: dict, state_dir: Optional[str]) -> tup
     return entry, head.sha
 
 
-def _job_states(runs: Sequence[dict], required: Sequence[str]) -> tuple:
-    """(missing jobs, pending jobs, failed jobs) over the adopted runs."""
-    seen = {}
+def adopted_jobs(runs: Sequence[dict]) -> dict:
+    """job name -> jobs that count, one per workflow.
+
+    `runs` already holds one attempt per run_id. Within a workflow, the job
+    from the run with the highest run_id supersedes older runs of the same
+    workflow on the same head (cancelled duplicates, earlier re-triggers).
+    """
+    best = {}
     for run in runs:
+        run_id = run.get("run_id") if isinstance(run.get("run_id"), int) else -1
         for job in run.get("jobs") or []:
-            seen.setdefault(job.get("name"), []).append(job)
+            key = (run.get("workflow"), job.get("name"))
+            if key not in best or run_id > best[key][0]:
+                best[key] = (run_id, job)
+    seen = {}
+    for (_, name), (_, job) in best.items():
+        seen.setdefault(name, []).append(job)
+    return seen
+
+
+def _job_states(runs: Sequence[dict], required: Sequence[str]) -> tuple:
+    """(missing jobs, pending jobs, failed jobs) over the adopted jobs."""
+    seen = adopted_jobs(runs)
     missing = tuple(j for j in required if j not in seen)
     pending = tuple(j for j in required if j in seen
                     and any(x.get("status") != COMPLETED for x in seen[j]))

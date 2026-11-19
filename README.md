@@ -53,6 +53,19 @@ done
 
 </details>
 
+## 知識來源設定
+
+agent-skills 只放引擎與流程；驗證 profile、checklist、既往 RCA 等知識放在你自己的知識庫，不進本 repo。要讓相關步驟讀得到，擇一設定知識庫根目錄：
+
+- 環境變數 `AGENT_SKILLS_KB_HOME`
+- 或檔案 `${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/kb-home` 的第一行
+
+兩者都沒設定、或指向不存在的目錄時，用到知識庫的步驟降級（印一行說明、只跑通用步驟），不會報錯。目錄結構、解析順序與降級矩陣見 [`docs/knowledge-source-contract.md`](docs/knowledge-source-contract.md)；解析的參考實作是 `scripts/kb_source.py`。
+
+## 驗證 gate hook（選用）
+
+`scripts/hooks/verify-gate.sh` 提供三個 gate（`pre_pr`、`ui_acceptance`、`ci_evidence`），預設全部關閉，不安裝就沒有任何影響。建議先開 observe：只在本機決策紀錄追加一行，不攔任何動作，不算防護；量到數字之後才逐一決定是否升 enforce，只有 enforce 才會擋。gate 防的是遺漏，不防蓄意偽造。安裝、模式與已知盲點見 [`docs/hooks-setup.md`](docs/hooks-setup.md) 第四篇。
+
 ## Usage
 
 ```
@@ -76,6 +89,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 /dispatch-loop             # 逐 step 派工 + 抽查驗收 + token 預算的委派迴圈
 /figma-verify              # Figma vs local 對齊表 + ship gate
 /pr-evidence-comment       # headed 驗收 → 截圖 → 附圖發成 PR comment
+/verify-change             # 依 repo profile 在最終 HEAD 跑快檢、挑驗收項目、寫 receipt
 ```
 
 ## Skills 總覽
@@ -94,6 +108,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 | [`/dispatch-loop`](#dispatch-loop--委派推進迴圈) | 主模型只指揮不下場：逐 step 派工、抽查驗收、token 預算、回收前 KB gate |
 | [`/figma-verify`](#figma-verify--figma-vs-local-對齊與-ship-gate) | Figma MCP + Playwright headed + token/文案對齊表 + `/goal` Haiku visual gate |
 | [`/pr-evidence-comment`](#pr-evidence-comment--headed-驗收--截圖--pr-comment-附圖) | headed 驗收 → 截圖 → 主對話目檢 → 逐項 PASS/FAIL + 附圖發 PR comment；由 `/pr` Step 5.5 串接 |
+| [`/verify-change`](#verify-change--依-profile-驗證變更) | 依使用者知識庫的 repo profile 判定快檢、驗收項目與 receipt；沒有 profile 或腳本時降級為手動流程 |
 | [`/evidence-check`](#evidence-check--獨立證據查驗) | 四維度並行調查(學術/業界/實踐/社群)，偵測跨來源衝突 |
 | [`/handoff`](#handoff--跨-context-接手-prompt) | 萃取對話脈絡，產出可貼到新 context/compact 後的自包含 prompt |
 | [`/rca`](#rca--四路平行-rca--對抗式彙整) | 告警（Sentry／Grafana／CI）→ 四路唯讀平行調查 → 用新證據裁決矛盾 → 根因＋falsifier＋修復 PR 草稿 |
@@ -116,6 +131,7 @@ scripts/worktree-cleanup.sh --fetch --apply # 跨 repo 實際清理（只刪目�
 - 自動偵測是否已有 open PR，決定建立或更新
 - PR description 包含 Summary、Context、Changes、Test plan
 - **Linear ticket 強制帶入**：從對話、branch 名、commit message、既有 PR 偵測 `<TEAM>-<number>`（team key 從 branch 名 `<type>/<team>-<number>-<slug>` 或 repo 既有 commit 推斷），PR 標題必須帶字面編號（預設 `(ABC-1234)` 放尾巴）；branch 名走 `<type>/<team>-<number>-<slug>`（Step 3.5），已推上遠端的 branch 不改名
+- **Step 5.2 CI 收集檢查**：變更的測試檔，其識別碼是否真的出現在該 PR head 的 CI log（`scripts/ci_collected.py ids`）；綠燈證明不了新測試有被跑到。log 不列識別碼時判 UNVERIFIABLE，不寫「CI 綠」
 - **Step 5.5 截圖驗收 gate**：PR 建立/更新後依變更類型分類（UI 互動 → 截圖；純移除/重構 → 量測；API → 測試輸出），需要時用 AskUserQuestion 問使用者要不要現在跑 `/pr-evidence-comment`，跑完把逐項 PASS/FAIL 回填 Test plan。從 `/update` 串接跳過 Step 2 時，此判定不隨之跳過
 
 </details>
@@ -450,6 +466,21 @@ UI / 文案 PR mark ready-for-review、merge、production deploy 之前的最後
 
 </details>
 
+### `/verify-change` — 依 profile 驗證變更
+
+把「這個 repo 要驗哪些項目、最終 HEAD 有沒有跑過快檢」交給腳本（`scripts/verify_engine.py`）判定，不靠模型每次重新判讀。判定依據是你自己知識庫裡的 repo profile，agent-skills 本身不帶任何 repo 的驗證知識。
+
+<details>
+<summary>Features</summary>
+
+- **做什麼**：`checks` 在最終 HEAD 跑 profile 宣告的快檢並寫快檢 receipt；`select` 依 diff 挑出該驗的 checklist 項目與命中原因；另有驗收 receipt、CI receipt、PR 註冊表（`pr register`）、漏接回寫候選（`candidate`）與空 profile 產生器（`init-profile`）
+- **何時用**：開 PR 前要驗證變更；想知道快檢是否跑過最終 HEAD；`/pr`、`/pr-evidence-comment`、`/figma-verify` 偵測到 profile 時會串接進來
+- **需要什麼**：`python3` 與 repo checkout 裡的 `scripts/`（只用 `npx skills` 安裝的快照沒有 `scripts/`）、已設定的知識來源（見「知識來源設定」）、知識來源 `verification/` 下對得上該 repo 的 profile
+- **降級**：沒設定知識來源或沒有對應 profile，只跑通用步驟並印一行說明，不報錯；腳本不存在就退回手動流程（type-check、lint、相關測試、`/pr` 的 CI 收集檢查），回報註明「無 receipt，手動驗證」
+- **強制力**：引擎、receipt 有效性判定是腳本，機械化；UI 驗收員的限制只是提示（見「Agents 目錄」）；三個 gate hook 預設關閉（見「驗證 gate hook」）
+
+</details>
+
 <details>
 <summary>Quality Management</summary>
 
@@ -528,7 +559,9 @@ python ~/Documents/skills-ecosystem-eval/src/learn_eval_bridge.py <skill>.md --m
 
 ## Agents 目錄
 
-`agents/` 存放本 repo 自持的 agent 定義（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`），不依賴 everything-claude-code (ECC) plugin。索引、選用時機、呼叫慣例（含撞名禁令）與路徑解析請見權威文件 [`agents/README.md`](agents/README.md)，本節不重複。`planner`/`code-reviewer`（程式碼）/`security-reviewer`/`refactor-cleaner`/`learn-eval` 維持 v2.0.0 的內建 primitive 替代，不在 `agents/` 目錄重建。
+`agents/` 存放本 repo 自持的 agent 定義（`complexity-triage` / `doc-reviewer` / `doc-updater` / `tdd-guide`，以及兩個驗收員 `readonly-verifier`、`headed-verifier`），不依賴 everything-claude-code (ECC) plugin。索引、選用時機、呼叫慣例（含撞名禁令）與路徑解析請見權威文件 [`agents/README.md`](agents/README.md)，本節不重複。`planner`/`code-reviewer`（程式碼）/`security-reviewer`/`refactor-cleaner`/`learn-eval` 維持 v2.0.0 的內建 primitive 替代，不在 `agents/` 目錄重建。
+
+兩個驗收員要把定義檔 symlink 進 `~/.claude/agents/` 註冊成真正的 subagent，工具白名單才會套用（做法見 [`agents/README.md`](agents/README.md)）。**強制力邊界**：白名單由 harness 強制，但只擋得掉 Write 與 Edit 兩個工具，Bash 仍能寫檔；定義檔內其餘限制（不執行 rm、憑證邊界、驗收基準取使用者原話等）都只是提示。這份定義換掉的是「每次派工重寫限制」，不是機械化防越權。
 
 ## Rules / 整合設定
 

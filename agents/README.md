@@ -15,7 +15,7 @@
 | `doc-updater.md` | 文件同步（README/docs/CODEMAPS），輸出變更 Manifest | 程式碼變更後需同步文件，且需要主模型事後逐條驗證 | `/update` Step 1 |
 | `tdd-guide.md` | TDD 紅－綠－重構引導，80% 覆蓋率門檻 | 新功能或修 bug 前缺測試覆蓋，需要先寫失敗測試再實作 | `/design` Step 1 資源盤點列出、Step 3 計畫步驟視需要引用 |
 | `readonly-verifier.md` | 唯讀驗收員，fresh-context 事實查核、PR／部署驗收 | 需要「驗證不自驗」的第二雙眼睛；派工 prompt 需指定證據目錄與引用使用者原話 | `/rca` 硬規則 1 與 Step 3 |
-| `headed-verifier.md` | Headed 驗收員，真實瀏覽器（CLI）視覺與行為驗收，非 GET 請求逐筆記錄 | UI 或行為變更需要 headed 驗收；派工 prompt 需引用使用者原話並明文授權（或不授權）寫入型驗收 | 尚無 skill 引用，由派工方註冊後直接派工 |
+| `headed-verifier.md` | Headed 驗收員，真實瀏覽器（CLI）視覺與行為驗收，非 GET 請求逐筆記錄 | UI 或行為變更需要 headed 驗收；派工 prompt 需引用使用者原話並明文授權（或不授權）寫入型驗收 | `/pr-evidence-comment` Step 1、`/verify-change` Step 4 |
 
 選錯定義檔的常見徵兆：把「審查」誤派成「更新」（doc-reviewer 只讀不寫，doc-updater 才會 Edit 檔案）、把「分診」誤派成「審查」（complexity-triage 只做影響面粗估，不做逐項 PASS/FAIL）。
 

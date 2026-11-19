@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+- **知識來源契約與 `kb_source`**：新增 `docs/knowledge-source-contract.md` 與解析模組 `scripts/kb_source.py`。agent-skills 只放引擎，驗證 profile、checklist、既往 RCA 等知識放在使用者自己的知識庫；根目錄由環境變數 `AGENT_SKILLS_KB_HOME` 或 `${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/kb-home` 檔案第一行指定。契約文件定義目錄結構、profile 與 checklist 的 schema、降級矩陣（未設定、路徑不存在、沒有符合的 profile、多份符合都降級而非報錯）與信任邊界。解決的問題：數支 skill 各自寫死作者本機的知識庫路徑，其他使用者跑到那幾步只會撞到不存在的目錄。測試：`scripts/tests/test_kb_source.py`。
+- **驗證引擎 `scripts/verify_engine.py`**：依 profile 判定而不是每次由模型重新判讀。子命令：`status`（哪份 profile 適用）、`select`（依 diff 挑出該驗的 checklist 項目與命中原因，同時印 UI 判定）、`checks`（在最終 HEAD 跑 profile 宣告的快檢，argv 以 `shell=False` 執行）、`receipt`、`pr`（PR 註冊表，`register`、`show`）、`candidate`（漏接回寫候選）、`init-profile`（空 profile 骨架）、`lint`（檢查知識庫 `verification/` 目錄）。三種 receipt 各對應一個驗證面：快檢 receipt 以 `HEAD^{tree}` 為鍵，HEAD、profile、base 或引擎版本任一變動即失效；驗收 receipt（含免驗收 `exempt`）在 PR 的 UI 路徑之後又有變動時失效；CI receipt 在 head 或 CI 設定變動時失效。解決的問題：每次臨場重組快檢指令、「最終 HEAD 有沒有重跑」靠回想。這些是腳本，判定結果機械化。實作分在 `scripts/verify_*.py`，測試為 `test_verify_engine.py` 與 `test_verify_receipts.py`。
+- **新增 `/verify-change`**：引擎的編排 skill。載入 profile、在最終 HEAD 跑快檢、依 diff 挑驗收項目、依 profile 的 Flows 派驗收、登記 PR 並寫三種 receipt、把漏接項目寫成候選。沒有 profile 或沒有 `scripts/`（只用 `npx skills` 安裝的快照）時降級為手動流程，回報註明「無 receipt，手動驗證」。
+- **三個選用 gate hook**：`scripts/hooks/verify-gate.sh` 掛 `PreToolUse`、`PostToolUse`、`Stop`，提供 `pre_pr`（`gh pr create` 之前檢查快檢 receipt）、`ui_acceptance`、`ci_evidence`（Stop 時檢查本 session 關聯過的 PR）。**預設全部關閉**，不安裝就沒有任何影響；模式為 `off`、`observe`、`enforce`，observe 只在本機決策紀錄追加一行、不攔任何動作，只有 enforce 才擋，且只涵蓋有 profile 的 repo。所有例外與逾時都 fail-open。安裝與已知盲點見 `docs/hooks-setup.md` 第四篇。解決的問題：「未驗證就開 PR、未驗證就收工」只靠模型記得。實作為 `scripts/verify_gate*.py`，測試為 `test_verify_gate.py`。
+- **兩份 verifier 定義與註冊說明**：`agents/readonly-verifier.md`（唯讀驗收，無 Write／Edit、無 MCP）與 `agents/headed-verifier.md`（真實瀏覽器驗收，非 GET 請求逐筆記錄），`agents/README.md` 補註冊方式（symlink 進 `~/.claude/agents/` 才會套用工具白名單）與強制力邊界。**強制力**：白名單由 harness 強制，但只擋得掉 Write 與 Edit，Bash 仍能寫檔；其餘限制（不執行 rm、憑證邊界、驗收基準取使用者原話、多輪上限等）是提示，不是機械化防越權。這兩份定義換掉的是每次派工重寫限制文字的成本。
+- **`scripts/claim_schema.py`**：evidence-gate claim schema 的檢查與抽取工具，`lint` 回報格式問題（`<file>:<line>: <CODE>: <msg>`）、`extract` 把各小節的 fenced block 串成一份 bash script；兩者都只處理文字、不執行任何指令。解決的問題：每次手寫抽取腳本、schema 格式問題靠來回修。測試：`scripts/tests/test_claim_schema.py`。
+- **`scripts/ci_collected.py` 與 `/pr` Step 5.2 CI 收集檢查**：比對變更的測試識別碼是否出現在該 PR head 的 CI log（`ids` 為主判定，`count` 為輔助、不單獨判 PASS）。解決的問題：CI 綠燈但新測試其實沒被收集到，綠燈證明不了。log 不列識別碼時判 UNVERIFIABLE，不寫「CI 綠」。`.gitignore` 加例外讓測試 fixture 的 `.log` 樣本進版控。測試：`scripts/tests/test_ci_collected.py`。
+- **路徑守衛與 agent 定義守衛測試**：`scripts/tests/test_no_local_paths.py` 掃 `*/SKILL.md`、`README.md`、`agents/`、`docs/`、`rules/`、`scripts/hooks/`，公開內容出現作者本機的知識庫路徑、檢索腳本名或本機使用者目錄就失敗，失敗訊息只列檔案與行號；`scripts/tests/test_agent_definitions.py` 檢查 `agents/` 每份定義的 frontmatter，並對檔名含 `verifier` 的定義檢查工具白名單與限制文字。這兩支只證明文字與設定存在，不證明 agent 實際行為。
+- **CI workflow 的觸發路徑與測試輸出**：`.github/workflows/skill-quality.yml` 的 `paths` 加入 `agents/**` 與 `docs/**`（只改這兩處的 PR 原本不會觸發上述守衛），unit-tests 指令改為 `python -m unittest discover -v scripts/tests`，讓 log 逐個列出測試識別碼，`ci_collected.py` 才有東西比對。
+- **gate hook 的已知限制**（完整清單見 `docs/hooks-setup.md` 第 10 節）：gate 防的是遺漏，不防蓄意偽造，以 `--evidence` 提供的證據檔由模型產生；Stop 觸發時宣稱文字已送出，gate 擋不住宣稱本身；既沒有 push、也沒有開 PR、也沒有註冊的 session 不會被檢查。hook 的輸入格式目前只以 stdin JSON 的測試與冒煙範例驗證，尚未在真實 Claude Code session 裡驗證；安裝後的冒煙自檢（同文件第 7 節）屬使用者的後續步驟。
+
 ### Changed
 - **`alert-triage` 的 repo 歸屬改為與 ownership 規則一致**：Step 6 原本把整個 `deployment-eks` 寫成「後端團隊負責，不直接改，只產建議或開 issue」，與同檔 Action Items 段及 ownership 規則相反，會讓 skill 對 infra 類告警（OOM、查詢成本、HPA）判定為 real 之後只寫建議、不開 guardrail PR。改為分兩類：cluster infra、network、observability、Flux 與一般業務 deployment 的 PDB／HPA／副本數／resources 屬使用者，照常走 PR；`smb-*`／`payment-*`、託管資料庫、cert-manager 副本配置、後端 EC2 屬後端，不動也不寫提案。G3 關卡的觸發條件同步改為「後端 own 或歸屬不明的資源」。這是放寬原本的禁令，由使用者裁決後才改。
 - **`/pr` 的 PR 描述模板拿掉寫死的「Generated with Claude Code」**：署名是否加上改由使用者的 Claude Code attribution 設定決定。原本寫死在模板裡，關掉署名的使用者每次都要手動刪。
@@ -13,6 +25,11 @@
 - **`/rca` 硬規則 5 收緊為「只調查，不代修、不主動寫提案」**：與同檔 Action Items 段的「不寫提案」一致。Step 2 第 5 項同步補上：根因落在後端 own 的資源時不寫修復草稿，交付格式的草稿路徑改為有草稿才附。
 - **`alert-triage` 的觸發層選項分析移到 `docs/alert-triage-trigger-options.md`**：那一節是選型筆記，不是執行步驟，內容逐字搬移。
 - **`agents/*.md` 的 description 拿掉「PROACTIVELY use …」**：這些檔不註冊成 agent type（`agents/README.md` 禁止直呼），該句沒有作用。`agents/doc-updater.md` 紅旗第一條改寫成要求本身，不再描述審查機制。
+
+- **Migration（原本靠隱含知識庫路徑運作的使用者必讀）**：`alert-triage`、`rca`、`dispatch-loop`、`release-pr`、`evidence-gate` 不再假設固定的知識庫路徑。原本依賴那個隱含路徑的使用者，需設定 `AGENT_SKILLS_KB_HOME`，或在 `${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/kb-home` 檔案第一行寫知識庫根目錄，一次設定即可。未設定時，用到知識庫的步驟降級並印一行說明（例如 `alert-triage` 不引用內部先驗、結論標 provisional），不會報錯。三個 gate hook 預設關閉，不安裝就沒有任何影響。細節見 `docs/knowledge-source-contract.md`。
+- **`evidence-gate` 的 claim schema 改為每條宣稱一個小節、指令放 fenced block**：原本每條宣稱是一列表格，證據指令放在儲存格裡，管線與 ERE 交替得跳脫，照字面重跑會得到假陰性。新格式為 `## <n>. <宣稱>`，其下一個 bash fenced block，區塊外兩行「關鍵輸出」與「判定」；無法驗證的宣稱不放 block。舊表格格式相容到下一個 MAJOR。`release-pr` 的 claim ledger 同步改為總表加每條說法一個小節。
+- **`alert-triage`、`rca`、`dispatch-loop`、`release-pr`、`evidence-gate` 不再寫死作者本機的知識庫路徑與規則檔**：改為解析知識來源（`AGENT_SKILLS_KB_HOME` 或 kb-home 檔），並在未設定時降級；指向本機 `rules/common/` 規則檔的引用改為把規則內容直接寫進句子或寫成「依本機規則」。`rca` 的調查 agent 改用 `agents/readonly-verifier.md`。
+- **`pr`、`pr-evidence-comment`、`figma-verify` 在有 profile 時接上驗證引擎**：`/pr` 在 push 前跑 `checks`、建立或更新 PR 後 `pr register`、並新增 Step 5.2；`pr-evidence-comment` 開頭 `pr register`、清單起點取自 profile 的 Flows 與 `select`、附件讀回後寫驗收 receipt；`figma-verify` 的 local 環境細節取自 profile。沒有 profile 或引擎不可用時，三支都照原流程，行為不變。
 
 ### Fixed
 - **修正互相矛盾或指向不存在目標的引用**（來源：2026-11-18 以 Claude Fable 5.2 為目標的 prompt 稽核）：`evidence-gate` 第 6 節的「三項查核」改為四項，對齊 `/release-pr` Step 2.5；`rules/security-guidance/skill-integration.md` 的 `code-reviewer` 改為 `agents/doc-reviewer.md`；`notion-plan`、`notion-report`、`figma-verify` 拿掉不存在的 `webfetch-blocklist.md` 指標，理由直接寫在句子裡；`/design` 的「line 57」改用段落名、plan 模板範例的 `planner` 改為 `general-purpose`、Step 4a 移除 `architect` 禁用說明；`alert-triage` 的 9 處「memory `<slug>`」改指 KB 內的實際路徑；`plan-archive` 目錄規範的 `/plan` 改為 `/design` 並補上 `backlog/`。

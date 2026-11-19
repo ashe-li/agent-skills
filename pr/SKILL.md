@@ -37,8 +37,6 @@ argument-hint: [PR 號碼或留空建立新 PR]
    - **Linear ticket（強制）**：先推斷 team key：從當前 branch 名 `<type>/<team>-<number>-<slug>`（`git branch --show-current`，如 `fix/abc-1234-...`）或 repo 既有 commit／PR 標題帶的票號格式取得，推斷不出來就問使用者，不要掃任意 `[A-Z]+-\d+`（會誤判 `UTF-8` 這類字串）。有了 team key 之後，掃這四個來源的 `<TEAM>-\d+`（大小寫不拘）：對話內容、當前 branch 名、`origin/<base-branch>..HEAD` 的 commit message、既有 PR 的 title／body。命中後一律正規化成大寫 `<TEAM>-<number>`（如 `ABC-1234`），只記在這條、不重複列進上面的通用 ticket 清單，記進 Context Manifest，並往下傳給 Step 3.5（branch 命名）與 Step 5（PR 標題）。有多張就全部列出
    - **只算這次工作對應的票**：舉例、引用別的 PR 標題、`blocked by`／相關票這類順帶提到的編號不算。對話裡出現多個編號、又分不出哪張才是這次的工作，用 AskUserQuestion 讓使用者選，不要猜
 
-> ⚠️ **常見錯誤**：只看 `git diff` 會遺漏 PR 中其他 commits 的內容；只看 diff 不看對話會遺漏「為什麼這樣做」的決策脈絡。PR description 必須同時反映 **what changed（diff）** 和 **why it changed（對話 context）**。
-
 **Step 1b 結束時建立「Context Manifest」**，供 Step 5 逐條比對：
 
 ```markdown
@@ -140,14 +138,6 @@ branch 名要帶 ticket，格式 `<type>/<team>-<number>-<kebab-slug>`（例：`
    - 只有使用者明確確認後才能繼續
 4. 如果專案沒有特別的 branch 策略，使用 repo 的 default branch
 
-```bash
-# 範例：專案規範 base branch 為 hotfix
-gh pr create --base hotfix ...
-
-# 禁止（除非使用者明確確認）
-gh pr create --base master ...
-```
-
 ### CHANGELOG 檢查（Release PR 專用）
 
 當 base branch 為 `master` 或 `main` 時，**必須**檢查 CHANGELOG.md：
@@ -173,7 +163,6 @@ gh pr create --base master ...
 當 PR 的 base branch 為 `master` 或 `main` 時，標題**必須**使用 Release 格式：
 
 - 格式：`Release vX.Y.Z: <摘要>`
-- 範例：`Release v1.18.0: add skill defer + CHANGELOG updates`
 - 版本號推斷優先順序：CHANGELOG.md 最新版本 → package.json version → git tag
 - 摘要從 PR 包含的 commits 中提取主要變更，簡短描述即可
 - Step 1b 有找到 Linear ticket 時，把編號全部附在標題尾巴：`Release v1.18.0: <摘要> (ABC-1234 ABC-1235)`
@@ -218,11 +207,8 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 <!-- 按主題分類列出變更，涵蓋 PR 的所有 commits（不只是當次對話的工作） -->
 <!-- 用 git log origin/<base-branch>..HEAD 確認完整範圍（必須先 git fetch origin） -->
 <!-- 用 git diff origin/<base-branch>..HEAD --diff-filter=D --name-only 確認刪除的檔案 -->
-<!-- 本次對話沒親自做過的 commit（跨 session 累積的 branch、更新既有 PR）：其條目的
-     「改了什麼」必須對 git diff 核實，commit message 只用來定位該查哪段 diff，不能當證據；
-     核不到佐證的標「無法佐證」列出來，不要為了讓 body 看起來完整而放寬。
-     當次對話親自做的照舊（diff 就在對話裡，不必重查）。 -->
 <!-- 每個主題明確標示：新增了什麼、刪除了什麼、修改了什麼 -->
+<!-- 非本次對話親自做的 commit（跨 session 的 branch、更新既有 PR）：條目須對 git diff 核實，commit message 只用來定位、不當證據；核不到的標「無法佐證」 -->
 
 ## Test plan
 
@@ -242,6 +228,26 @@ description 定稿後、執行 `gh pr create`/`gh pr edit` 前，呼叫 `evidenc
 ```
 Skill({ skill: "evidence-gate" })
 ```
+
+## Step 5.2: CI 收集檢查（變更的測試真的被跑到嗎）
+
+「CI 綠但新測試沒被跑到」發生過至少七次（selective CI 沒收錄新 spec、glob 沒涵蓋、job 被跳過），綠燈證明不了，要比對識別碼。放在 Step 5.5 之前：Test plan 的 CI 項目要先定稿，5.5 才回填。
+
+**觸發**：`git diff --name-status origin/<base>...HEAD` 有狀態 A、M、R 的測試檔（有 profile 取其 Tests glob，沒有就用 `test_*.py`、`*_test.*`、`*.test.*`、`*.spec.*`）。沒有就明示「無變更測試，跳過」。
+
+1. 把變更測試的識別碼（要與 log 列出的同一種形狀，如 `pkg.mod.Cls.test_x` 或檔案路徑）一行一個存到 `.verification/<date>/changed-tests.txt`。
+2. 取 PR head SHA 那次 run 的 log：`gh run list --commit <head-sha>` 找 run，對 profile 的 Required-jobs（沒有就取跑測試的 workflow）`gh run view <id> --log > .verification/<date>/ci-<job>.log`。重試過的只取最後一次 attempt（`--attempt <N>`）。
+3. 比對（matrix 各 job 的 log 全部帶上；profile 有 List-pattern 就改用 `--pattern`；細節見 `--help`）：
+
+   ```bash
+   python3 scripts/ci_collected.py ids --ids-file .verification/<date>/changed-tests.txt \
+     --log .verification/<date>/ci-<job>.log --runner unittest   # 或 pytest／jest／playwright
+   ```
+
+4. 只有 PASS 才能在 Test plan 勾「變更的測試已在 CI 執行」；FAIL 列出 NOT-FOUND 並回頭修；UNVERIFIABLE 照實寫並附原因（如 log 不列識別碼），不寫「CI 綠」。checks 還在 pending 時留一條未勾選項並明講「CI 未跑完，收集狀況待確認」。
+5. 要附總數比較時（輔助，不能單獨當 PASS）：`count --before <base log> --after <head log> --pattern <Count-pattern>`；base 取 PR merge-base SHA 的 run、同一個 workflow 與 job，matrix 各 job 先去重再加總；找不到符合的 base run 就寫 UNVERIFIABLE。
+
+腳本不存在時照同樣步驟手動比對 log。
 
 ## Step 5.5: 截圖驗收 gate（PR 已存在後執行）
 
@@ -267,8 +273,6 @@ PR 建立／更新完成後，判斷本次變更**是否需要截圖驗收**，�
 | 純移除／重構 | 量測（grep 殘留、bundle diff、目錄不存在） | **不問截圖**，直接提示補量測項到 Test plan |
 | API／資料正確性 | curl／測試輸出 | **不問截圖**，直接提示補測試輸出 |
 | 純文件／設定／CI | 無 | 明示「無視覺面，跳過」 |
-
-> 移除類拍不出來：截圖只能顯示「看起來正常」，證不了「東西真的不在了」。別為了有圖而追截圖。
 
 ### 5.5b 互動確認（AskUserQuestion）
 
@@ -306,8 +310,3 @@ Skill({ skill: "pr-evidence-comment" })
 3. 回報 Step 5.5 的結果：已截圖驗收（附 comment 連結）／已列清單待人工驗／判定免驗（附理由）／無視覺面
 4. 回報 Linear ticket 放在哪裡：偵測到的編號與出處、PR 標題有沒有帶、branch 名有沒有帶。沒帶的話講原因（例如 branch 已推上遠端，不改名）。沒找到就明說「未偵測到 Linear ticket」
 5. 如果有相關的其他 PR（如 feature → develop、develop → master），檢查是否需要同步更新
-
-### 使用方式
-
-/pr # 自動偵測是否有 open PR，沒有就建新的
-/pr 7195 # 更新指定 PR 的 description

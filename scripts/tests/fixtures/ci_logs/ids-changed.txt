@@ -1,0 +1,5 @@
+# 變更測試識別碼（虛構專案 widgets）
+widgets.tests.test_cart.CartTests.test_add_item
+widgets.tests.test_cart.CartTests.test_remove_item
+
+widgets.tests.test_price.PriceTests.test_discount

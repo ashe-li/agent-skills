@@ -5,7 +5,10 @@ Evidence format is `verify-ci-evidence/1` (docs/knowledge-source-contract.md,
 CI 證據). The checks run in the contract's order and stop at the first
 mismatch: repo and registered PR, PR open, head equality (PR head, every
 run's head, the branch head), Required-jobs declared, evidence non-empty,
-every required job present, every required job completed. Only the highest
+every required job present; then a completed required job that did not
+succeed makes the conclusion red even while others are still running (so
+--pending-declared can never cover a known failure), and only then must
+every required job be completed. Only the highest
 attempt of each run_id counts. Required jobs are looked up across all runs,
 so jobs from several workflows combine; a job outside Required-jobs never
 affects the conclusion.
@@ -216,8 +219,8 @@ def _job_states(runs: Sequence[dict], required: Sequence[str]) -> tuple:
     missing = tuple(j for j in required if j not in seen)
     pending = tuple(j for j in required if j in seen
                     and any(x.get("status") != COMPLETED for x in seen[j]))
-    failed = tuple(j for j in required if j in seen and j not in pending
-                   and any(x.get("conclusion") != SUCCESS for x in seen[j]))
+    failed = tuple(j for j in required if j in seen and any(
+        x.get("status") == COMPLETED and x.get("conclusion") != SUCCESS for x in seen[j]))
     return missing, pending, failed
 
 
@@ -234,11 +237,13 @@ def _judge(data: dict, required: Sequence[str], flags: CiFlags) -> tuple:
     missing, pending, failed = _job_states(latest_attempts(data["runs"]), required)
     if missing:
         return None, _reject(R_JOB_MISSING, "required jobs not in evidence: " + ", ".join(missing))
+    if failed:
+        return RED, None
     if pending:
         if flags.pending_declared:
             return PENDING_DECLARED, None
         return None, _reject(R_PENDING, "required jobs not finished: " + ", ".join(pending))
-    return (RED if failed else GREEN), None
+    return GREEN, None
 
 
 def _receipt(info: vr.RepoInfo, evidence: Evidence, head: str, conclusion: str,

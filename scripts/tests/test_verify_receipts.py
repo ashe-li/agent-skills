@@ -471,6 +471,30 @@ class CiReceiptTests(ReceiptCase):
             self.assert_rejected(*self.ci(repo, split_runs(self.head(repo, "main"))),
                                  "head-mismatch")
 
+    def test_ci_receipt_red_takes_precedence_over_pending(self) -> None:
+        """已知有必要 job 失敗時判 red，--pending-declared 不得把已知紅燈蓋成 pending。"""
+        repo = self.setup_pr()
+        head = self.head(repo)
+        data = self.evidence_data("pending.json", head)
+        data["runs"][0]["jobs"][0]["conclusion"] = "failure"
+        ev = self.write_json(data)
+        self.assert_written(*self.ci(repo, ev), "red", 1)
+        receipt = self.assert_written(*self.ci(repo, ev, "--pending-declared"), "red", 1)
+        self.assertEqual(receipt["conclusion"], "red")
+        self.assertEqual(vr.check_ci_receipt(str(repo), FEATURE).receipt["conclusion"], "red")
+
+    def test_ci_receipt_unverifiable_when_gh_fails(self) -> None:
+        repo = self.setup_pr()
+        env = self.install_fake_gh(self.evidence_data("green-head.json", self.head(repo)))
+        env["FAKE_GH_DATA"] = str(self.write_json({"run view": {}}))
+        proc, data = self.engine_json("receipt", "ci", "--repo", str(repo), "--from-gh",
+                                      "--pr", "42", env_extra=env)
+        self.assertEqual((data["result"], data["reason"], proc.returncode),
+                         ("unverifiable", "evidence-unavailable", 0))
+        self.assertIsNone(data["receipt"])
+        self.assert_gh_read_only()
+        self.assertEqual(self.ci_receipts(repo), [])
+
 
 class RegistryTests(ReceiptCase):
     def test_registry_exemption_invalid_after_head_change(self) -> None:

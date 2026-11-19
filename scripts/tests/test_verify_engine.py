@@ -323,6 +323,18 @@ class SelectTests(VerifyCase):
         self.assertLess(start, notes_at)
         self.assertLess(notes_at, out.index(FENCE_END, start))
 
+    def test_select_trigger_added_matches_non_ascii_path(self) -> None:
+        repo = self.make_repo()
+        self.commit(repo, {"src/工具/日誌.ts": "export function f() {\n  console.log('x');\n}\n"},
+                    "non-ascii path")
+        self.use_kb(VERIFY_KB)
+        proc, data = self.engine_json("select", "--repo", str(repo), "--base", "main")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        by_id = {item["id"]: item for item in data["items"]}
+        self.assertIn("CM-003", by_id)
+        self.assertEqual([(r["trigger"], r["file"]) for r in by_id["CM-003"]["reasons"]],
+                         [("Trigger-added", "src/工具/日誌.ts")])
+
 
 class ChecksTests(VerifyCase):
     def _run(self, profile: str, remote: str = EXAMPLE_REMOTE):
@@ -427,6 +439,21 @@ class ChecksTests(VerifyCase):
                          "receipt ci 沒有 --from-gh 或 --evidence 屬用法錯誤")
         self.use_kb(EMPTY_KB)
         self.assertEqual(self.engine("status", "--repo", str(repo)).returncode, 0)
+
+    def test_checks_with_ambiguous_profiles_runs_nothing(self) -> None:
+        qcs = (("QC-001 — would touch", {"Argv": "touch ambiguous-marker", "When": "always"}),)
+        kb = self.make_kb(profile_text(qcs=qcs))
+        (kb / "verification" / "example-web-copy.md").write_text(
+            profile_text(qcs=qcs, name="example-web-copy"), encoding="utf-8")
+        self.use_kb(kb)
+        repo = self.make_repo()
+        _, status = self.engine_json("status", "--repo", str(repo))
+        self.assertEqual(status["status"], "AMBIGUOUS")
+        proc, data = self.checks(repo)
+        self.assertEqual((proc.returncode, data["verdict"], data["checks"]), (0, "NO-PROFILE", []))
+        self.assertFalse((repo / "ambiguous-marker").exists(), "AMBIGUOUS 時不得執行任何快檢")
+        receipt = json.loads(Path(data["receipt"]).read_text(encoding="utf-8"))
+        self.assertEqual((receipt["verdict"], receipt["method"]), ("NO-PROFILE", "generic"))
 
 
 class CandidateTests(VerifyCase):

@@ -45,7 +45,7 @@ profile 與 repo 的對應靠 profile frontmatter 的 `remotes` 清單。比對�
 | 未設定 | `NO-KB (原因)` | 0 | 印一行降級說明，只跑內建通用步驟 |
 | 設定值指向不存在的目錄 | `NO-KB (原因，含該路徑)` | 0 | 同上，並提示使用者修正設定 |
 | 已設定，但沒有符合的 profile | `NO-PROFILE (原因)` | 0 | 只套用通用項目與 `_common.md`（若存在） |
-| 已設定，多份 profile 符合 | `AMBIGUOUS a.md b.md` | 0 | 不選擇任何一份，請使用者處理重複 |
+| 已設定，多份 profile 符合 | `AMBIGUOUS a.md b.md` | 0 | 不選擇任何一份，請使用者處理重複。引擎的 `checks` 不執行任何快檢，receipt 的 verdict 記為 `NO-PROFILE`、`method` 為 `generic`，exit 0 |
 | 恰好一份符合 | `MATCH <檔名>` | 0 | 使用該 profile |
 
 repo 沒有 `origin` remote、或 `git` 不存在時，比對結果為 `NO-PROFILE`，不會丟例外。
@@ -201,6 +201,8 @@ default_base: main
 - `retired` 的項目永遠不會被選入。
 - 沒有任何 trigger、或 regex 無法編譯的項目，`lint` 判錯。
 
+已知限制：引擎取 diff 時帶 `-c core.quotePath=false`，非 ASCII 檔名（例如中文）照原樣比對；但檔名含 tab、換行或雙引號時，git 仍會把 patch 標頭的路徑加上引號，這類檔案的 `Trigger-added` 可能比對不到。
+
 `select` 對每個選入的項目附上命中原因：觸發方式（`Trigger-paths`、`Trigger-added` 或 `builtin`）、命中的檔案、命中的 glob 或 regex，`Trigger-paths` 另附檔案狀態。
 
 ### 內建項目
@@ -268,6 +270,10 @@ frontmatter：
 
 只改 profile、不動產品程式，receipt 一樣會失效（`stale-config`）。
 
+`checks --dry-run` 只列出每個快檢會執行的 argv（JSON 的 `argv` 欄位），不執行任何快檢、不寫 receipt，verdict 固定為 `DRY-RUN`（只出現在指令輸出，不會出現在 receipt）。
+
+`receipt record-generic --summary <文字>` 供沒有 profile 的 repo 記錄「跑了哪些內建通用步驟」：寫一張 `method` 為 `generic`、verdict 為 `NO-KB` 或 `NO-PROFILE` 的快檢 receipt，並附 `summary`。這種 receipt 的 verdict 不是 `PASS`，判定一律是 `required-incomplete`。有 profile 符合時拒絕（`profile-present`，exit 1），請改跑 `checks`。
+
 工作樹不乾淨時 `checks` 照常執行並寫出 receipt（`dirty: true`），輸出會提示這張 receipt 不能當作開 PR 的憑證。快檢跑的是工作樹內容，不是 HEAD 的 tree；之後把未提交的修改丟掉，receipt 的鍵值會剛好等於 HEAD 的 tree，所以 `dirty: true` 的 receipt 一律無效（`dirty-at-verify`），要在乾淨的工作樹重跑。
 
 ### 驗收 receipt
@@ -319,9 +325,12 @@ frontmatter：
 | profile 宣告了非空的 `Required-jobs` | `UNVERIFIABLE`，`ci-not-configured`，不寫 receipt（仍可用 `--pending-declared` 或 `--exempt`） |
 | 證據至少有一個 run，而且每個 run 至少有一個 job | `UNVERIFIABLE`，`evidence-empty`，不寫 receipt |
 | `Required-jobs` 的每個 job 都出現在證據裡 | 拒絕，`required-job-missing` |
+| 沒有任何必要 job 已完成但結論不是 `success` | 寫出 red（exit 1）；即使還有其他必要 job 未完成、即使帶了 `--pending-declared` 也一樣 |
 | 每個必要 job 都已完成 | 拒絕，`ci-pending`；只有帶 `--pending-declared` 才寫 receipt |
 
-同一個 `run_id` 出現多個 attempt 時，只採用 attempt 最大的那一筆，與清單順序無關。之後：必要 job 全部 `success` 為 green；有必要 job 不是 `success` 為 red。
+同一個 `run_id` 出現多個 attempt 時，只採用 attempt 最大的那一筆，與清單順序無關。全部核對通過且必要 job 全部 `success` 為 green。紅燈排在未完成之前：已知有必要 job 失敗時若判 pending，`--pending-declared` 就能讓一個已知紅燈以 declared-unverified 通過 gate。
+
+證據來源本身出問題時：`--evidence` 的檔案讀不到、不是 JSON、或不符 `verify-ci-evidence/1`（`pr` 不是整數、`runs` 不是清單）為拒絕，`evidence-invalid`，exit 1；`--from-gh` 時 `gh` 無法執行、回非 0 或輸出不是 JSON 為 `UNVERIFIABLE`，`evidence-unavailable`，exit 0，不寫 receipt。`pr register` 的證據來源有同樣問題時一律拒絕，`evidence-invalid`。
 
 CI receipt 的結論有四種：`green`、`red`、`pending-declared`、`exempt`（必須附 `--reason`）。`green` 一定對應一個非空的必要 job 集合，空集合不可能被判為全部成功。
 
@@ -364,6 +373,18 @@ CI receipt 的結論有四種：`green`、`red`、`pending-declared`、`exempt`�
 
 `verify_receipts.py` 另外提供兩個寫入函式給 hook 使用：`record_push` 在成功 push 後寫入 `last_pushed_head`（branch 沒有條目時建立一筆 `unregistered` 條目）；`mark_push_unresolved` 在解析不出推送的是哪個 branch 時，把該 repo 標記為推送未解析。
 
+### Session 關聯檔
+
+狀態目錄下的 `sessions/<清洗後的 session id>.json`，由 `verify_receipts.record_session_link` 寫入、`read_session` 讀取。session id 清洗規則：英數、`_`、`.`、`-` 以外的字元換成 `_`，截到 128 字元，去掉開頭的 `.`。目前的格式：
+
+| 欄位 | 說明 |
+|---|---|
+| `schema` | 固定 `verify-session/1` |
+| `session_id` | 清洗後的 session id |
+| `links` | 清單，每筆有 `repo`（正規化 remote）、`repo_path`（repo 根目錄）、`branch`、`pr`（可為 null）、`at`；同一個 repo 加 branch 只留最新一筆 |
+
+gate hook 會擴充這個檔（例如各 gate 的擋下次數）；寫入時保留不認得的欄位。
+
 ### head 決定順序
 
 判定任何 receipt 或免檢狀態時，某個 branch 的 head 依序決定：
@@ -405,14 +426,18 @@ CI receipt 的結論有四種：`green`、`red`、`pending-declared`、`exempt`�
 | `not-exempt` | 條目是 open 或 unregistered，不適用免檢 |
 | `pr-unregistered` | 這個 branch 沒有註冊表條目 |
 | `head-unresolved` | 無法決定 branch 的 head |
+| `evidence-invalid` | `--evidence` 的證據檔讀不到或不符 schema |
+| `evidence-unavailable` | `--from-gh` 時 `gh` 失敗，取不到證據 |
+| `profile-present` | 有 profile 符合，不接受 `receipt record-generic` |
+| `state-error` | 狀態目錄或狀態檔不可安全使用（例如是 symlink、權限不足），引擎拒絕寫入 |
 
 gate 另有自己的 reason code（例如 `declared-unverified`），見 hooks 文件。
 
 ### 引擎的 exit code
 
-- `FAIL` 與核對不過（CI receipt 被拒、結論為 red、`lint` 有錯誤、`init-profile` 遇到既有檔）為 1。
+- `FAIL` 與核對不過（CI receipt 被拒、結論為 red、`lint` 有錯誤、`init-profile` 遇到既有檔）為 1；`state-error` 也是 1，`--json` 時輸出 `{"result": "error", "reason": "state-error", "message": ...}`。
 - 用法錯誤（未知子命令、缺必要旗標、`--exempt` 缺 `--reason`）為 2。
-- 其餘為 0，包含 `NO-KB`、`NO-PROFILE`、`PROFILE-STALE`、`PROFILE-INVALID` 與 `UNVERIFIABLE`。
+- 其餘為 0，包含 `NO-KB`、`NO-PROFILE`、`PROFILE-STALE`、`PROFILE-INVALID`、`DRY-RUN` 與 `UNVERIFIABLE`。
 
 所有子命令都接受 `--json`，此時 stdout 只印一個 JSON 物件，欄位見兩支測試檔開頭的說明。
 

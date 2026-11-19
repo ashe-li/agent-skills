@@ -1,6 +1,6 @@
 ---
 name: notion-report
-description: 把工作成果寫回 Notion 頁面 — 優先走官方 REST API（不開瀏覽器），無 API token 時自動退回 playwright-cli 沿用既有登入 session，依收件對象（PM／設計／營運／工程，未指定時以 AskUserQuestion 詢問、可多選）自動調整內容深度與用詞，寫入前一律 dry-run 過目、寫入後讀回驗證。觸發：「把這次結果記到 Notion」「同步進度給 PM」「更新這張票的狀態」「寫個交付摘要給設計」，或 /notion-report <Notion URL>。
+description: 把工作成果寫回 Notion 頁面 — 優先走官方 REST API（不開瀏覽器），無 API token 時自動退回 playwright-cli 沿用既有登入 session，依收件對象（PM／設計／營運／工程，未指定時以 AskUserQuestion 詢問、可多選）自動調整內容深度與用詞，寫入前一律 dry-run 過目、寫入後讀回驗證；browser 路徑可附本機截圖。觸發：「把這次結果記到 Notion」「同步進度給 PM」「更新這張票的狀態」「寫個交付摘要給設計」，或 /notion-report <Notion URL>。
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 argument-hint: <Notion URL> [--to pm|design|ops|eng（可逗號分隔多選）] [--mode append|comment] [--via api|browser] [--dry-run]
 ---
@@ -199,6 +199,11 @@ DRAFT=.verification/$(date +%F)/notion-report/draft.md
 > **不支援表格。** Notion 的 table block 結構複雜且容易寫壞，
 > 要呈現對照資料請改用項目列表（`- 指標：before → after`）。
 
+> **圖片**：Markdown 草稿裡不要寫 `![]()`。browser 路徑可以把本機圖片上傳成 image block
+> （Step 4 B 的「附圖」）；API 路徑目前不支援附圖。要附圖時，草稿最後放一段小標加編號清單
+> 當圖說（`1. 深色：個人資料`…），圖片會依序接在它後面。別的服務上需要登入才看得到的
+> 圖片網址（例如 GitHub 私有 repo 的附件）Notion 抓不到，不要拿來當外部圖片嵌入。
+
 建議骨架（依對象調整深度）：
 
 單一對象：
@@ -318,6 +323,32 @@ browser 路徑**不支援 `mode=comment`**（Notion 的 comment 介面需要多�
 playwright-cli -s=notion eval '() => new Promise(r => setTimeout(() => r("waited"), 2500))'
 ```
 
+**附圖（選用，文字驗證過後才做）**
+
+先照 Step 5 確認文字已寫入，再傳圖。圖片的內容會整個放進指令參數，所以**一張一次 eval**
+暫存到頁面，最後**一次貼上**——分次貼的話每張都插在同一個區塊後面，順序會反過來：
+
+```bash
+i=0
+for f in <圖1> <圖2> <圖3>; do
+  playwright-cli -s=notion eval "$(python3 "$BROWSER" stash-image-js "$f" $i)"
+  i=$((i+1))
+done
+# 第二個參數是防呆：最後一個可編輯區塊必須包含這段字（用草稿最後一行），否則不貼
+playwright-cli -s=notion eval "$(python3 "$BROWSER" paste-images-js 3 "<草稿最後一行的一段字>")"
+playwright-cli -s=notion eval '() => new Promise(r => setTimeout(() => r("waited"), 12000))'
+```
+
+- 單張上限 600 KB（`stash-image-js` 超過會直接拒絕）；整頁長截圖先縮圖或裁切。
+- `stash-image-js` 回 `stashed: n`；`paste-images-js` 回 `FAIL: ...` 時頁面沒有被動到，照訊息修正後再貼。
+- 回 `dispatched: true` 同樣**不是成功訊號**，用 Step 5 的 `scan-js` 看 `images`。
+- 暫存放在頁面記憶體裡，重新載入就沒了；中途重載要從第一張重新 stash。
+- 截圖先由主對話看過：有沒有拍到該拍的畫面、有沒有不該外流的帳號資料。
+
+**寫入前先看頁面現況**：共用頁面隨時可能被人改過（標題、區塊都可能變）。距離上次讀頁面
+已有一段時間、或這是同一頁的第二次寫入時，先重跑 `probe-js`，必要時用 `scan-js` 讀全頁，
+不要照自己上次寫完的樣子假設。
+
 ## Step 5：讀回驗證（不可省略）
 
 寫完不能只憑 API 回 200 或 paste 事件被接走就宣稱完成——沿用既有紀律：**write-then-verify**。
@@ -335,6 +366,19 @@ playwright-cli -s=notion eval "$(python3 "$BROWSER" verify-js "<草稿標題那�
 ```
 
 **這一步是 browser 路徑唯一的成功判定，Step 4 的回傳值都不算數。** 三項全中才算過：
+
+> **長頁面改用 `scan-js`。** Notion 只畫畫面附近的區塊，`verify-js` 讀的是單次 `innerText`，
+> 頁面一長 `totalChars` 會小得不合理（實測 60 個區塊的頁面只回 398 字），目標字串不在
+> 畫面附近時還會回 `found: false`。`scan-js` 會分段捲動、以 block id 去重後累計：
+>
+> ```bash
+> playwright-cli -s=notion eval "$(python3 "$BROWSER" scan-js "<草稿標題那一行>")"
+> ```
+>
+> 看 `total`（區塊總數，對照寫入前）、`types`（型別分佈）、`occurrences`（應為 1）、
+> `tail`（最後幾個區塊）。有附圖時再看 `images`：張數要等於上傳數，每一格是
+> `寬x高`（對照來源檔確認順序），出現 `loading` 就等幾秒重掃。最後**重新載入頁面再掃一次**，
+> 確認內容真的存進去了，而不是只在這個分頁裡。
 
 1. `found: true`
 2. **`occurrences: 1`**——大於 1 代表送出了兩次（常見於誤判失敗後重試），
@@ -368,6 +412,9 @@ playwright-cli -s=notion eval '() => { const c = document.querySelector(".notion
 | （browser）`loginRedirect: true` | profile session 過期，依「走 browser」段落重新登入一次 |
 | （browser）內容進去了但排版跑掉 | Notion 貼上解析與 Markdown 有落差。**不要在頁面上手動修**，改草稿後請使用者刪掉舊的重寫一次 |
 | （browser）中途瀏覽器被關掉 | Step 5 verify 確認寫入了多少；`occurrences` >1 表示重複，請使用者手動刪 |
+| （browser）`playwright-cli` 指令卡住不回 | 把一長串指令拆成各自有逾時的短指令。卡住就 `playwright-cli -s=notion close` 再重開，**先 `scan-js` 讀回**，確認頁面現況後才決定要不要重做，不要直接重試寫入 |
+| （browser）`images` 張數不對或有 `loading` | 等幾秒重掃；仍不對就停下回報張數與已上傳的那幾張，不要整批重貼（會重複） |
+| （browser）`stash-image-js` 說超過上限 | 先縮圖或裁切到 600 KB 以內，不要改腳本的上限（那是指令參數長度的限制） |
 
 ## 紅線
 

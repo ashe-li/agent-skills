@@ -10,9 +10,11 @@ default_base: main
 
 ## Quick checks
 
-### QC-001 — lint
-- Argv: npm run lint
+### QC-001 — whitespace errors
+- Argv: git diff --check
 - When: always
+- Timeout: 60
+- Required: true
 
 ## Paths
 
@@ -21,22 +23,25 @@ default_base: main
 
 ## CI
 
-- Workflow: ci.yml
-- Required-jobs: test
+- List-pattern: ^(test_\w+) \(
+- Workflow: CI
+- Jobs: unit-tests, quality
+- Required-jobs: unit-tests, quality
 
 ## Flows
 
 ### FL-001 — smoke
 - When: ui
-- Use: open the page and check it renders
+- Use: open the changed page and check it renders
+- Notes: fictional example flow
 
 ## Checklist
 
-### EX-001 — example item
-- Trigger-paths: src/**
-- Check: confirm the change renders in a browser
+### EX-001 — end-to-end suite touched
+- Trigger-paths: e2e/**
+- Check: the end-to-end suite still runs locally
 - Evidence: manual
-- Incident: example incident
+- Incident: example-org incident 201
 - Added: 2026-01-01
 
 ## Verifier notes

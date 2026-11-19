@@ -1,0 +1,11 @@
+{
+  "schema": "verify-ci-evidence/1",
+  "_comment": "No CI run exists for the head.",
+  "repo": "github.com/example-org/example-web",
+  "pr": 42,
+  "pr_state": "open",
+  "pr_head_sha": "1111111111111111111111111111111111111111",
+  "pr_head_branch": "feat/example-change",
+  "fetched_at": "2026-01-02T03:04:05Z",
+  "runs": []
+}

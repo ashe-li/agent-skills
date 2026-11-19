@@ -1,0 +1,22 @@
+[
+  {
+    "attempt": 1,
+    "conclusion": "success",
+    "databaseId": 1000000001,
+    "event": "pull_request",
+    "headBranch": "feat/example-change",
+    "headSha": "3f1c9a7e5b2d4c6a8e0f1b3d5c7a9e1f2b4d6c8a",
+    "status": "completed",
+    "workflowName": "Banned Terms Guard"
+  },
+  {
+    "attempt": 1,
+    "conclusion": "success",
+    "databaseId": 1000000002,
+    "event": "pull_request",
+    "headBranch": "feat/example-change",
+    "headSha": "3f1c9a7e5b2d4c6a8e0f1b3d5c7a9e1f2b4d6c8a",
+    "status": "completed",
+    "workflowName": "Skill Quality Gate"
+  }
+]

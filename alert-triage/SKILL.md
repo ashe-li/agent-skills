@@ -208,7 +208,9 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 
 1. **定位該修的 repo + base 規則**：
    - `web-app`：PR base **一律 hotfix**（KB `wiki/rules/read-target-repo-claude-md-before-cross-repo-work-pr-base-is-repo-rule.md`）。
-   - `deployment-eks`：後端團隊負責，**不直接改**（KB `wiki/rules/repo-ownership.md`）→ 只產建議 / 開 issue（HITL G3）。
+   - `deployment-eks`：依歸屬分兩類（KB `wiki/rules/repo-ownership.md`）。
+     - **屬使用者，照常走 PR（G1）**：cluster infra（NodePool、PDB、Karpenter）、network／gateway、observability（Alloy、Loki、Grafana）、Flux，以及一般業務 deployment 的 PDB／HPA／副本數／resources。prod 的 cloudflared／alloy 走 `make PHASE=prod`，deploy trigger 預設由後端執行：做到 values PR 為止，不主動代跑；使用者明示授權時才代跑。
+     - **屬後端，不動也不寫提案（G3）**：`smb-*`／`payment-*` 的 helm values 與 secrets、託管資料庫、cert-manager 的副本配置、後端 EC2。只在報告正文用一句話標「屬後端」。
    - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（KB `wiki/rules/helm-persist-before-apply.md`）。
 2. **產 guardrail**（對症）：
    - OOM → resource limit / HPA scaleUp 平滑 / memory guardrail。
@@ -223,10 +225,10 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 
 - **G1 — 開 PR 前**：呈現分類結論 + live 證據 + 擬修方案，確認後才開 PR。
 - **G2 — benign 自動關閉 / 標記前**：列出為何 benign（prior + 證據），確認後才記錄關閉。
-- **G3 — 跨 repo / 後端 repo**：涉及 `deployment-eks` 等非自有 repo 時，只產建議不直接改，由人決定。
+- **G3 — 後端 own 或歸屬不明的資源**：修法落在後端 own 的範圍（見 Step 6 第 1 點）時，不改、不寫提案，正文標「屬後端」後交由人決定；歸屬不明的資源同樣先停下來問，不自行假設可以改。
 - **G4 — low-confidence real**：信心不足以支撐 real 開 PR 時，不開 PR，回 Step 3 補證據或交人判斷。
 
-> headless/cron 觸發時，G1/G3 不可略過（real 開 PR、跨 repo 改動須留 HITL）；唯一可放寬的是 G2 benign 自動關閉，且前提是**信心 HIGH 且命中已知 benign prior**——LOW/MEDIUM 信心的 benign 即使 headless 也須人工確認。所有自動關閉一律留 report audit。
+> headless/cron 觸發時，G1/G3 不可略過（real 開 PR、碰到後端 own 或歸屬不明的資源須留 HITL）；唯一可放寬的是 G2 benign 自動關閉，且前提是**信心 HIGH 且命中已知 benign prior**——LOW/MEDIUM 信心的 benign 即使 headless 也須人工確認。所有自動關閉一律留 report audit。
 
 ## Tools（MCP / kubectl gotcha）
 

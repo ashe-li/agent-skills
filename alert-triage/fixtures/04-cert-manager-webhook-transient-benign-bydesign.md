@@ -10,7 +10,7 @@ expected_matched_priors:
   - memory/cert-manager-stg-replica-1-by-design
   - reports/2026-04-25-stg-flux-prereq-webhook-eviction
 source_report: reports/2026-05-23-cert-manager-webhook-transient-fail-triage.md
-notes: transient by-design；status.history 已自癒；stg 1 replica 刻意 → 禁推 HA PR；deployment-eks 屬後端
+notes: transient by-design；status.history 已自癒；stg 1 replica 刻意 → 禁推 HA PR；cert-manager 副本配置屬後端
 ---
 
 ## Alert Payload（正規化 envelope）
@@ -34,5 +34,5 @@ notes: transient by-design；status.history 已自癒；stg 1 replica 刻意 →
 
 - **分類：benign（transient, by-design）**。單次 Kustomization fail + 自動 retry 成功，判斷依據是 `status.history` 後續結果而非當下 alert。
 - **stated_cause 對賭**：「webhook 壞」誤導 → 實為 rolling restart transient。
-- **處置**：**不開 PR**，尤其**不推 HA（replica=2 + PDB）PR**（stg 1 replica 刻意；`cert-manager-stg-replica-1-by-design`）。deployment-eks 屬後端團隊（HITL G3，只記錄不改）。
+- **處置**：**不開 PR**，尤其**不推 HA（replica=2 + PDB）PR**（stg 1 replica 刻意；`cert-manager-stg-replica-1-by-design`）。cert-manager 的副本配置屬後端（HITL G3，只記錄不改、不寫提案）。
 - 走 HITL G2/G3。

@@ -229,9 +229,9 @@ PR description 必須包含以下區塊，使用繁體中文撰寫：
 <!-- 測試計畫，checkbox 格式 -->
 <!-- 若 Step 2 判定有視覺面，此處列出待截圖驗收的編號項目（B1/C1…），並在 Step 5.5 完成後回頭勾選；
      移除／重構類不要列截圖項，改列量測項（grep 殘留、bundle diff、目錄不存在） -->
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
+
+> 模板不含署名行。commit 的 `Co-Authored-By` 與 PR 描述的「Generated with Claude Code」要不要加，依使用者的 Claude Code attribution 設定，不由本 skill 決定。
 
 **Manifest 逐條比對：** 撰寫完 Context 區塊後，逐條比對 Step 1b 的 Context Manifest，確保每個項目都已反映；差集（expected_count − actual_written）> 0 的項目必須補齊，不可遺漏。
 

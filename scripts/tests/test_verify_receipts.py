@@ -602,6 +602,16 @@ class CiReceiptTests(ReceiptCase):
                          ("rejected", "evidence-invalid", 1))
         self.assertNotIn("Traceback", proc.stderr)
 
+    def test_ci_evidence_with_non_string_job_name_is_rejected(self) -> None:
+        """第二批 B：job 的 name 不是字串時回 evidence-invalid，不得丟 traceback。"""
+        repo = self.setup_pr()
+        data = self.evidence_data("green-head.json", self.head(repo))
+        data["runs"][0]["jobs"][0]["name"] = []
+        proc, out = self.ci(repo, self.write_json(data))
+        self.assertEqual((out["result"], out["reason"], proc.returncode),
+                         ("rejected", "evidence-invalid", 1))
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_ci_latest_attempt_wins_regardless_of_list_order(self) -> None:
         """CodeRabbit R26：較大的 attempt 排在清單後面時也要採用它。"""
         repo = self.setup_pr()

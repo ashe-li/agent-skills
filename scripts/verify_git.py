@@ -137,8 +137,8 @@ def status_paths(repo: str) -> Optional[StatusPaths]:
         index += 1
         if len(token) < 4:
             continue
-        if token[0] in "RC":
-            index += 1  # the original path of a rename/copy follows
+        if token[0] in "RC" or token[1] in "RC":
+            index += 1  # the original path of a rename/copy (either column) follows
         (untracked if token[:2] == "??" else tracked).append(token[3:])
     keep = lambda paths: tuple(p for p in paths if _outside_verification(p))  # noqa: E731
     return StatusPaths(keep(tracked), keep(untracked))

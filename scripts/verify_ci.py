@@ -94,6 +94,8 @@ def _validate(data: object) -> dict:
             raise EvidenceError("every run must be an object with a jobs list")
         if not all(isinstance(job, dict) for job in run.get("jobs") or []):
             raise EvidenceError("every job must be an object")
+        if not all(isinstance(job.get("name"), str) for job in run.get("jobs") or []):
+            raise EvidenceError("every job needs a string name")
     return data
 
 

@@ -546,8 +546,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    previous = JsonArgumentParser.json_requested
     JsonArgumentParser.json_requested = "--json" in argv
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    finally:
+        JsonArgumentParser.json_requested = previous
     try:
         return args.func(args)
     except UsageError as exc:

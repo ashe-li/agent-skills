@@ -238,7 +238,7 @@ Skill({ skill: "evidence-gate" })
 
 1. 把變更測試的識別碼（要與 log 列出的同一種形狀，如 `pkg.mod.Cls.test_x` 或檔案路徑）一行一個存到 `.verification/<date>/changed-tests.txt`。
 2. 取 PR head SHA 那次 run 的 log：`gh run list --commit <head-sha>` 找 run，對 profile 的 Required-jobs（沒有就取跑測試的 workflow）`gh run view <id> --log > .verification/<date>/ci-<job>.log`。重試過的只取最後一次 attempt（`--attempt <N>`）。
-3. 比對（matrix 各 job 的 log 全部帶上；profile 有 List-pattern 就改用 `--pattern`；細節見 `--help`）：
+3. 比對（matrix 各 job 的 log 全部帶上；profile 有 List-pattern 就改用 `--pattern`，但自訂樣式不做跳過偵測，見契約的 List-pattern；細節見 `--help`）：
 
    ```bash
    python3 scripts/ci_collected.py ids --ids-file .verification/<date>/changed-tests.txt \

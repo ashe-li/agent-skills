@@ -82,6 +82,28 @@ class LintNewFormat(unittest.TestCase):
                 self.assertIn("SCHEMA-DEFECT", [i.code for i in result.issues])
                 self.assertEqual(result.errors, 1)
 
+    def test_escaped_pipe_judged_by_the_simple_command_that_holds_it(self) -> None:
+        """第二批 D：只看含 `\\|` 的那個簡單指令是不是 ERE／PCRE 工具；引號內的 | 不切。"""
+        defects = (r"grep -E 'a\|b' f", r"rg 'a\|b'", r"awk '/a\|b/'",
+                   r"sed -E 's/a\|b/x/'", r"cat f | grep -E 'a\|b'",
+                   r"grep 'x|y' f | grep -E 'a\|b'")
+        warnings = (r"grep 'a\|b' f", r"sed 's/a\|b/x/'",
+                    r"grep 'a\|b' f | awk '{print $1}'", r"grep 'a\|b' f | rg x",
+                    r"grep 'a\|b' f && rg x", r"grep 'a\|b;c' f; awk 1")
+        for cmd in defects + warnings:
+            with self.subTest(cmd=cmd):
+                found = codes(section(1, cmd=cmd))
+                expected = "SCHEMA-DEFECT" if cmd in defects else "ESCAPED-PIPE"
+                self.assertEqual(found, [expected])
+
+    def test_wrapped_ere_tool_in_the_same_simple_command_is_still_a_defect(self) -> None:
+        """包了一層的 ERE 工具（git grep -E、sudo、xargs、env）不因為切指令而放過。"""
+        for cmd in (r"git grep -E 'a\|b'", r"sudo grep -E 'a\|b' f",
+                    r"ls | xargs grep -E 'a\|b'", r"LC_ALL=C grep -E 'a\|b' f",
+                    r"command rg 'a\|b'"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(codes(section(1, cmd=cmd)), ["SCHEMA-DEFECT"])
+
     def test_plain_pipe_and_ere_alternation_are_fine(self) -> None:
         text = section(1, cmd="git log | grep -E 'a|b' | wc -l")
         self.assertEqual(codes(text), [])

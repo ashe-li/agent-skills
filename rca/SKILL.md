@@ -106,7 +106,7 @@ SYNTHESIS 的產出（frontmatter `type: incident-rca`、`action_items_open: <n>
 
 - 派 `readonly-verifier`（`agents/readonly-verifier.md`，fresh context）抽驗：時間軸挑 3 條、矛盾裁決全部、falsifier 指令實際跑一次，逐條標 PASS／FAIL，證據存 `.verification/`。有 FAIL 就回 Step 2 修正。只有零 FAIL，報告的 status 才能寫成 `verified`。
 - **G1 開 PR 前**、**G3 動到後端 own 的資源**、**G4 根因信心 LOW**：用 AskUserQuestion 停下來等使用者決定。分類是 `SELF-INFLICTED → CODIFY` 時，另外要問使用者「這個手動變更是不是你們刻意做的」，除非 KNOWLEDGE 已經找到白紙黑字的決策。
-- KB gate：回收 agent 之前，要把本次教訓寫進知識來源的 `$KB_HOME/_pending/`（`[ -d ]` 檢查），可以重複使用的做法寫到 `$KB_HOME/wiki/learned/`（存在才寫，有索引就掛上）；未設定知識來源、或 `_pending/` 不存在，就印一行「知識來源未設定或缺 `_pending/`，教訓降級為寫進 `.verification/<date>/rca-<slug>/lessons.md`」。
+- KB gate：回收 agent 之前，要把本次教訓寫進知識來源的 `$KB_HOME/_pending/`（`[ -d ]` 檢查），可以重複使用的做法寫到 `$KB_HOME/wiki/learned/`（已設定知識來源且該目錄存在才寫，有索引就掛上）；未設定知識來源、或 `_pending/` 不存在，就印一行「知識來源未設定或缺 `_pending/`，教訓降級為寫進 `.verification/<date>/rca-<slug>/lessons.md`」。
 
 ## 交付給使用者的格式
 

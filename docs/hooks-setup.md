@@ -554,11 +554,11 @@ wrapper 依序取 `AGENT_SKILLS_DIR`、`AGENT_SKILLS_HOME`，都沒設就用 `~/
 
 ## 4. 追加到 `~/.claude/settings.json`
 
-**這是 additive 步驟，不是覆蓋。** 三處各在既有陣列的末端追加一個物件，既有的 hook 一個都不動。先備份到一個新的目錄（目錄名帶到秒；`mkdir` 不加 `-p`，目錄已存在就失敗，重跑不會蓋掉先前的備份）：
+**這是 additive 步驟，不是覆蓋。** 三處各在既有陣列的末端追加一個物件，既有的 hook 一個都不動。先備份到一個新的目錄（目錄名帶到秒；只對上層 `~/.claude/backups` 用 `mkdir -p`，備份目錄本身不加 `-p`，已存在就失敗，重跑不會蓋掉先前的備份）：
 
 ```bash
 BACKUP="$HOME/.claude/backups/$(date +%Y%m%d-%H%M%S)-verify-gate"
-mkdir "$BACKUP" && cp ~/.claude/settings.json "$BACKUP/settings.json" && echo "$BACKUP"
+mkdir -p "$HOME/.claude/backups" && mkdir "$BACKUP" && cp ~/.claude/settings.json "$BACKUP/settings.json" && echo "$BACKUP"
 ```
 
 記下印出的路徑，下面的比對要用。
@@ -691,7 +691,7 @@ echo "多了 $((AFTER - BEFORE)) 行"; tail -1 "$LOG"
 
 ```bash
 UNINSTALL="$HOME/.claude/backups/$(date +%Y%m%d-%H%M%S)-verify-gate-uninstall"
-mkdir "$UNINSTALL" && cp ~/.claude/settings.json ~/.claude/hooks/verify-gate.sh "$UNINSTALL/" && echo "$UNINSTALL"
+mkdir -p "$HOME/.claude/backups" && mkdir "$UNINSTALL" && cp ~/.claude/settings.json ~/.claude/hooks/verify-gate.sh "$UNINSTALL/" && echo "$UNINSTALL"
 ```
 
 解除安裝（逐一列明確路徑，不用萬用字元）：

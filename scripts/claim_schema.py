@@ -7,9 +7,10 @@ two lines, `關鍵輸出：...` and `判定：PASS|FAIL|UNVERIFIABLE`, both requ
 (an UNVERIFIABLE claim writes `關鍵輸出：—`). An UNVERIFIABLE claim carries
 no block.
 
-`\\|` inside a fenced block is a SCHEMA-DEFECT when the same line runs an
-ERE/PCRE tool (grep -E/-P, egrep, rg, awk, sed -E): there it matches a
-literal pipe and silently finds nothing. Elsewhere it is only a warning
+`\\|` inside a fenced block is a SCHEMA-DEFECT when the simple command that
+holds it (the line split at unquoted `|`, `;`, `&`) is an ERE/PCRE tool
+(grep -E/-P, egrep, rg, awk, sed -E): there it matches a literal pipe and
+silently finds nothing. Elsewhere it is only a warning
 (ESCAPED-PIPE): a leftover of table escaping, or a valid BRE alternation
 such as `grep 'a\\|b'`. In a legacy table cell it stays a SCHEMA-DEFECT.
 
@@ -50,8 +51,9 @@ ECHO_FMT = 'echo "=== #{n}"'
 SUBSHELL_OPEN, SUBSHELL_CLOSE = "(", ")"
 ERE_TOOL_RE = re.compile(
     r"\b(?:egrep|rg|awk|gawk|mawk)\b"
-    r"|\bgrep\b[^|;&]*?\s(?:-[A-Za-z]*[EP][A-Za-z]*|--extended-regexp|--perl-regexp)\b"
-    r"|\bsed\b[^|;&]*?\s(?:-[A-Za-z]*[Er][A-Za-z]*|--regexp-extended)\b")
+    r"|\bgrep\b.*?\s(?:-[A-Za-z]*[EP][A-Za-z]*|--extended-regexp|--perl-regexp)\b"
+    r"|\bsed\b.*?\s(?:-[A-Za-z]*[Er][A-Za-z]*|--regexp-extended)\b")
+COMMAND_SEPARATORS = "|;&"
 ERE_PIPE_MSG = ("block 內在 ERE／PCRE 指令（grep -E／-P、egrep、rg、awk、sed -E）裡寫了 `\\|`："
                 "這些語法的 `\\|` 比對字面的直線，會靜默回 0 筆；交替請寫 `|`")
 ESCAPED_PIPE_MSG = ("block 內出現反斜線加直線：若是表格跳脫的殘留，請拿掉反斜線；"
@@ -221,11 +223,43 @@ def _block_issues(claim: Claim) -> list[Issue]:
         out.append(Issue(claim.blocks[1].start, "MULTI-BLOCK", "一條宣稱只能有一個 bash block"))
     for block in claim.blocks:
         for off, text in enumerate(block.lines, start=1):
-            if ESCAPED_PIPE in text and ERE_TOOL_RE.search(text):
+            if _ere_command_has_escaped_pipe(text):
                 out.append(Issue(block.start + off, "SCHEMA-DEFECT", ERE_PIPE_MSG))
             elif ESCAPED_PIPE in text:
                 out.append(Issue(block.start + off, "ESCAPED-PIPE", ESCAPED_PIPE_MSG, EC_WARNING))
     return out
+
+
+def simple_commands(line: str) -> list[str]:
+    """Split one shell line at unquoted `|`, `;`, `&` (so `&&`, `||` too).
+
+    Quotes are honored (a `|` inside '...' or "..." does not split) and a
+    backslash outside single quotes escapes the next character.
+    """
+    parts, current, quote, index = [], [], "", 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and quote != "'" and index + 1 < len(line):
+            current += [char, line[index + 1]]
+            index += 2
+            continue
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char in COMMAND_SEPARATORS:
+            parts.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    return parts + ["".join(current)]
+
+
+def _ere_command_has_escaped_pipe(line: str) -> bool:
+    """True when a simple command holding `\\|` runs an ERE/PCRE tool (wrappers such as `git grep -E`, `sudo`, `xargs` included)."""
+    return any(ESCAPED_PIPE in cmd and ERE_TOOL_RE.search(cmd) for cmd in simple_commands(line))
 
 
 def lint_text(text: str, name: str) -> LintResult:

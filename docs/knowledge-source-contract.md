@@ -138,7 +138,7 @@ Quick checks 欄位：
 
 CI 欄位：
 
-- `List-pattern`：Python regex，含一個 capture group，每行抓出一個測試識別碼。
+- `List-pattern`：Python regex，含一個 capture group，每行抓出一個測試識別碼。自訂樣式不會做跳過偵測（只有內建 `--runner` 會），樣式本身不得把被跳過的項目抓進來，例如不要同時比對 `PASSED` 與 `SKIPPED`。
 - `Count-pattern`：選填，只作輔助的總數比對。
 - `Workflow`：workflow 名稱。
 - `Jobs`：job 清單，matrix 的各 job 分別列出。

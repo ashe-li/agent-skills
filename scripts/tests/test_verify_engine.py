@@ -814,6 +814,35 @@ class CodeRabbitFixTests(VerifyCase):
         text = path.read_text(encoding="utf-8")
         self.assertEqual([n for n in (1, 2, 3) if f"src-{n}" in text], [1, 2, 3])
 
+    def test_status_skips_source_path_of_worktree_rename(self) -> None:
+        """第二批 A：工作樹欄是 R 時，下一個 token 是原路徑，不得當成另一筆路徑。"""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        import verify_git as vg
+        repo = self.make_repo()
+        self.git(repo, "mv", "README.md", "README2.md")
+        self.git(repo, "reset", "-q")
+        self.git(repo, "add", "-N", "README2.md")
+        raw = subprocess.run(["git", "-C", str(repo), "status", "--porcelain=v1", "-z"],
+                             capture_output=True, text=True, check=True).stdout
+        self.assertTrue(raw.startswith(" R README2.md\x00README.md"), f"前提：工作樹欄為 R：{raw!r}")
+        self.assertEqual(vg.dirty_paths(str(repo)), ("README2.md",))
+
+    def test_main_restores_json_flag_after_parsing(self) -> None:
+        """第二批 C：main() 設的 json_requested 要還原，不影響之後同一行程的 parse。"""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        import io
+        import verify_engine as ve
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", io.StringIO()):
+            with self.assertRaises(SystemExit):
+                ve.main(["checks", "--json", "--no-such-flag"])
+            out.truncate(0)
+            out.seek(0)
+            with self.assertRaises(SystemExit):
+                ve.build_parser().parse_args(["checks", "--no-such-flag"])
+        self.assertEqual(out.getvalue(), "", "沒帶 --json 的 parse 不得印 JSON")
+        self.assertFalse(ve.JsonArgumentParser.json_requested)
+
     def test_main_json_errors_follow_the_argv_passed_in(self) -> None:
         """C05：以函式呼叫 main(argv) 時，--json 取自傳入的 argv，不是 sys.argv。"""
         sys.path.insert(0, str(SCRIPTS_DIR))

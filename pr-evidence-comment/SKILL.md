@@ -7,7 +7,7 @@ argument-hint: <PR 編號 / preview 或 staging URL / 驗收項目清單>
 
 # /pr-evidence-comment — headed 驗收 → 截圖 → PR comment 附圖
 
-把一次 headed 驗收變成 PR 上**別人打得開**的證據。
+把一次 headed 驗收變成 PR 上**別人打得開**的證據。開頭先跑 `$E pr register --repo . --from-gh`（只做驗收、沒有 push 的 session 靠這一步進入檢查；`$E` 見 `/verify-change` Step 1）；沒有 profile 或引擎不可用，照現行流程，行為與現在完全相同。
 
 ## 為什麼一定要上傳，不能只留本機路徑
 
@@ -36,7 +36,7 @@ argument-hint: <PR 編號 / preview 或 staging URL / 驗收項目清單>
 
 ## Step 1 — 定驗收項目並編號
 
-**先列清單再開瀏覽器**，不要邊看邊想要驗什麼——臨場發揮會漏掉 regression 面。
+**先列清單再開瀏覽器**，不要邊看邊想要驗什麼——臨場發揮會漏掉 regression 面。有 profile 時清單起點取自其 `Flows` 與 `$E select` 命中的項目（`/verify-change` Step 3、4），驗收員用 `agents/headed-verifier.md`。
 
 編號慣例：
 
@@ -184,6 +184,7 @@ gh pr view <num> --json comments --jq '.comments[-1].body' | grep -c "user-attac
 數字要等於上傳的檔案數。**不要用「沒有報錯」當成功**——沒有壞消息不是好消息（`git status` 空輸出同理，可能是已 commit，也可能是被 ignore）。
 
 同時把截圖清單與判定寫進知識庫 session 檔，標明證據路徑為**本機限定**。
+讀回成功後，有 profile 時寫驗收 receipt：`$E receipt acceptance --repo . --pr <num> --attachments <檔案數>`。
 
 ## 不重造的既有資源
 

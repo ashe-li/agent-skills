@@ -120,7 +120,7 @@ branch 名要帶 ticket，格式 `<type>/<team>-<number>-<kebab-slug>`（例：`
 
 ## Step 4: 推送到遠端
 
-有 remote tracking branch 用 `git push`；沒有則 `git push -u origin <branch>` 建立。
+有 remote tracking branch 用 `git push`；沒有則 `git push -u origin <branch>` 建立。有 profile（`/verify-change` Step 1 回 `MATCH`）且引擎可用時，push 前先在最終 HEAD 跑 `$E checks`（`$E` 的定義與工作樹須乾淨的限制見該 skill Step 2）；沒有 profile 或引擎不可用，照現行流程，行為與現在完全相同（下方 `pr register`、`receipt ci`、UI 判定的接線同此）。
 
 ## Step 5: 建立或更新 PR
 
@@ -187,6 +187,7 @@ branch 名要帶 ticket，格式 `<type>/<team>-<number>-<kebab-slug>`（例：`
 - 如果沒有提供號碼，檢查當前 branch 是否已有 open PR
   - 有 → 更新該 PR description
   - 沒有 → 建立新 PR（使用專案規範的 base branch）
+- 建立或更新 PR 之後（含更新既有 PR）一律跑 `$E pr register --repo . --from-gh`，把 PR 登記進本機註冊表
 
 ### PR Description 格式
 
@@ -247,7 +248,7 @@ Skill({ skill: "evidence-gate" })
 4. 只有 PASS 才能在 Test plan 勾「變更的測試已在 CI 執行」；FAIL 列出 NOT-FOUND 並回頭修；UNVERIFIABLE 照實寫並附原因（如 log 不列識別碼），不寫「CI 綠」。checks 還在 pending 時留一條未勾選項並明講「CI 未跑完，收集狀況待確認」。
 5. 要附總數比較時（輔助，不能單獨當 PASS）：`count --before <base log> --after <head log> --pattern <Count-pattern>`；base 取 PR merge-base SHA 的 run、同一個 workflow 與 job，matrix 各 job 先去重再加總；找不到符合的 base run 就寫 UNVERIFIABLE。
 
-腳本不存在時照同樣步驟手動比對 log。
+腳本不存在時照同樣步驟手動比對 log。取得結果後，有 profile 時跑 `$E receipt ci --from-gh`；CI 還沒跑完加 `--pending-declared`，回報明講「CI 未跑完，未宣稱完成」。
 
 ## Step 5.5: 截圖驗收 gate（PR 已存在後執行）
 
@@ -264,7 +265,7 @@ PR 建立／更新完成後，判斷本次變更**是否需要截圖驗收**，�
 
 ### 5.5a 分類（沿用 `/pr-evidence-comment` Step 0 的同一張表）
 
-以 Step 2 的「視覺驗收面」判定與 `gh pr diff <PR> --name-only` 為依據分類：
+以 Step 2 的「視覺驗收面」判定與 `gh pr diff <PR> --name-only` 為依據分類（有 profile 時 UI 與否以 profile 的 `Paths` UI／UI-exclude 為準，引擎不印 UI 判定，見 `/verify-change` Step 3）：
 
 | 變更類型 | 驗收手段 | 本步驟動作 |
 |---|---|---|

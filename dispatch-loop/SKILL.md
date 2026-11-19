@@ -28,7 +28,7 @@ redundancy-peers: [plan-run]
 4. **抽查回報**（不信任自報）：檔案存在 `ls`、關鍵內容 `grep`、`git log` 比對、測試**親跑**一次；抽查過才 `complete`，疑點退回或補驗
 5. **判斷要不要 complete**：抽查過關就往下走第 6 步；不過關 `plan_runner.py fail <plan> <step> --reason=...`，退回派工或補驗
 6. **回收前 KB gate**：agent 回報收畢，回收前依序完成兩件事，順序固定不可反過來：
-   (a) **教訓**寫進 KB——session 檔（`_pending/`），教訓成熟的落 `wiki/learned/`；
+   (a) **教訓**寫進知識來源（解析 `KB_HOME` 見 `docs/knowledge-source-contract.md`）：`$KB_HOME/_pending/` 存在就寫 session 檔，教訓成熟的落 `$KB_HOME/wiki/learned/`（存在才寫），否則印一行「未設定知識來源，教訓降級為寫進 state 的 `--summary`」並繼續；
    (b) **摘要**用 `plan_runner.py complete <plan> <step> --summary="..." --evidence=<路徑> ...` 寫進 state——這一個指令同時完成記錄與標記完成，寫法見下方「摘要撰寫指引」
 
 ### 摘要撰寫指引

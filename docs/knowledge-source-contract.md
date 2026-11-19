@@ -74,11 +74,16 @@ python3 scripts/kb_source.py match --repo <path>
 
 ## 選用慣例路徑
 
-契約只強制 `verification/`。下表列出各 skill 可能會用到、但「存在才用、不存在就降級」的路徑。
+契約只強制 `verification/`。檢索工具不列在表內：知識來源若提供就用，否則用 `grep -rn`。下表列出各 skill 可能會用到、但「存在才用、不存在就降級」的路徑。
 
 | 路徑（相對 KB 根目錄） | 用途 | 使用的 skill |
 |---|---|---|
-| （S1.2 補齊） | | |
+| `reports/` | 既往 RCA 報告目錄；存在才查詢、才寫入新報告，不存在就改寫 `.verification/` | alert-triage、rca |
+| `reports/INDEX.md` | 報告索引；存在才掛新報告 | rca |
+| `wiki/learned/`、`wiki/learned/INDEX.md` | 可重複使用的做法與其索引；索引存在才 grep，目錄存在才寫入新條目 | alert-triage、rca、dispatch-loop |
+| `wiki/patterns/` | pattern 先驗目錄，存在才 grep | alert-triage |
+| `wiki/rules/INDEX.md`、`wiki/decisions/INDEX.md` | 規則與決策索引，存在才查 | rca |
+| `_pending/` | 回收 agent 前寫教訓的 session 檔目錄；不存在就改寫 `--summary` 或 `.verification/` | dispatch-loop、rca |
 
 ## Schema（S3.2 補齊）
 

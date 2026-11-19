@@ -11,8 +11,8 @@ argument-hint: <firing alert payload / alertname / Grafana alert URL>
 
 ## 設計原則（先讀）
 
-1. **分類先驗來自內部 KB，不是通用 SRE 知識**（pattern: `incident-kb-as-llm-prompt-corpus`）。每次 triage 先 grep `wiki/learned/INDEX.md` + `reports/` 撈既有 RCA 當 priors，再對照當前 alert。
-2. **下任何結論前先 live verify**（嚴格遵守 `~/.claude/rules/common/diagnostics.md`）。只靠 alert 描述 / runbook / config / 記憶推論的結論，一律標 `provisional`，等 live 證據確認。
+1. **分類先驗來自內部 KB，不是通用 SRE 知識**（pattern: `incident-kb-as-llm-prompt-corpus`）。每次 triage 先從知識來源（見 Step 2）撈既有 RCA 當 priors，再對照當前 alert。
+2. **下任何結論前先 live verify**。只靠 alert 描述 / runbook / config / 記憶推論的結論，一律標 `provisional`，等 live 證據確認。
 3. **alert 描述與 runbook 歸因會 rot**（memory `verify-runbook-attribution-before-citing`）。annotation 寫的「根因」視為**待驗證假設**，不是事實；實測 header/metric/log 與它衝突時，以 live 為準並明確標示「runbook 說 X，實測 Y」。
 4. **benign vs real 不是純二元**。同一個 alert 可能部分 benign、部分 real（典型：imgproxy 422 marker-flaw 的 two-classes），決策樹要能拆分 sub-signal 分別處理。
 5. **編排既有資源，不重造輪子**。本 skill 整合既有 grafana MCP + kubectl + KB 慣例；report 沉澱、topic-grouped commit、`/kb-query`、`/verify-live-state` 都沿用，不重寫。
@@ -57,13 +57,13 @@ argument-hint: <firing alert payload / alertname / Grafana alert URL>
 下任何分類前，先用 parsed 訊號撈內部既有 RCA 當先驗：
 
 ```bash
-cd ~/Documents/knowledge-base
-# 1. learned skill 先驗（SOP / 已知陷阱）
-grep -iE "<alertname/service/failure-class keywords>" wiki/learned/INDEX.md
-# 2. 既往 RCA report（同類事件怎麼判的）
-ls reports/ | grep -iE "<service>|<failure-class>"
-# 3. pattern / memory 先驗
-grep -riE "<keywords>" wiki/patterns/
+KB_HOME="${AGENT_SKILLS_KB_HOME:-$(head -n 1 "${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/kb-home" 2>/dev/null)}"
+[ -d "$KB_HOME" ] || KB_HOME=""
+[ -n "$KB_HOME" ] || echo "未設定知識來源，本步驟降級為：不引用內部先驗，分類只靠 live 證據，結論標 provisional"
+# 以下依序為 learned 先驗、既往 RCA report、pattern 先驗，皆選用（不存在就略過）；知識來源若提供檢索工具就優先用，否則 grep -rn
+[ -e "$KB_HOME/wiki/learned/INDEX.md" ] && grep -iE "<alertname/service/failure-class keywords>" "$KB_HOME/wiki/learned/INDEX.md"
+[ -d "$KB_HOME/reports" ] && ls "$KB_HOME/reports" | grep -iE "<service>|<failure-class>"
+[ -d "$KB_HOME/wiki/patterns" ] && grep -riE "<keywords>" "$KB_HOME/wiki/patterns/"
 ```
 
 先把 grep 裡的 `<...>` 佔位符換成 Step 1 解析出的實際 alertname / service / failure-class 再執行。撈到後**點開最相關 2–3 篇全文讀**（INDEX 只有摘要，body 才有判斷依據）。
@@ -141,7 +141,7 @@ kubectl get events -n <ns> --sort-by=.lastTimestamp | tail -30
 
 ## Step 5 — RCA Report（繁體中文 → KB）
 
-寫 `~/Documents/knowledge-base/reports/<YYYY-MM-DD>-<slug>.md`，**沿用既有 report 格式**（看同目錄近期 report 對齊）：
+寫 `$KB_HOME/reports/<YYYY-MM-DD>-<slug>.md`（`[ -d "$KB_HOME/reports" ]` 才寫；否則印一行「未設定知識來源，報告降級為只寫 `.verification/<date>/<slug>.md`」並改寫該路徑），**沿用既有 report 格式**（有同目錄近期 report 就對齊）：
 
 ```markdown
 ---
@@ -195,7 +195,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 - **期限**：由使用者給，格式 `YYYY-MM-DD`。**agent 不得自行填日期**；使用者還沒給就寫 `TBD`。
 - **狀態**：只能是 `open`、`done`、`wontfix` 三者之一（小寫）。
 - **連結**：沒有就寫 `-`，欄位不可留空。
-- **後端 own 的項目一律不列入表格**（`smb-*`／`payment-*` 的 helm values／secrets、後端 EC2、prod 的 cloudflared／alloy deploy trigger 等，見 `~/.claude/rules/common/repo-ownership.md`）。殘餘問題在後端層時，只在正文（處置或分類結論）用一句話標「屬後端」，不寫通知草稿、不寫提案、不列 row。
+- **不屬於自己的項目一律不列入表格**（ownership 邊界依本機規則；他人 own 的資源只調查、不代修）。殘餘問題在後端層時，只在正文（處置或分類結論）用一句話標「屬後端」，不寫通知草稿、不寫提案、不列 row。
 - **無項目**：結論是 benign 且沒有任何 action item 時，`## Action Items` 底下只寫「無」，不放表頭，frontmatter 寫 `action_items_open: 0`。
 - **`action_items_open`**：必須等於表中狀態為 `open` 的筆數；改了 row 狀態要同步改這個數字。
 - **格式約束**：每筆一行；任一欄位內不得出現 `|` 或換行（需要時用全形 `｜` 或改寫）；不得合併儲存格、不得在表格中間插入空行或註解。
@@ -208,7 +208,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 
 1. **定位該修的 repo + base 規則**：
    - `web-app`：PR base **一律 hotfix**（memory `web-app-pr-base-hotfix`）。
-   - `deployment-eks`：後端團隊負責，**不直接改**（memory `repo-ownership`）→ 只產建議 / 開 issue（HITL G3）。
+   - `deployment-eks`：後端團隊負責，**不直接改**（ownership 邊界依本機規則）→ 只產建議 / 開 issue（HITL G3）。
    - infra Helm/Flux 託管資源：改 chart values 走 PR，**不裸 `kubectl patch`**（memory `helm-persist-before-apply`）。
 2. **產 guardrail**（對症）：
    - OOM → resource limit / HPA scaleUp 平滑 / memory guardrail。
@@ -251,8 +251,7 @@ action_items_open: <n>   # Action Items 表中狀態為 open 的筆數；無 act
 
 ## 不重造既有流程（編排，非取代）
 
-- **report 沉澱 / commit**：沿用 KB 既有慣例（topic-grouped commit、Markdown runbook、不裸 `.sh`）。
-- **learned skill 先驗**：每次 grep `wiki/learned/INDEX.md`（如 `flux-kustomization-webhook-transient-fail-triage`、`grafana-alert-query-aggregation-per-series-trap`、`karpenter-*`、`hpa-cold-start-scaleup-policy-sizing`）。
+- **report 沉澱 / commit**：沿用 KB 既有慣例（topic-grouped commit、Markdown runbook、不裸 `.sh`）；**learned skill 先驗**每次從知識來源的 learned 索引撈（如 `flux-kustomization-webhook-transient-fail-triage`、`grafana-alert-query-aggregation-per-series-trap`、`karpenter-*`、`hpa-cold-start-scaleup-policy-sizing`）。
 - **不重寫** `/kb-query`、`/verify-live-state`、`/release-pr`、`/pr`——本 skill 在對應步驟**引用**它們。
 
 ## Trigger Options（觸發層 — 僅選項分析，本次不實作）

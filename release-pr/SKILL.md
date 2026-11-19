@@ -111,7 +111,7 @@ gh api repos/<repo>/compare/<base>...<head> \
 
 符合「模型路由」的委派條件時（大型批次，或主對話模型高於 Sonnet 且批次超過 3 commits 或超過 3 檔），派一個 agent（`subagent_type: "general-purpose"`、`model: "sonnet"`）全包查核，prompt 必含兩句：**「commit message 的自述不能當證據，commit 與 diff 衝突時 diff 是真相」**、**「逐條給 正確／錯誤／無法佐證 三分類，diff 沒有直接證據一律歸『無法佐證』，不要為了讓 body 看起來對而放寬」**。
 
-（依據：web-app #7969 實測，28 commits / 64 檔，~62 條 claim 錯 2 條、誤導 5 條，且**檔案路徑與符號名稱 0/30 錯**——查核預算要放在否定式敘述與跨 PR 一致性，不是路徑。詳見 KB `wiki/learned/release-notes-transcribed-from-commits-inherit-their-errors.md`、`intra-batch-self-correction-is-not-a-bug-fix.md`）
+（依據：web-app #7969 實測，28 commits / 64 檔，~62 條 claim 錯 2 條、誤導 5 條，且**檔案路徑與符號名稱 0/30 錯**——查核預算要放在否定式敘述與跨 PR 一致性，不是路徑。結論：release notes 若照 commit message 轉寫會繼承其錯誤，同批次內後來被修正的改動不算 bug fix）
 
 ### 產出 claim ledger（起草前，強制）
 
@@ -174,7 +174,7 @@ body 字元數應隨改動規模**次線性**成長。既有房規（2026-09-06 
 
 失效模式不是判斷力問題，是**位置壓力**：作者剛做完調查、脈絡都在手上，而 PR body 是離手前最後一個可以傾倒的地方。**傾倒的動機來自作者的狀態，與讀者的需求無關。**
 
-同構前例：`knowledge-base/reports/2026-08-19-alert-description-bloat-audit-and-rewrite-proposal.md` —— 106 條 Grafana rule 裡 15 條把 RCA 全文塞進每次 firing 都會整份推進 Slack 的 `description`。該報告的結論可直接移植：「根本問題不是寫太多，是寫錯地方。」
+同構前例：106 條 Grafana rule 裡 15 條把 RCA 全文塞進每次 firing 都會整份推進 Slack 的 `description`。結論可直接移植：「根本問題不是寫太多，是寫錯地方。」
 
 實測回歸：#8124（1 檔／+23−7）初版 body **3993 字元**，含四個完整版本已存在於 #8123 與 KB 報告的區塊（P95 證據表、因果推導、CodePipeline 機制、對某份 KB 文件的更正），修正後 1053 字元。
 

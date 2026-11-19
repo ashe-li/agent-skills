@@ -115,7 +115,7 @@ cp ~/.claude/settings.json.bak.<timestamp> ~/.claude/settings.json
 `~/Documents/agent-skills-stop-hook/` 本身，開發時），需要暫時指向該 worktree：
 
 ```bash
-export AGENT_SKILLS_DIR=/Users/shiun/Documents/agent-skills-stop-hook
+export AGENT_SKILLS_DIR=<你的 worktree>
 ```
 
 要在**真實 session**（而非手動跑指令）裡試用未合併的分支，`export` 不夠——它隨 shell 消失。

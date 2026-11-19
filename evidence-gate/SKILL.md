@@ -6,7 +6,7 @@ allowed-tools: Bash, Read, Grep, Glob, Write, Agent
 
 # evidence-gate — 事實查驗關卡
 
-任何回報型工作流（PR description、release notes、RCA report、security review）在草稿定稿、寫回 / 交付**之前**，把每條事實宣稱過一次本關卡。核心原則：**宣稱不是證據，commit message 不是證據，記憶推論不是證據**——只有現查的指令輸出算證據（依 `~/.claude/rules/common/diagnostics.md`）。
+任何回報型工作流（PR description、release notes、RCA report、security review）在草稿定稿、寫回 / 交付**之前**，把每條事實宣稱過一次本關卡。核心原則：**宣稱不是證據，commit message 不是證據，記憶推論不是證據**——只有現查的指令輸出算證據；只靠設定、文件、註解或記憶推論、未經 live 驗證的結論，一律標 provisional。
 
 不同於 `evidence-check`（對技術決策做四維度學術/業界研究）：本 skill 只管**這份報告裡的宣稱是否對得上 live 事實**，不做研究型調查。
 
@@ -46,7 +46,7 @@ git diff --diff-filter=D origin/<base>..HEAD --name-only   # 確認刪除的檔�
 
 ## 3. Artifact 持久化
 
-證據存 `.verification/YYYY-MM-DD/`（沿用 `diagnostics.md` 既有慣例）：
+證據存 `.verification/YYYY-MM-DD/`：
 
 - 指令的原始輸出（或關鍵片段）、截圖、query 結果一律落檔在此，不得另創 `.evidence/` 或其他路徑。
 - 任務結束**不得刪除**——證據要能被回頭查核；曾發生驗證截圖在任務結束時被清掉，事後追問才發現查證窗口設錯，證據沒留就無從自證。
@@ -100,7 +100,7 @@ Claim schema（每列一條宣稱 + 我聲稱用的證據指令）：
 
 - 查詢字串（PromQL / LogQL / GSC API 參數）連同其 `start`/`end`/`range` 一併記進 claim schema 的「證據指令」欄。
 - 輸出裡若有時間戳，確認與宣稱描述的視窗一致（例：宣稱「近 7 天」但查詢視窗其實是 3 個月，兩者對不上要在判定攔下）。
-- 依 `diagnostics.md` 的既往事故：僅憑「查過 Grafana」四個字、不附查詢視窗的宣稱一律判 UNVERIFIABLE。
+- 僅憑「查過 Grafana」四個字、不附查詢視窗的宣稱一律判 UNVERIFIABLE（曾因查詢視窗設錯而無從自證）。
 
 ## 6. Caller 呼叫契約
 

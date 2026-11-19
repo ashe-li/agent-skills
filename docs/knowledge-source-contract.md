@@ -375,15 +375,55 @@ CI receipt 的結論有四種：`green`、`red`、`pending-declared`、`exempt`�
 
 ### Session 關聯檔
 
-狀態目錄下的 `sessions/<清洗後的 session id>.json`，由 `verify_receipts.record_session_link` 寫入、`read_session` 讀取。session id 清洗規則：英數、`_`、`.`、`-` 以外的字元換成 `_`，截到 128 字元，去掉開頭的 `.`。目前的格式：
+狀態目錄下的 `sessions/<清洗後的 session id>.json`，由 gate hook 透過 `verify_receipts.record_session_link`（關聯）與 `bump_session_blocks`（擋下次數）寫入、`read_session` 讀取。session id 清洗規則：英數、`_`、`.`、`-` 以外的字元換成 `_`，截到 128 字元，去掉開頭的 `.`。格式：
 
 | 欄位 | 說明 |
 |---|---|
 | `schema` | 固定 `verify-session/1` |
 | `session_id` | 清洗後的 session id |
-| `links` | 清單，每筆有 `repo`（正規化 remote）、`repo_path`（repo 根目錄）、`branch`、`pr`（可為 null）、`at`；同一個 repo 加 branch 只留最新一筆 |
+| `links` | 清單，每筆有 `repo`（正規化 remote）、`repo_path`（repo 根目錄）、`branch`、`pr`（可為 null）、`at`；同一個 repo 加 branch 只留最新一筆。只記有 profile 的 repo |
+| `blocks` | 物件，鍵為 gate 名（`pre_pr`、`ui_acceptance`、`ci_evidence`），值為本 session 在 enforce 下實際擋下的次數；沒擋過的 gate 不出現 |
 
-gate hook 會擴充這個檔（例如各 gate 的擋下次數）；寫入時保留不認得的欄位。
+兩個寫入函式都在狀態目錄的鎖內讀改寫，並保留不認得的欄位。檔案沒有時，`bump_session_blocks` 以空的 `links` 建立。
+
+### gate 模式檔
+
+`${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/verify-gate`，純文字，每行一個 `<gate>=<mode>`：
+
+- gate 為 `pre_pr`、`ui_acceptance`、`ci_evidence` 之一；mode 為 `off`、`observe`、`enforce` 之一，不分大小寫，前後空白忽略。
+- `#` 之後是註解；空行與不認得的 gate 名稱略過；同一個 gate 出現兩次以後面那行為準。
+- 每個 gate 的模式依序取：`AGENT_SKILLS_VERIFY_GATE_<GATE 名大寫>` 環境變數、`AGENT_SKILLS_VERIFY_GATE` 總開關、模式檔。第一個有設定的來源決定結果；值不認得就是 `off`，都沒有也是 `off`。
+
+```text
+pre_pr=observe
+ui_acceptance=observe
+ci_evidence=enforce
+```
+
+### gate 決策紀錄（decisions.jsonl）
+
+狀態目錄下的 `decisions.jsonl`，每行一個 JSON 物件，只追加不改寫：以 `O_APPEND` 開檔、每行一次 write，檔案 0600、不跟隨 symlink。狀態目錄解析後（realpath）不在 `$HOME` 之下時，hook 放行且不寫任何東西。所有模式都是 `off` 時不寫紀錄。紀錄不存指令原文，也不存工具輸出。
+
+每筆的欄位固定如下，沒有值的欄位為 null：
+
+| 欄位 | 說明 |
+|---|---|
+| `ts` | UTC 時間，ISO 8601 |
+| `event` | `decision`（gate 的判定）或 `link`（`gh pr create` 成功後把 session 接上 PR 號） |
+| `session_id` | 清洗後的 session id |
+| `gate` | `pre_pr`、`ui_acceptance`、`ci_evidence`；`link` 事件為 null |
+| `mode` | 當時該 gate 的模式；`link` 事件為 null |
+| `decision` | `allow`、`would_block`（observe 下會擋）、`block`、`released`（同一 session 同一 gate 已擋兩次後放行）；`link` 事件為 null |
+| `reason_code` | 見下方 reason code 一覽；`link` 事件為 null |
+| `repo` | 正規化 remote |
+| `branch` | branch 名，去控制字元並截到 60 字元 |
+| `pr` | PR 號（整數），沒有則 null |
+| `head_sha` | 判定所用的 head；`pre_pr` 為目前 HEAD |
+| `tree_sha` | `pre_pr` 為目前 `HEAD^{tree}`；Stop 的 gate 為 null |
+| `path` | `early-exit`（mode 關閉以外的提早結束：沒有關聯的 PR、沒有 profile）或 `full-check`；`link` 事件為 null |
+| `duration_ms` | 從 hook 啟動到寫這一筆的毫秒數 |
+
+一次 Stop 會對每個啟用中的 gate、每個關聯的 PR 各寫一筆。PreToolUse 只在指令位置有 `gh pr create` 時寫；其他 Bash 指令不寫，也不碰 git 與狀態目錄。
 
 ### head 決定順序
 
@@ -431,7 +471,21 @@ gate hook 會擴充這個檔（例如各 gate 的擋下次數）；寫入時保�
 | `profile-present` | 有 profile 符合，不接受 `receipt record-generic` |
 | `state-error` | 狀態目錄或狀態檔不可安全使用（例如是 symlink、權限不足），引擎拒絕寫入 |
 
-gate 另有自己的 reason code（例如 `declared-unverified`），見 hooks 文件。
+`exempt-closed` 與 `exempt-none` 是 `check_exemption` 有效時的 reason，代表免檢成立。
+
+gate hook 在決策紀錄另外使用下列 reason code（上表的 `no-receipt`、`dirty-now`、`stale-config`、`stale-base`、`engine-changed`、`required-incomplete`、`ui-changed`、`stale-ci-config`、`registration-stale`、`pr-unregistered`、`head-unresolved`、`exempt-closed`、`exempt-none` 也會原樣出現在紀錄中）：
+
+| reason code | decision | 意義 |
+|---|---|---|
+| `verified` | allow | receipt 有效 |
+| `declared-unverified` | allow | CI receipt 為 `pending-declared` 或 `exempt`，或驗收 receipt 為 `exempt`；放行但沒有真正驗證，量測時單獨統計 |
+| `ci-not-configured` | allow | profile 沒有宣告 `Required-jobs`，`ci_evidence` 對該 repo 放行 |
+| `profile-stale` | allow | 快檢 receipt 的結論是 `PROFILE-STALE`，`pre_pr` 放行 |
+| `not-ui` | allow | branch 沒有動到 UI 路徑，`ui_acceptance` 不適用 |
+| `no-links` | allow | 本 session 沒有關聯任何 PR（提早結束） |
+| `no-profile` | allow | 目標 repo 沒有恰好一份 profile（提早結束） |
+| `repo-unavailable` | allow | 關聯紀錄裡的 repo 路徑已不存在或 remote 對不上，無法檢查 |
+| `ci-red` | 擋 | CI receipt 的結論是 red |
 
 ### 引擎的 exit code
 

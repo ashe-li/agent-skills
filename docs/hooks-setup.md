@@ -1,12 +1,13 @@
 # Hook 設定
 
-本 repo 有三組一次性安裝的 hook，彼此獨立，可只裝其中一部分：
+本 repo 有四組一次性安裝的 hook，彼此獨立，可只裝其中一部分：
 
 | 章節 | Hook 類型 | 做什麼 | 搭配 |
 |------|-----------|--------|------|
 | [一](#一plan-自動儲存-hookposttooluse) | `PostToolUse` | `ExitPlanMode` 後自動把 plan 存進 `plans/active/` | `/plan-archive` |
 | [二](#二plan-dag-推進-stop-hook) | `Stop` | 每輪結束查 plan state，把下一步注入回模型 | `/plan-run` |
 | [三](#三情境型-rules-的觸發式安裝userpromptsubmit) | `UserPromptSubmit` | 命中情境時注入規則重點，取代常駐 rule | `rules/` |
+| [四](#四驗證-gate-hookpretooluseposttoolusestop) | `PreToolUse`、`PostToolUse`、`Stop` | 開 PR 前要有快檢 receipt；結束前本 session 動過的 PR 要有驗收與 CI receipt | `/verify-change`、`/pr` |
 
 ---
 
@@ -440,3 +441,259 @@ echo '{"prompt":"幫我實作這個 plan","cwd":"/path/to/normal/repo"}' \
 從 `~/.claude/settings.json` 的 `UserPromptSubmit` 陣列刪掉對應物件即可；
 `scripts/hooks/*.sh` 留著不影響任何行為（沒有程式會自動執行它們）。
 想改回常駐模式就重新 symlink 進 `~/.claude/rules/common/`。
+
+---
+
+# 四、驗證 gate hook（PreToolUse、PostToolUse、Stop）
+
+三個選用的 gate，把「未驗證就開 PR、未驗證就收工」從「靠模型記得」換成機械檢查。三個 gate **預設全部關閉**，建議先以 observe 模式只記錄、不介入，量到數字後再逐一決定要不要升 enforce。
+
+一支 wrapper `scripts/hooks/verify-gate.sh` 掛三個事件，第一個參數決定子命令：
+
+| 子命令 | 事件 | 做什麼 |
+|---|---|---|
+| `pre-tool` | `PreToolUse`，matcher `Bash` | gate `pre_pr`：指令位置出現 `gh pr create` 時檢查快檢 receipt |
+| `post-tool` | `PostToolUse`，matcher `Bash` | 只記錄、永不阻擋：把本 session 動過的 repo 加 branch 記下來 |
+| `stop` | `Stop` | gate `ui_acceptance` 與 `ci_evidence`：檢查本 session 關聯過的每個 PR |
+
+## 1. 三個 gate 各檢查什麼
+
+| gate | 何時檢查 | 通過條件 | 訊號來源 |
+|---|---|---|---|
+| `pre_pr` | 指令位置的 `gh pr create` 之前 | 目前 `HEAD^{tree}` 有有效的快檢 receipt：有 receipt、工作樹現在乾淨、設定 digest 沒變、merge-base 沒變、引擎版本沒變、必要快檢都通過 | `<repo>/.verification/receipts/<tree>.json` |
+| `ui_acceptance` | 每輪結束（Stop） | 本 session 關聯過的每個 UI PR 都有有效的驗收 receipt（驗收之後沒有再動 UI 路徑） | 驗收 receipt、PR 註冊表 |
+| `ci_evidence` | 每輪結束（Stop） | 本 session 關聯過的每個 PR，其 head 都有有效的 CI receipt，且結論不是 red | CI receipt、PR 註冊表 |
+
+訊號全部來自本機檔案。hook **不發網路請求、不呼叫 `gh`、不讀對話紀錄**；取得 PR 與 CI 資料的網路動作發生在模型流程裡的引擎指令（`verify_engine.py pr register --from-gh`、`receipt ci --from-gh`）。有效性判定一律呼叫 `scripts/verify_receipts.py`，與引擎共用同一份規則。
+
+只對「知識來源裡恰好有一份 profile 對到」的 repo 生效。沒有 profile 的 repo 一律放行。
+
+**本 session 關聯哪些 PR**：PostToolUse 在指令位置看到下列任一個成功的指令，就把目標 repo 加 branch 記進本 session 的關聯檔：
+
+- `git push`：另外把被推送 branch 本機 ref 當下的 head 寫進註冊表的最新推送 head。解析不出推的是哪個 branch 時不寫入，改把該 repo 標為推送未解析。
+- `gh pr create`：另外在決策紀錄寫一筆 `link` 事件，把 session、repo、branch 接上 PR 號（從輸出中的 `/pull/<數字>` 取得）。
+- `verify_engine.py pr register`：只做驗收、沒有 push 的 session 靠這一步進入檢查。
+
+**Stop 怎麼判**：
+
+- 檢查本 session 關聯過的**所有** PR，不以目前 checkout 的 branch 篩選。push 完切到別的 branch 再結束，原本的 PR 一樣要檢查。
+- 每個 PR 的 head：本機 ref 存在就用它；不存在時只能用最新推送 head 或時間更晚的註冊紀錄；決定不了就是 `head-unresolved`，視為缺證據，不會退回較早的 head、也不會沿用舊 receipt。
+- 推了沒註冊的 branch：`pr-unregistered`，要求跑 `pr register --from-gh`，或以 `--none` 標記沒有 PR。
+- 註冊為 closed 或 `--none` 的 branch 免檢，但只在 head 沒變時成立；head 變了是 `registration-stale`。
+- `ui_acceptance` 只管 UI PR：branch 與預設 base 的 merge-base 到 head 之間，有檔案符合 profile 的 `Paths` `UI` 且不被 `UI-exclude` 排除。找不到 merge-base 時當作 UI PR。
+- `ci_evidence`：profile 沒宣告 `Required-jobs` 時放行並記 `ci-not-configured`；`pending-declared` 與 `exempt` 放行但記 `declared-unverified`；沒有 receipt、只有舊 head 的、CI 設定在寫 receipt 之後變了（例如新增必要 job）、結論 red，都擋。
+- `pre_pr` 的 receipt 判為 `PROFILE-STALE`（profile 跟 repo 脫節，不是變更本身的問題）時放行並記 `profile-stale`。
+
+## 2. 指令判讀規則
+
+hook 自己寫了一個保守的指令掃描器（`scripts/verify_gate_cmd.py`），只認「指令位置」：以 `;`、`&&`、`||`、`|`、`&`、換行分隔後，每段去掉開頭的 `NAME=value` 之後的第一個字。
+
+認得的寫法（舉例）：
+
+- `gh pr create --fill`、`GH_DEBUG=1 gh pr create ...`、`gh pr create --body "$(cat <<'EOF' ... EOF)"`
+- `git push`、`git push -u origin HEAD`、`git -C <路徑> push origin <branch>`、`git -c k=v --no-pager push ...`
+- `cd <路徑> && gh pr create`（`cd` 之後以 `&&`、`;`、換行接續的指令都視為在該目錄執行）
+- `python3 scripts/verify_engine.py pr register --from-gh`
+
+明確不算的寫法（放行）：
+
+- 註解裡（`# gh pr create`）、heredoc 內文、引號內（`echo "gh pr create"`、`git commit -m "... gh pr create ..."`）、命令替換內（`x=$(gh pr create)`）
+- 解析不了的複雜指令一律當作不符合：subshell 或 `{ ...; }` 群組、process substitution、`case`、未閉合的引號、`if ...; then ...; fi` 這類保留字開頭的段落、指令名本身是變數（`$GIT push`）、`git --git-dir=...`
+
+`git push` 推的是哪個 branch：
+
+| 寫法 | 判定 |
+|---|---|
+| 沒有位置參數，或只有 remote；refspec 為 `HEAD` 或 `@` | 目前 checkout 的 branch（detached HEAD 視為未解析） |
+| `<remote> <branch>`、`<remote> +<branch>`、`<remote> refs/heads/<branch>`、`<remote> <branch>:<branch>` | 該 branch |
+| `<remote> HEAD:refs/...`、`<remote> a:b`（兩邊不同名）、多個 refspec、`--all`、`--mirror`、`--tags`、`--delete`、`--prune`、不認得的選項、參數含變數 | 未解析：不寫最新推送 head，把該 repo 標為推送未解析 |
+| `-n`、`--dry-run` | 不算推送，不記錄 |
+
+「成功」的判定（PostToolUse 只拿得到工具輸出，判不準時寧可多記）：
+
+- `git push`：`interrupted` 為真，或輸出含 `failed to push`、`[rejected]`、`[remote rejected]`、`has no upstream branch`、`does not appear to be a git repository`、`could not read from remote repository`、`authentication failed`、`permission denied` 任一字樣（不分大小寫）時不算成功；其餘都算成功。多記的後果是多要求一次驗證，少記的後果是漏擋。
+- `gh pr create`：stdout 有 `/pull/<數字>`（或 stderr 寫明 PR 已存在且附網址）就算成功並記 PR 號；沒有網址時，`interrupted` 為假且輸出不含 `error:`、`fatal:`、`could not`、`must first push`、`no commits between` 等失敗字樣，才算成功（只記關聯、不寫 `link` 事件）。
+- `pr register`：輸出含 `"result": "registered"` 就算成功；否則 `interrupted` 為假且不含上述失敗字樣才算。
+
+## 3. 安裝 wrapper
+
+```bash
+mkdir -p ~/.claude/hooks
+cp scripts/hooks/verify-gate.sh ~/.claude/hooks/verify-gate.sh
+chmod +x ~/.claude/hooks/verify-gate.sh
+```
+
+wrapper 依序取 `AGENT_SKILLS_DIR`、`AGENT_SKILLS_HOME`，都沒設就用 `~/Documents/agent-skills` 當 checkout，以 `cd -P` 解析後必須落在 `$HOME` 之下，否則什麼都不做。stdin 原封不動交給 Python；未知子命令、缺 python3、checkout 不存在，一律 exit 0 且無輸出。唯一的例外是 `pre-tool` 在 enforce 下刻意擋下：exit 2，stderr 一行以 `[verify-gate]` 開頭的理由。
+
+## 4. 追加到 `~/.claude/settings.json`
+
+**這是 additive 步驟，不是覆蓋。** 三處各在既有陣列的末端追加一個物件，既有的 hook 一個都不動。先備份：
+
+```bash
+mkdir -p ~/.claude/backups/$(date +%F)-verify-gate
+cp ~/.claude/settings.json ~/.claude/backups/$(date +%F)-verify-gate/settings.json
+```
+
+要追加的三個物件：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash ~/.claude/hooks/verify-gate.sh pre-tool", "timeout": 15 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "bash ~/.claude/hooks/verify-gate.sh post-tool", "timeout": 15 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "bash ~/.claude/hooks/verify-gate.sh stop", "timeout": 15 } ] }
+    ]
+  }
+}
+```
+
+上面是三個陣列各自「要多出來的那一個元素」，不是整段貼上取代。hook 自己有 8 秒的總時限，超過就放行；`timeout` 設 15 秒留餘裕。
+
+落地後與備份逐字比對既有 hook，只比數量不夠：
+
+```bash
+python3 - <<'EOF'
+import json, os, datetime
+cur = json.load(open(os.path.expanduser("~/.claude/settings.json")))["hooks"]
+bak_path = f"~/.claude/backups/{datetime.date.today()}-verify-gate/settings.json"
+bak = json.load(open(os.path.expanduser(bak_path)))["hooks"]
+for event in ("PreToolUse", "PostToolUse", "Stop"):
+    old, new = bak.get(event, []), cur.get(event, [])
+    same = [json.dumps(h, sort_keys=True) for h in new[:len(old)]] == [json.dumps(h, sort_keys=True) for h in old]
+    print(event, "數量", len(old), "->", len(new), "既有逐字相同:", same)
+EOF
+```
+
+每個事件都應是「原本數量 + 1」且「既有逐字相同: True」。
+
+## 5. 模式
+
+每個 gate 有三種模式：
+
+| 模式 | 行為 |
+|---|---|
+| `off` | 什麼都不做，不讀也不寫狀態目錄 |
+| `observe` | 只在決策紀錄追加一行（會擋的情境記 `would_block`），不輸出任何東西、不擋 |
+| `enforce` | 擋下：`pre_pr` 讓 `gh pr create` 不執行並把理由交給模型；Stop 的兩個 gate 要求模型繼續補證據 |
+
+每個 gate 的模式依序取：
+
+1. 該 gate 自己的環境變數：`AGENT_SKILLS_VERIFY_GATE_PRE_PR`、`AGENT_SKILLS_VERIFY_GATE_UI_ACCEPTANCE`、`AGENT_SKILLS_VERIFY_GATE_CI_EVIDENCE`
+2. 總開關 `AGENT_SKILLS_VERIFY_GATE`
+3. 模式檔 `${XDG_CONFIG_HOME:-$HOME/.config}/agent-skills/verify-gate`
+
+第一個有設定的來源決定結果；值不認得（例如打錯字）就是 `off`，三處都沒有也是 `off`。模式檔每行一個 `<gate>=<mode>`，`#` 之後是註解，不認得的 gate 名稱略過，同一個 gate 寫兩次以後面那行為準：
+
+```text
+# agent-skills verify gate
+pre_pr=observe
+ui_acceptance=observe
+ci_evidence=observe
+```
+
+同一個 session 裡，同一個 gate 擋過兩次之後就放行，並在紀錄記 `released`。enforce 之後，每個 session 每個 gate 最多兩次、每次的理由不超過 400 字元，只含 gate 名、reason code、branch 名、PR 號與建議的下一條指令，不回顯指令原文或工具輸出。
+
+## 6. observe 先行，量到數字再升 enforce
+
+先把三個 gate 都設成 `observe` 跑一段時間。決策紀錄在狀態目錄的 `decisions.jsonl`（預設 `~/.claude/verify-gate/`，可用 `AGENT_SKILLS_VERIFY_STATE_DIR` 改），每行一筆，欄位見 `docs/knowledge-source-contract.md` 的「gate 決策紀錄」。依 gate 與 reason code 統計：
+
+```bash
+python3 - <<'EOF'
+import collections, json, os
+path = os.path.expanduser("~/.claude/verify-gate/decisions.jsonl")
+rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+count = collections.Counter((r["gate"], r["decision"], r["reason_code"])
+                            for r in rows if r["event"] == "decision")
+for key, n in sorted(count.items(), key=str):
+    print(n, *key)
+EOF
+```
+
+看三件事再決定：`would_block` 佔 Stop 次數的比例（升 enforce 後會被擋的頻率）；`would_block` 裡有多少是誤判（逐筆對照當時的 PR，確認真的缺證據）；`declared-unverified` 與 `ci-not-configured` 的量（這兩類放行但沒有真正驗證，量測時要單獨看）。一次只升一個 gate。
+
+**observe 不是防護。** off 與 observe 都屬「僅 observe」：只留紀錄、不阻止任何事；只有 enforce 才是機械化的檢查，而且仍有下面「已知盲點」列的缺口。
+
+## 7. 自檢（stdin 冒煙）
+
+以下指令在安裝後直接餵 JSON 給 wrapper。用一個專門的 session id（`smoke-test`），不影響真實 session 的擋下計數。
+
+壞輸入：無輸出且 exit 0。
+
+```bash
+printf '%s' 'not json' | bash ~/.claude/hooks/verify-gate.sh stop; echo "rc=$?"
+# 預期只印 rc=0
+```
+
+未命中：無輸出且 exit 0。
+
+```bash
+printf '%s' '{"session_id":"smoke-test","cwd":"'"$PWD"'","tool_name":"Bash","tool_input":{"command":"ls"}}' \
+  | AGENT_SKILLS_VERIFY_GATE_PRE_PR=observe bash ~/.claude/hooks/verify-gate.sh pre-tool; echo "rc=$?"
+# 預期只印 rc=0
+```
+
+必擋情境在 observe 下：在一個有 profile、目前 HEAD 沒有快檢 receipt 的 repo 根目錄執行。無輸出、exit 0，決策紀錄多一行 `would_block`。
+
+```bash
+LOG=~/.claude/verify-gate/decisions.jsonl
+BEFORE=$(cat "$LOG" 2>/dev/null | wc -l)
+printf '%s' '{"session_id":"smoke-test","cwd":"'"$PWD"'","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"}}' \
+  | AGENT_SKILLS_VERIFY_GATE_PRE_PR=observe bash ~/.claude/hooks/verify-gate.sh pre-tool; echo "rc=$?"
+AFTER=$(wc -l < "$LOG")
+echo "多了 $((AFTER - BEFORE)) 行"; tail -1 "$LOG"
+# 預期：rc=0、多了 1 行、最後一行的 decision 為 would_block、reason_code 為 no-receipt
+```
+
+## 8. 與其他 Stop hook 共存
+
+- Claude Code 會執行 `Stop` 陣列裡的每一支 hook。本 hook 擋下時輸出 top-level 的 `{"decision": "block", "reason": "..."}`，與第二篇的 plan-run 同一個形狀。
+- Stop 的 block 輪數上限是每個 turn 共用的，不是每支 hook 各自一份（見第二篇「為什麼不提高 `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`」）。本 hook 的兩個 Stop gate 各自在同一個 session 至多擋兩次，佔用的輪數有上限；與 plan-run 同一輪都擋時，模型會同時收到兩則理由，彼此稀釋。
+- `stop_hook_active` 為 true（上一輪已被某個 Stop hook 擋過）時，比照 plan-run 的做法：不偽造、不改寫這個旗標，也不因它就放行；本 hook 靠自己的「每 session 每 gate 至多兩次」收斂。與 plan-run 不同的是，這個計數不在使用者開口時歸零，整個 session 共用。
+- 所有失敗路徑都 exit 0 且無輸出，與第二篇同理：Stop hook 一旦出錯就會擋住每一輪。
+
+## 9. 移除
+
+先備份：
+
+```bash
+mkdir -p ~/.claude/backups/$(date +%F)-verify-gate-uninstall
+cp ~/.claude/settings.json ~/.claude/hooks/verify-gate.sh ~/.claude/backups/$(date +%F)-verify-gate-uninstall/
+```
+
+解除安裝（逐一列明確路徑，不用萬用字元）：
+
+1. `settings.json` 的 `PreToolUse`、`PostToolUse`、`Stop` 三處，各移除 command 含 `verify-gate.sh` 的那一個物件。用指令內容比對，不要數第幾個；落地前先 parse 確認是合法 JSON。
+2. `rm -f ~/.claude/hooks/verify-gate.sh`
+3. 想保留 hook 但暫停時，不必移除：把三個 gate 的模式設回 `off`（刪掉模式檔或環境變數）即可。
+
+清除狀態（可選）：`~/.claude/verify-gate/` 是狀態不是安裝，裡面有 PR 註冊表、session 關聯檔與決策紀錄。註冊表也是引擎 `pr register` 的寫入位置，刪掉會讓既有註冊失效；只在確定不再使用驗證引擎時才 `rm -rf ~/.claude/verify-gate`。
+
+驗證：
+
+```bash
+grep -c "verify-gate" ~/.claude/settings.json   # 預期 0
+test ! -e ~/.claude/hooks/verify-gate.sh && echo "wrapper removed"
+```
+
+並以第 4 節的比對腳本確認三個事件的其餘 hook 與備份逐字相同。
+
+## 10. 已知盲點
+
+設計上就擋不到的情況：
+
+1. 既沒有 push、也沒有開 PR、也沒有註冊的 session 不會被檢查，這類單位在量測時會顯示為「gate 未涵蓋」。
+2. Stop 觸發時宣稱文字已送出，gate 擋不住宣稱本身。
+3. 以 `--evidence` 提供的證據檔由模型產生，gate 防的是遺漏，不是蓄意偽造。
+4. 記了 `pending-declared` 之後仍宣稱完成，gate 攔不到。
+
+實作上的取捨，同樣會漏：
+
+- 指令掃描器保守：寫在 subshell、`{ ...; }` 群組、條件式裡，或指令名由變數組成的 `gh pr create` 與 `git push` 不會被認出。
+- push 的 branch 解析不出來時只標記推送未解析，不會建立 session 關聯；該 branch 若從未以其他方式關聯，Stop 不會檢查它。
+- 指令失敗時 Claude Code 是否仍觸發 PostToolUse 依版本而定；沒觸發時那次推送不會被記錄。
+- hook payload 的欄位（`session_id`、`cwd`、`tool_input.command`、`tool_response`、`stop_hook_active`）取不到時一律放行。

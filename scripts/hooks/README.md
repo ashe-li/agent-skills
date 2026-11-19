@@ -167,3 +167,9 @@ test ! -e ~/.claude/hooks/plan-run-stop.sh && echo "wrapper removed"
 
 `~/.claude/plan-run/` 是**狀態不是安裝**：裡面是進行中的 pointer（lease、暫停旗標、
 計數器）。解除安裝不需要刪它；刪了就等於放棄所有進行中 plan 的跨 session 續推。
+
+## 其他 hook 索引
+
+| 檔案 | 事件 | 安裝與說明 |
+|---|---|---|
+| `verify-gate.sh` | `PreToolUse`、`PostToolUse`（matcher `Bash`）、`Stop` | [`docs/hooks-setup.md` 第四篇](../../docs/hooks-setup.md#四驗證-gate-hookpretooluseposttoolusestop)：三個選用 gate（`pre_pr`、`ui_acceptance`、`ci_evidence`），預設 off，observe 先行 |

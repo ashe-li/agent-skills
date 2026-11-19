@@ -476,6 +476,25 @@ def record_session_link(session_id: str, repo: str, branch: str, *,
         return session
 
 
+def bump_session_blocks(session_id: str, gate: str, *, state_dir: Optional[str] = None) -> int:
+    """Increment the session's `blocks[gate]` counter; return the new value.
+
+    Written by the gate hook only. Links and unknown fields are preserved, and
+    a session file that does not exist yet is created with no links.
+    """
+    with state_lock(state_root(state_dir)):
+        path = _session_path(state_dir, session_id, create=True)
+        data = read_json(path, strict=True) or {}
+        blocks = data.get("blocks") if isinstance(data.get("blocks"), dict) else {}
+        current = blocks.get(gate)
+        value = (current if isinstance(current, int) and current >= 0 else 0) + 1
+        session = {**data, "schema": SCHEMA_SESSION,
+                   "session_id": sanitize_session_id(session_id),
+                   "links": list(data.get("links") or []), "blocks": {**blocks, gate: value}}
+        write_bytes_atomic(path, dump_json(session))
+        return value
+
+
 # --- head resolution ---------------------------------------------------------------
 
 def _later_record(entry: Optional[dict]) -> Optional[tuple]:

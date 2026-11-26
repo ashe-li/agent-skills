@@ -142,6 +142,33 @@ gh api repos/<repo>/compare/<base>...<head> --jq '.files[] | select(.filename=="
 
 **body 的每條 bullet 只能來自 claim ledger 中判定為「正確」的條目，並放進該條 `分類` 欄指定的 section，不得新增 ledger 沒有的說法**；寫作中想補一句 ledger 沒有的，先回 Step 2.5 補列並跑證據指令，再寫。
 
+### Canary 段落（條件式，只在 repo 有 canary 流程時產生）
+
+只在目標 repo 有 canary 標注流程（`docs/canary/labeling.md` 存在）時才加這一段；沒有就整段略過，不要為了格式一致而補空段。
+
+1. **列出所含的 candidate**：feature PR 作者勾了「建議 canary」、並加上 `canary-candidate` label。用 ledger 已列出的 PR 編號查：
+
+```bash
+# <N> 取自 claim ledger 內的 feature PR 編號，逐一查
+gh pr view <N> --repo <repo> --json number,title,labels \
+  --jq 'select(.labels | map(.name) | index("canary-candidate")) | "#\(.number) \(.title)"'
+```
+
+   列出的 candidate 只能是這個 release PR 範圍內（ledger 內）的 feature PR；範圍外的不列。這份清單是參考，不是決定。
+2. **附必答題**（逐題答，答案要能溯源到 diff 或 deployment 端的實際檔案，不採信 commit 自述；答不出來就寫「無法確認」，不要寫「無」）：
+   - 這版有沒有改 cookie 或 localStorage 的格式？有的話附雙向相容說明，否則不得標注。
+   - 這版有沒有改 `public/` 底下的檔案？屬於哪一類？
+   - 這版有沒有改 `/api/createOgImage` 或 `/api/help_center/search`？（放量期間登入使用者打這兩支一律由 stable 回應。）
+   - 這版有沒有新增最後一段會含 `.` 的頁面類型？（分流 route 的前綴清單要不要補。）
+   - deployment 端的 CF cache rule 自上次確認後，有沒有新增「沒有 cookie 條件，而且路徑落在 `/_next/static/`、`/_next/data/`、`/api/` 底下，或最後一段不含 `.`」的規則？（有的話要補進排除清單。）
+   - 觀察負責人是誰？
+3. **標注由使用者決定**，因為使用者是 merge release PR 的人。skill 不加 label、不設 variable。要標注時，使用者做兩件事：
+   - 在 release PR 加上 `canary` label
+   - 自己執行 `gh variable set CANARY_ARMED --body "<PR號>:<UTC 到期時間>"`
+
+   body 的 canary 段落只寫 candidate 清單、必答題與答案，並附上這兩條指令的樣板讓使用者決定時取用；不替使用者下「建議標注」的結論以外的指令。
+4. 流程細節與各題的由來見目標 repo 的 `docs/canary/labeling.md`。
+
 ## Step 3.5：範圍相稱性擋門（scope proportionality）
 
 Step 3 寫完，送進 Step 4 之前，對 body 的**每一個段落**問一句：
